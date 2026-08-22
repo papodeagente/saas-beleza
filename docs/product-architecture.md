@@ -165,15 +165,40 @@ Hoje | Agenda | Clientes | Inbox | Financeiro | Catálogo | Gestão
 
 | Fase | Entrega | Estado |
 |---|---|---|
-| 0 | Arquitetura, design system, modelo de domínio | ✅ este documento |
+| 0 | Arquitetura, design system, modelo de domínio | ✅ |
 | 1 | Fundação: auth, tenant, shell, tokens, schema, seed | ✅ |
-| 2 | Core: clientes, profissionais, serviços, availability, agenda, ciclo do atendimento | ✅ vertical slice |
-| 3 | Booking público `/agendar/{slug}` | — |
-| 4 | Inbox (conversations, assignment, contexto do cliente) | — |
-| 5 | Agente de IA (tools, knowledge, handoff, logs) | — |
-| 6 | Financeiro completo (contas a pagar, DRE gerencial, fluxo de caixa) | parcial (payments+transactions+comissões já nascem na fase 2) |
-| 7 | Retenção (sinais, campanhas, recuperação) | — |
-| 8 | Inteligência (insights acionáveis, benchmarks, ações assistidas) | — |
+| 2 | Core: clientes, profissionais, serviços, availability, agenda, ciclo do atendimento | ✅ |
+| 3 | Booking público `/agendar/{slug}` | ✅ |
+| 4 | Inbox (conversations, assignment, contexto do cliente) | 🟡 UI e handoff prontos; falta o `MessagingProvider` (envio/recebimento real) |
+| 5 | Agente de IA (tools, knowledge, handoff, logs) | ⬜ tabelas modeladas, sem runtime |
+| 6 | Financeiro (caixa, DRE gerencial, comissões) | 🟡 leitura completa; falta lançar despesa/receita pela UI |
+| 7 | Retenção (sinais, campanhas, recuperação) | 🟡 sinal de retorno já aparece em Hoje e Clientes; falta campanha |
+| 8 | Inteligência (insights acionáveis, benchmarks, ações assistidas) | ⬜ |
+
+### O que existe hoje, por tela
+
+| Rota | Entrega |
+|---|---|
+| `/entrar` | Login por e-mail e senha, sessão em banco |
+| `/hoje` | Briefing do dia, fila de atenção acionável, próximos atendimentos, sinal de retorno |
+| `/agenda` | Dia por profissional, linha do agora, painel contextual (confirmar → check-in → iniciar → concluir), pagamento, cancelamento/falta, agendamento rápido |
+| `/clientes` | Lista com busca e filtros no servidor (retorno, novos, inativos) |
+| `/clientes/[id]` | Customer 360 com timeline única de atendimentos e pagamentos |
+| `/inbox` | Conversas, thread, contexto do cliente, handoff IA ↔ humano |
+| `/financeiro` | Caixa do mês, DRE gerencial, receita por serviço, comissões, lançamentos |
+| `/catalogo` | Serviços com duração, preço, margem, recursos e profissionais |
+| `/gestao` | Link público, profissionais e grade, unidades e recursos, acessos |
+| `/agendar/[slug]` | Booking público mobile-first, sem conta |
+
+### Dívidas conhecidas (registradas, não escondidas)
+
+1. **`MessagingProvider` não existe** — o Inbox registra a mensagem na conversa, mas nada sai para o WhatsApp. A UI diz isso explicitamente em vez de fingir entrega.
+2. **RLS ainda não aplicada** — o isolamento hoje é garantido pela camada de serviço + `organization_id` em toda query, coberto por testes. RLS entra como segunda barreira.
+3. **Financeiro é somente leitura na UI** — lançamentos nascem dos pagamentos; criar despesa manual ainda não tem tela.
+4. **Sem drag & drop na agenda** — remarcar existe pelo domínio (`rescheduleAppointment`), falta a interação.
+5. **Booking público não sinaliza dias sem vaga** nos chips de data (exigiria pré-cálculo de 14 dias).
+6. **Onboarding não existe** — um tenant novo cai numa aplicação vazia; hoje só o seed cria uma clínica completa.
+7. **Command palette (⌘K) não implementado.**
 
 **Nota de priorização:** WhatsApp + IA (fases 4–5) vêm antes de administrativo secundário (estoque, relatórios avançados). O diferencial é transformar conversa em receita.
 
