@@ -3,7 +3,7 @@
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowLeft, Check, ChevronRight, Clock, MapPin } from "lucide-react";
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,13 +35,11 @@ const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 export function BookingFlow({
   slug,
   organizationName,
-  timezone,
   branches,
   services,
 }: {
   slug: string;
   organizationName: string;
-  timezone: string;
   branches: Branch[];
   services: Service[];
 }) {
@@ -50,7 +48,7 @@ export function BookingFlow({
   const [branch, setBranch] = useState<Branch | null>(branches.length === 1 ? branches[0] : null);
   const [day, setDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<PublicSlot[] | null>(null);
-  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [loadingSlots, startSlotsTransition] = useTransition();
   const [slot, setSlot] = useState<PublicSlot | null>(null);
 
   const [name, setName] = useState("");
@@ -63,27 +61,47 @@ export function BookingFlow({
   // Próximos 14 dias — escolher data não deve exigir abrir um calendário
   const days = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i));
 
-  useEffect(() => {
-    if (step !== "time" || !service) return;
-    let active = true;
-    setLoadingSlots(true);
+  /**
+   * Carregar horários é sempre consequência de uma escolha do cliente
+   * (serviço, unidade ou data), então roda numa transição — o indicador de
+   * carregamento vem do React, sem efeito nem render em cascata.
+   */
+  function loadSlots(next: { service: Service | null; branch: Branch | null; day: string }) {
     setSlot(null);
-    publicSlotsAction({
-      slug,
-      serviceId: service.id,
-      dateISO: day,
-      branchId: branch?.id,
-    })
-      .then((rows) => active && setSlots(rows))
-      .finally(() => active && setLoadingSlots(false));
-    return () => {
-      active = false;
-    };
-  }, [step, service, day, branch, slug]);
+    if (!next.service) {
+      setSlots(null);
+      return;
+    }
+    startSlotsTransition(async () => {
+      const rows = await publicSlotsAction({
+        slug,
+        serviceId: next.service!.id,
+        dateISO: next.day,
+        branchId: next.branch?.id,
+      });
+      setSlots(rows);
+    });
+  }
 
   function chooseService(value: Service) {
     setService(value);
-    setStep(branches.length > 1 ? "branch" : "time");
+    if (branches.length > 1) {
+      setStep("branch");
+      return;
+    }
+    setStep("time");
+    loadSlots({ service: value, branch, day });
+  }
+
+  function chooseBranch(value: Branch) {
+    setBranch(value);
+    setStep("time");
+    loadSlots({ service, branch: value, day });
+  }
+
+  function chooseDay(value: string) {
+    setDay(value);
+    loadSlots({ service, branch, day: value });
   }
 
   function submit() {
@@ -248,10 +266,7 @@ export function BookingFlow({
             <li key={item.id}>
               <button
                 type="button"
-                onClick={() => {
-                  setBranch(item);
-                  setStep("time");
-                }}
+                onClick={() => chooseBranch(item)}
                 className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:bg-surface-sunken sm:hover:bg-surface-sunken"
               >
                 <MapPin className="size-4 shrink-0 text-ink-tertiary" />
@@ -280,7 +295,7 @@ export function BookingFlow({
                   <button
                     key={iso}
                     type="button"
-                    onClick={() => setDay(iso)}
+                    onClick={() => chooseDay(iso)}
                     aria-pressed={active}
                     className={cn(
                       "flex w-[52px] shrink-0 flex-col items-center rounded-[var(--radius)] border py-2 transition-colors duration-[120ms]",

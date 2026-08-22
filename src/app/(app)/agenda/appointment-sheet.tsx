@@ -45,13 +45,10 @@ function primaryAction(status: string): { next: AppointmentStatus; label: string
 
 export function AppointmentSheet({
   appointment,
-  timezone,
   onClose,
 }: {
   appointment: AgendaAppointment;
-  timezone: string;
   onClose: () => void;
-  onReschedule?: () => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();

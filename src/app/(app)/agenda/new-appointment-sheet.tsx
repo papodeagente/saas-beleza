@@ -50,7 +50,7 @@ export function NewAppointmentSheet({
   const [day, setDay] = useState(dateISO);
 
   const [slots, setSlots] = useState<SlotOption[] | null>(null);
-  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [loadingSlots, startSlotsTransition] = useTransition();
   const [slot, setSlot] = useState<SlotOption | null>(null);
 
   const service = formData.services.find((s) => s.id === serviceId) ?? null;
@@ -68,29 +68,26 @@ export function NewAppointmentSheet({
     };
   }, [query]);
 
-  useEffect(() => {
-    if (!serviceId) {
+  /**
+   * A busca de horários nasce de uma ação do usuário (trocar serviço,
+   * profissional ou data), então roda numa transição em vez de um efeito —
+   * o estado de carregamento vem do próprio React, sem render em cascata.
+   */
+  function loadSlots(next: { serviceId: number | null; professionalId: number | null; day: string }) {
+    setSlot(null);
+    if (!next.serviceId) {
       setSlots(null);
       return;
     }
-    let active = true;
-    setLoadingSlots(true);
-    setSlot(null);
-    fetchSlotsAction({
-      serviceId,
-      dateISO: day,
-      professionalId: professionalId ?? undefined,
-    })
-      .then((rows) => {
-        if (active) setSlots(rows);
-      })
-      .finally(() => {
-        if (active) setLoadingSlots(false);
+    startSlotsTransition(async () => {
+      const rows = await fetchSlotsAction({
+        serviceId: next.serviceId!,
+        dateISO: next.day,
+        professionalId: next.professionalId ?? undefined,
       });
-    return () => {
-      active = false;
-    };
-  }, [serviceId, professionalId, day]);
+      setSlots(rows);
+    });
+  }
 
   function submit() {
     if (!customer || !service || !slot) return;
@@ -223,7 +220,11 @@ export function NewAppointmentSheet({
             <select
               id="servico"
               value={serviceId ?? ""}
-              onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => {
+                const value = e.target.value ? Number(e.target.value) : null;
+                setServiceId(value);
+                loadSlots({ serviceId: value, professionalId, day });
+              }}
               className="h-9 w-full rounded-[var(--radius-sm)] border border-line-strong bg-surface-raised px-2.5 text-[13px] text-ink"
             >
               <option value="">Selecione o serviço</option>
@@ -240,7 +241,11 @@ export function NewAppointmentSheet({
             <select
               id="profissional"
               value={professionalId ?? ""}
-              onChange={(e) => setProfessionalId(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => {
+                const value = e.target.value ? Number(e.target.value) : null;
+                setProfessionalId(value);
+                loadSlots({ serviceId, professionalId: value, day });
+              }}
               className="h-9 w-full rounded-[var(--radius-sm)] border border-line-strong bg-surface-raised px-2.5 text-[13px] text-ink"
             >
               <option value="">Qualquer profissional</option>
@@ -253,7 +258,15 @@ export function NewAppointmentSheet({
           </Field>
 
           <Field label="Data" htmlFor="data">
-            <Input id="data" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+            <Input
+              id="data"
+              type="date"
+              value={day}
+              onChange={(e) => {
+                setDay(e.target.value);
+                loadSlots({ serviceId, professionalId, day: e.target.value });
+              }}
+            />
           </Field>
 
           {/* 4. Horário */}

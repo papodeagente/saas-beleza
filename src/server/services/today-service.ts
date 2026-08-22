@@ -13,8 +13,6 @@ import {
 import { dateISOInTz, dayRangeInTz } from "@/lib/tz";
 import type { TenantContext } from "@/server/auth";
 
-const ACTIVE = ["scheduled", "confirmed", "checked_in", "in_progress"] as const;
-
 export type TodayAppointment = {
   id: number;
   startsAt: Date;

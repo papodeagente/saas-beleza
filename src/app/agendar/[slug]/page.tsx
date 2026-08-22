@@ -21,7 +21,6 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
     <BookingFlow
       slug={slug}
       organizationName={org.organization.name}
-      timezone={org.organization.timezone}
       branches={org.branches}
       services={org.services}
     />

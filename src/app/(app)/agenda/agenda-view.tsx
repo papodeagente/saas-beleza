@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { useCurrentMinute } from "@/lib/use-current-minute";
 import { cn } from "@/lib/utils";
 import { STATUS_LABEL, STATUS_TONE, type AppointmentStatus } from "@/domain/appointment-status";
 import { AppointmentSheet } from "./appointment-sheet";
@@ -48,7 +49,6 @@ export type AgendaFormData = {
 const PX_PER_MIN = 14 / 15; // 15 min = 14px
 
 export function AgendaView({
-  timezone,
   dateISO,
   dayStartUtcISO,
   isToday,
@@ -57,7 +57,6 @@ export function AgendaView({
   selectedBranchId,
   openAppointmentId,
 }: {
-  timezone: string;
   dateISO: string;
   dayStartUtcISO: string;
   isToday: boolean;
@@ -100,7 +99,13 @@ export function AgendaView({
   const hours: number[] = [];
   for (let m = agenda.gridStart; m <= agenda.gridEnd; m += 60) hours.push(m);
 
-  const nowMinutes = isToday ? (Date.now() - dayStart.getTime()) / 60000 : null;
+  // A linha do agora usa o relógio do cliente e anda sozinha a cada minuto.
+  const currentMinute = useCurrentMinute();
+  const nowMinutes =
+    isToday && currentMinute !== null
+      ? (currentMinute * 60_000 - dayStart.getTime()) / 60_000
+      : null;
+
   const showNowLine =
     nowMinutes !== null && nowMinutes >= agenda.gridStart && nowMinutes <= agenda.gridEnd;
 
@@ -329,14 +334,7 @@ export function AgendaView({
       )}
 
       {selected ? (
-        <AppointmentSheet
-          appointment={selected}
-          timezone={timezone}
-          onClose={() => setSelectedId(null)}
-          onReschedule={() =>
-            setCreating({ startsAt: selected.startsAt, professionalId: selected.professionalId })
-          }
-        />
+        <AppointmentSheet appointment={selected} onClose={() => setSelectedId(null)} />
       ) : null}
 
       {creating ? (

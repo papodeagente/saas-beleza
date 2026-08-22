@@ -7,7 +7,7 @@ import { AgendaView } from "./agenda-view";
 export const metadata = { title: "Agenda — Lumina" };
 export const dynamic = "force-dynamic";
 
-function resolveDay(param: string | undefined, timezone: string): Date {
+function resolveDay(param: string | undefined): Date {
   const today = new Date();
   if (!param || param === "hoje") return today;
   if (param === "amanha") return addDays(today, 1);
@@ -23,7 +23,7 @@ export default async function AgendaPage({
 }) {
   const ctx = await requireSession();
   const params = await searchParams;
-  const day = resolveDay(params.dia, ctx.timezone);
+  const day = resolveDay(params.dia);
   const branchId = params.unidade ? Number(params.unidade) : undefined;
 
   const [agenda, formData] = await Promise.all([
@@ -35,7 +35,6 @@ export default async function AgendaPage({
 
   return (
     <AgendaView
-      timezone={ctx.timezone}
       dateISO={dateISOInTz(dayStartUtc, ctx.timezone)}
       dayStartUtcISO={dayStartUtc.toISOString()}
       isToday={dateISOInTz(dayStartUtc, ctx.timezone) === dateISOInTz(new Date(), ctx.timezone)}

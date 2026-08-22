@@ -127,7 +127,7 @@ async function main() {
     ])
     .returning();
 
-  const [salaTirol1, salaTirol2, hifuEquip, laserEquip, salaPN] = await db
+  const [, , hifuEquip, laserEquip] = await db
     .insert(s.resources)
     .values([
       { organizationId: orgId, branchId: tirol.id, name: "Sala 1", type: "room" },
@@ -426,7 +426,7 @@ async function main() {
     .insert(s.conversations)
     .values({
       organizationId: orgId,
-      customerId: insertedCustomers[9].id,
+      customerId: insertedCustomers[8].id, // Marcela Guedes — a mesma citada nas mensagens
       channel: "whatsapp",
       controlledBy: "human",
       status: "open",
