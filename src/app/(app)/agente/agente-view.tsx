@@ -581,7 +581,7 @@ function SimulatorTab({ agentName }: { agentName: string }) {
         <div className="flex min-h-[240px] flex-col gap-2 rounded-control bg-surface-sunken p-3">
           {messages.length === 0 ? (
             <p className="m-auto text-caption text-ink-secondary">
-              Escreva como se fosse um cliente: "oi, quanto custa a limpeza de pele?"
+              Escreva como se fosse um cliente: {'"oi, quanto custa a limpeza de pele?"'}
             </p>
           ) : (
             messages.map((message, index) => (

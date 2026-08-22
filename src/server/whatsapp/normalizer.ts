@@ -11,6 +11,7 @@
  * Módulo puro: sem banco, sem rede, testável isoladamente.
  */
 
+import { asArray, asString, firstString, get, type Json } from "./json";
 import { digitsOnly, isGroupJid, isLidJid, isLikelyLid, phoneFromJid } from "./phone";
 
 export type WaMessageKind =
@@ -52,6 +53,17 @@ export type WaEvent =
     }
   | { kind: "connection"; instance: string; status: string; connected: boolean }
   | { kind: "qrcode"; instance: string; qrCode: string | null; pairCode: string | null }
+  | {
+      kind: "reaction";
+      instance: string;
+      /** Mensagem que recebeu a reação. */
+      targetExternalId: string;
+      /** Vazio significa que a pessoa desfez a reação. */
+      emoji: string;
+      fromMe: boolean;
+      remoteJid: string;
+    }
+  | { kind: "deleted"; instance: string; externalId: string; remoteJid: string }
   | { kind: "ignored"; reason: string };
 
 const TYPE_ALIASES: Record<string, WaMessageKind> = {
@@ -86,58 +98,51 @@ const TYPE_ALIASES: Record<string, WaMessageKind> = {
   contact: "contact",
 };
 
-function str(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/** Primeiro valor string não vazio — o padrão de leitura defensiva deste módulo. */
-function firstString(...candidates: unknown[]): string {
-  for (const c of candidates) {
-    const s = str(c);
-    if (s) return s;
-  }
-  return "";
-}
-
-function toDate(value: unknown): Date {
+function toDate(value: Json): Date {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return new Date();
   // A uazapi alterna entre segundos e milissegundos no mesmo campo.
   return new Date(n > 1e12 ? n : n * 1000);
 }
 
-export function normalizeUazapiWebhook(raw: any): WaEvent {
+export function normalizeUazapiWebhook(raw: Json): WaEvent {
   if (!raw || typeof raw !== "object") return { kind: "ignored", reason: "payload_vazio" };
 
   const instance = firstString(
-    raw.instanceName,
-    raw.instance?.name,
-    typeof raw.instance === "string" ? raw.instance : "",
-    raw.name,
+    get(raw, "instanceName"),
+    get(raw, "instance", "name"),
+    get(raw, "instance"),
+    get(raw, "name"),
   );
 
   // `event` pode ser o NOME do evento (string) ou o próprio corpo (objeto).
-  const eventName = firstString(
-    raw.EventType,
-    typeof raw.event === "string" ? raw.event : "",
-    typeof raw.type === "string" ? raw.type : "",
-  ).toLowerCase();
-  const body = (typeof raw.event === "object" && raw.event) || raw.data || raw.message || raw;
+  const evento = get(raw, "event");
+  const eventName = firstString(get(raw, "EventType"), evento, get(raw, "type")).toLowerCase();
+  const body: Json =
+    (evento !== null && typeof evento === "object" ? evento : undefined) ??
+    get(raw, "data") ??
+    get(raw, "message") ??
+    raw;
 
   // A uazapi emite um QR novo sozinha quando o anterior expira. Guardar esse
   // evento é o que mantém a tela de pareamento com um código sempre válido.
-  if (eventName === "qrcode" || eventName === "qr" || body?.qrcode) {
-    const qr = firstString(body?.qrcode, raw.qrcode, body?.qr, raw.qr);
+  if (eventName === "qrcode" || eventName === "qr" || get(body, "qrcode")) {
+    const qr = firstString(get(body, "qrcode"), get(raw, "qrcode"), get(body, "qr"), get(raw, "qr"));
     return {
       kind: "qrcode",
       instance,
       qrCode: qr ? (qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`) : null,
-      pairCode: firstString(body?.paircode, raw.paircode) || null,
+      pairCode: firstString(get(body, "paircode"), get(raw, "paircode")) || null,
     };
   }
 
-  if (eventName === "connection" || eventName.includes("connect") || raw.connection) {
-    const status = firstString(raw.connection, body?.connection, raw.instance?.status, body?.status).toLowerCase();
+  if (eventName === "connection" || eventName.includes("connect") || get(raw, "connection")) {
+    const status = firstString(
+      get(raw, "connection"),
+      get(body, "connection"),
+      get(raw, "instance", "status"),
+      get(body, "status"),
+    ).toLowerCase();
     return {
       kind: "connection",
       instance,
@@ -153,20 +158,37 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
      * documentados fazia toda confirmação de entrega ser descartada, e a
      * mensagem ficava eternamente como "enviada" na tela.
      */
-    const idSources = [body?.MessageIDs, body?.messageids, body?.messageIds, body?.ids];
+    const idSources = [
+      get(body, "MessageIDs"),
+      get(body, "messageids"),
+      get(body, "messageIds"),
+      get(body, "ids"),
+    ];
     let externalIds: string[] = [];
     for (const source of idSources) {
-      if (Array.isArray(source) && source.length > 0) {
-        externalIds = source.map((id: unknown) => str(id)).filter(Boolean);
+      const lista = asArray(source);
+      if (lista.length > 0) {
+        externalIds = lista.map(asString).filter(Boolean);
         break;
       }
     }
     if (externalIds.length === 0) {
-      const single = firstString(body?.messageid, body?.messageId, body?.id, raw.messageid, raw.id);
+      const single = firstString(
+        get(body, "messageid"),
+        get(body, "messageId"),
+        get(body, "id"),
+        get(raw, "messageid"),
+        get(raw, "id"),
+      );
       if (single) externalIds = [single];
     }
 
-    const rawStatus = firstString(body?.Type, body?.status, body?.update, raw.status).toLowerCase();
+    const rawStatus = firstString(
+      get(body, "Type"),
+      get(body, "status"),
+      get(body, "update"),
+      get(raw, "status"),
+    ).toLowerCase();
     const status =
       rawStatus.includes("read") || rawStatus.includes("played")
         ? "read"
@@ -183,24 +205,28 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
     eventName === "messages" ||
     eventName === "message" ||
     eventName === "messages.upsert" ||
-    (!eventName && (body?.messageid || body?.chatid));
+    (!eventName && (get(body, "messageid") || get(body, "chatid")));
   if (!isMessageEvent) return { kind: "ignored", reason: `evento_nao_suportado:${eventName || "?"}` };
 
-  const msg = Array.isArray(body) ? body[0] : body;
+  const msg: Json = Array.isArray(body) ? body[0] : body;
   if (!msg || typeof msg !== "object") return { kind: "ignored", reason: "mensagem_vazia" };
 
   let remoteJid = firstString(
-    msg.remoteJid,
-    msg.chatid,
-    msg.chatId,
-    msg.wa_chatid,
-    msg.Chat?.wa_chatid,
-    msg.chat?.wa_chatid,
-    msg.key?.remoteJid,
+    get(msg, "remoteJid"),
+    get(msg, "chatid"),
+    get(msg, "chatId"),
+    get(msg, "wa_chatid"),
+    get(msg, "Chat", "wa_chatid"),
+    get(msg, "chat", "wa_chatid"),
+    get(msg, "key", "remoteJid"),
   );
   if (!remoteJid) return { kind: "ignored", reason: "sem_remote_jid" };
 
-  const fromMe: boolean = msg.fromMe === true || msg.from_me === true || msg.IsFromMe === true || msg.key?.fromMe === true;
+  const fromMe =
+    get(msg, "fromMe") === true ||
+    get(msg, "from_me") === true ||
+    get(msg, "IsFromMe") === true ||
+    get(msg, "key", "fromMe") === true;
   const isGroup = isGroupJid(remoteJid);
 
   /**
@@ -209,7 +235,7 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
    * criar uma segunda conversa para o mesmo cliente.
    */
   if (!isGroup && !fromMe) {
-    const senderPn = firstString(msg.sender_pn, msg.senderPn, msg.participant_pn);
+    const senderPn = firstString(get(msg, "sender_pn"), get(msg, "senderPn"), get(msg, "participant_pn"));
     const chatDigits = digitsOnly(remoteJid.split("@")[0] ?? "");
     const chatIsOpaque = isLidJid(remoteJid) || isLikelyLid(chatDigits);
     if (chatIsOpaque && senderPn) {
@@ -218,55 +244,95 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
     }
   }
 
-  const externalId = firstString(msg.messageid, msg.messageId, msg.id, msg.key?.id);
+  const externalId = firstString(get(msg, "messageid"), get(msg, "messageId"), get(msg, "id"), get(msg, "key", "id"));
   if (!externalId) return { kind: "ignored", reason: "sem_message_id" };
 
-  const rawType = firstString(msg.messageType, msg.type);
+  const rawType = firstString(get(msg, "messageType"), get(msg, "type"));
+
   if (rawType === "ReactionMessage" || rawType === "reactionMessage" || rawType === "reaction") {
-    return { kind: "ignored", reason: "reacao" };
+    // O emoji vem no texto e o alvo em `reaction`; sem o alvo não há o que
+    // marcar, então o evento é descartado.
+    const targetExternalId = firstString(
+      get(msg, "reaction"),
+      get(msg, "reactionMessageId"),
+      get(msg, "message", "reactionMessage", "key", "id"),
+      get(msg, "quoted"),
+    );
+    if (!targetExternalId) return { kind: "ignored", reason: "reacao_sem_alvo" };
+    return {
+      kind: "reaction",
+      instance,
+      targetExternalId,
+      emoji: firstString(get(msg, "text"), get(msg, "reactionText")),
+      fromMe,
+      remoteJid,
+    };
+  }
+
+  if (rawType === "ProtocolMessage" || eventName === "messages_delete" || get(msg, "isDeleted") === true) {
+    const deletedId = firstString(
+      get(msg, "deletedMessageId"),
+      get(msg, "message", "protocolMessage", "key", "id"),
+      get(msg, "quoted"),
+    );
+    if (deletedId) return { kind: "deleted", instance, externalId: deletedId, remoteJid };
   }
 
   const kind: WaMessageKind =
     TYPE_ALIASES[rawType] ??
-    (msg.image ? "image" : msg.video ? "video" : msg.audio ? "audio" : msg.document ? "document" : rawType ? "unsupported" : "text");
+    (get(msg, "image")
+      ? "image"
+      : get(msg, "video")
+        ? "video"
+        : get(msg, "audio")
+          ? "audio"
+          : get(msg, "document")
+            ? "document"
+            : rawType
+              ? "unsupported"
+              : "text");
 
   const text = firstString(
-    msg.text,
-    msg.content?.text,
-    msg.message?.conversation,
-    msg.message?.extendedTextMessage?.text,
-    typeof msg.content === "string" ? msg.content : "",
-    msg.body,
-    msg.caption,
-    msg.message?.imageMessage?.caption,
-    msg.message?.videoMessage?.caption,
+    get(msg, "text"),
+    get(msg, "content", "text"),
+    get(msg, "message", "conversation"),
+    get(msg, "message", "extendedTextMessage", "text"),
+    get(msg, "content"),
+    get(msg, "body"),
+    get(msg, "caption"),
+    get(msg, "message", "imageMessage", "caption"),
+    get(msg, "message", "videoMessage", "caption"),
   );
 
   const mediaUrl =
     firstString(
-      msg.fileURL,
-      msg.fileUrl,
-      msg.mediaUrl,
-      msg.url,
-      msg.URL,
-      msg.message?.imageMessage?.url,
-      msg.message?.videoMessage?.url,
-      msg.message?.audioMessage?.url,
-      msg.message?.documentMessage?.url,
+      get(msg, "fileURL"),
+      get(msg, "fileUrl"),
+      get(msg, "mediaUrl"),
+      get(msg, "url"),
+      get(msg, "URL"),
+      get(msg, "message", "imageMessage", "url"),
+      get(msg, "message", "videoMessage", "url"),
+      get(msg, "message", "audioMessage", "url"),
+      get(msg, "message", "documentMessage", "url"),
     ) || null;
 
   const mediaMimeType =
     firstString(
-      msg.mimetype,
-      msg.contentType,
-      msg.message?.imageMessage?.mimetype,
-      msg.message?.videoMessage?.mimetype,
-      msg.message?.audioMessage?.mimetype,
-      msg.message?.documentMessage?.mimetype,
+      get(msg, "mimetype"),
+      get(msg, "contentType"),
+      get(msg, "message", "imageMessage", "mimetype"),
+      get(msg, "message", "videoMessage", "mimetype"),
+      get(msg, "message", "audioMessage", "mimetype"),
+      get(msg, "message", "documentMessage", "mimetype"),
     ) || null;
 
   const quotedExternalId =
-    firstString(msg.quoted, msg.quotedMessageId, msg.message?.extendedTextMessage?.contextInfo?.stanzaId) || null;
+    firstString(
+      get(msg, "quoted"),
+      get(msg, "quotedMessageId"),
+      get(msg, "message", "extendedTextMessage", "contextInfo", "stanzaId"),
+    ) || null;
 
   return {
     kind: "message",
@@ -277,14 +343,23 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
       fromMe,
       isGroup,
       phone: phoneFromJid(remoteJid),
-      senderName: firstString(msg.senderName, msg.pushName, msg.sender_name, msg.Chat?.wa_name, msg.chat?.name) || null,
+      senderName:
+        firstString(
+          get(msg, "senderName"),
+          get(msg, "pushName"),
+          get(msg, "sender_name"),
+          get(msg, "Chat", "wa_name"),
+          get(msg, "chat", "name"),
+        ) || null,
       kind,
       body: text,
       mediaUrl,
       mediaMimeType,
-      mediaFileName: firstString(msg.fileName, msg.docName, msg.message?.documentMessage?.fileName) || null,
+      mediaFileName:
+        firstString(get(msg, "fileName"), get(msg, "docName"), get(msg, "message", "documentMessage", "fileName")) ||
+        null,
       quotedExternalId,
-      sentAt: toDate(msg.timestamp ?? msg.messageTimestamp ?? msg.t),
+      sentAt: toDate(get(msg, "timestamp") ?? get(msg, "messageTimestamp") ?? get(msg, "t")),
     },
   };
 }

@@ -15,6 +15,7 @@ import {
   Sparkles,
   User,
   Users,
+  UsersRound,
   Wallet,
   X,
 } from "lucide-react";
@@ -50,6 +51,7 @@ const NAV: Array<{
   { href: "/agenda", label: "Agenda", icon: CalendarDays, group: "operacao", minRole: "professional" },
   { href: "/clientes", label: "Clientes", icon: Users, group: "operacao", minRole: "staff" },
   { href: "/inbox", label: "Inbox", icon: MessageSquare, group: "operacao", minRole: "staff" },
+  { href: "/grupos", label: "Grupos", icon: UsersRound, group: "operacao", minRole: "staff" },
   { href: "/whatsapp", label: "WhatsApp", icon: Smartphone, group: "gestao", minRole: "admin" },
   { href: "/agente", label: "Agente de IA", icon: Bot, group: "gestao", minRole: "admin" },
   { href: "/financeiro", label: "Financeiro", icon: Wallet, group: "gestao", minRole: "admin" },

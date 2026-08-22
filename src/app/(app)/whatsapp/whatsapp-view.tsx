@@ -24,7 +24,6 @@ import { copyToClipboard } from "@/lib/clipboard";
 import {
   disconnectAction,
   disconnectDeviceAction,
-  pairingStateAction,
   refreshStatusAction,
   rotateWebhookAction,
   saveConnectionAction,

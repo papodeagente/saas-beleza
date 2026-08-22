@@ -36,6 +36,13 @@
       "when": 1787434877236,
       "tag": "0004_panoramic_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787437023090,
+      "tag": "0005_clever_callisto",
+      "breakpoints": true
     }
   ]
 }

@@ -214,15 +214,22 @@ async function completeOpenAi(args: CompleteArgs): Promise<LlmTurn> {
     throw new Error(`OpenAI ${res.status}: ${body}`);
   }
 
-  const json = await res.json();
+  /** Formato de tool call do endpoint de chat da OpenAI. */
+  type RawToolCall = { id: string; function?: { name?: string; arguments?: string } };
+  type RawChoice = {
+    message?: { content?: string | null; tool_calls?: RawToolCall[] };
+    finish_reason?: string;
+  };
+
+  const json = (await res.json()) as { choices?: RawChoice[]; usage?: Record<string, number> };
   const choice = json?.choices?.[0];
   const rawCalls = choice?.message?.tool_calls ?? [];
 
   return {
     text: String(choice?.message?.content ?? "").trim(),
-    toolCalls: rawCalls.map((call: any) => ({
+    toolCalls: rawCalls.map((call) => ({
       id: call.id,
-      name: call.function?.name,
+      name: call.function?.name ?? "",
       input: safeParse(call.function?.arguments),
     })),
     stopReason: choice?.finish_reason ?? "stop",

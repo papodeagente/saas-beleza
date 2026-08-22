@@ -1,4 +1,5 @@
 import "server-only";
+import { asArray, asString, firstString, get, type Json } from "@/server/whatsapp/json";
 
 /**
  * Cliente da uazapi.
@@ -58,7 +59,17 @@ export function normalizeBaseUrl(raw: string): string {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-async function request<T = any>(
+/** Exposto para os módulos que estendem este cliente (grupos, por exemplo). */
+export async function uazapiRequest<T = Json>(
+  creds: UazapiCredentials,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  return request<T>(creds, method, path, body);
+}
+
+async function request<T = Json>(
   creds: UazapiCredentials,
   method: "GET" | "POST",
   path: string,
@@ -137,16 +148,17 @@ export type UazapiStatus = {
  * fantasma numa instância que está no ar.
  */
 export async function getStatus(creds: UazapiCredentials): Promise<UazapiStatus> {
-  const raw = await request<any>(creds, "GET", "/instance/status");
-  const inst = raw?.instance ?? raw ?? {};
-  const status = String(inst?.status ?? raw?.status ?? "").toLowerCase();
+  const raw = await request(creds, "GET", "/instance/status");
+  const inst = get(raw, "instance") ?? raw;
+  const status = firstString(get(inst, "status"), get(raw, "status")).toLowerCase();
+  const owner = asString(get(inst, "owner"));
   return {
     connected: status === "connected" || status === "open",
     status: status || "unknown",
-    instanceId: inst?.id ?? inst?.instanceId ?? null,
-    instanceName: inst?.name ?? inst?.instanceName ?? null,
-    phoneNumber: inst?.owner ? String(inst.owner).split("@")[0] : (inst?.phone ?? raw?.phone ?? null),
-    profileName: inst?.profileName ?? inst?.pushName ?? null,
+    instanceId: firstString(get(inst, "id"), get(inst, "instanceId")) || null,
+    instanceName: firstString(get(inst, "name"), get(inst, "instanceName")) || null,
+    phoneNumber: owner ? owner.split("@")[0] : firstString(get(inst, "phone"), get(raw, "phone")) || null,
+    profileName: firstString(get(inst, "profileName"), get(inst, "pushName")) || null,
   };
 }
 
@@ -191,14 +203,14 @@ export async function connectInstance(
     body.phone = digits;
   }
 
-  const resp = await request<any>(creds, "POST", "/instance/connect", body);
-  const instance = resp?.instance ?? resp ?? {};
-  const status = String(instance?.status ?? resp?.status ?? "").toLowerCase();
-  const qrCode = asDataUri(String(instance?.qrcode ?? resp?.qrcode ?? ""));
+  const resp = await request(creds, "POST", "/instance/connect", body);
+  const instance = get(resp, "instance") ?? resp;
+  const status = firstString(get(instance, "status"), get(resp, "status")).toLowerCase();
+  const qrCode = asDataUri(firstString(get(instance, "qrcode"), get(resp, "qrcode")));
 
   return {
     qrCode,
-    pairCode: String(instance?.paircode ?? resp?.paircode ?? "").trim() || null,
+    pairCode: firstString(get(instance, "paircode"), get(resp, "paircode")).trim() || null,
     status: status || "unknown",
     connected: (status === "connected" || status === "open") && !qrCode,
   };
@@ -216,47 +228,156 @@ export async function disconnectInstance(creds: UazapiCredentials): Promise<void
 
 export type SendResult = { messageId: string; status: string };
 
-function extractMessageId(resp: any): string {
+function extractMessageId(resp: Json): string {
   // `messageid` é o id curto rastreável; o composto `<owner>:<id>` não casa
   // com o que volta em messages_update.
-  return resp?.messageid || resp?.id || resp?.messageId || "";
+  return firstString(get(resp, "messageid"), get(resp, "id"), get(resp, "messageId"));
 }
 
 export async function sendText(
   creds: UazapiCredentials,
   to: string,
   text: string,
-  opts?: { replyId?: string },
+  opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean },
 ): Promise<SendResult> {
-  const resp = await request<any>(creds, "POST", "/send/text", {
+  const resp = await request(creds, "POST", "/send/text", {
     number: to.replace(/@.*$/, ""),
     text,
     replyid: opts?.replyId,
+    mentions: opts?.mentions?.length ? opts.mentions.join(",") : undefined,
+    linkPreview: opts?.linkPreview,
   });
   const messageId = extractMessageId(resp);
   if (!messageId) throw new UazapiError("uazapi /send/text respondeu sem messageid", 500, JSON.stringify(resp).slice(0, 300));
-  return { messageId, status: resp?.status || "sent" };
+  return { messageId, status: firstString(get(resp, "status")) || "sent" };
 }
 
-export type MediaKind = "image" | "video" | "document" | "audio" | "ptv" | "sticker";
+/**
+ * Tipos aceitos pela uazapi. `ptt` é a mensagem de voz — a que aparece com a
+ * onda sonora e toca sem baixar; `audio` vira arquivo anexado, que é outra
+ * experiência para quem recebe.
+ */
+export type MediaKind =
+  | "image"
+  | "video"
+  | "videoplay"
+  | "document"
+  | "audio"
+  | "myaudio"
+  | "ptt"
+  | "ptv"
+  | "sticker";
 
 export async function sendMedia(
   creds: UazapiCredentials,
   to: string,
-  media: { type: MediaKind; file: string; caption?: string; fileName?: string },
+  media: {
+    type: MediaKind;
+    /** URL pública ou base64 do arquivo. */
+    file: string;
+    caption?: string;
+    fileName?: string;
+    mimetype?: string;
+    replyId?: string;
+  },
 ): Promise<SendResult> {
-  const resp = await request<any>(creds, "POST", "/send/media", {
+  const resp = await request(creds, "POST", "/send/media", {
     number: to.replace(/@.*$/, ""),
     type: media.type,
     file: media.file,
     text: media.caption,
     docName: media.fileName,
-    // `ptt` transforma o áudio em mensagem de voz, que é como o cliente espera receber.
-    ptt: media.type === "audio" ? true : undefined,
+    mimetype: media.mimetype,
+    replyid: media.replyId,
   });
   const messageId = extractMessageId(resp);
   if (!messageId) throw new UazapiError("uazapi /send/media respondeu sem messageid", 500, JSON.stringify(resp).slice(0, 300));
-  return { messageId, status: resp?.status || "sent" };
+  return { messageId, status: firstString(get(resp, "status")) || "sent" };
+}
+
+// ── Ações sobre uma mensagem ──────────────────────────────────────────────
+
+/**
+ * Reage a uma mensagem. Texto vazio remove a reação, que é como o WhatsApp
+ * trata o "desreagir".
+ */
+export async function reactToMessage(
+  creds: UazapiCredentials,
+  to: string,
+  messageId: string,
+  emoji: string,
+): Promise<void> {
+  await request(creds, "POST", "/message/react", {
+    number: to.replace(/@.*$/, ""),
+    id: messageId,
+    text: emoji,
+  });
+}
+
+/** Edita o texto de uma mensagem já enviada. O WhatsApp mostra "editada". */
+export async function editMessage(creds: UazapiCredentials, messageId: string, text: string): Promise<void> {
+  await request(creds, "POST", "/message/edit", { id: messageId, text });
+}
+
+/** Apaga para todos. Não há desfazer. */
+export async function deleteMessage(creds: UazapiCredentials, messageId: string): Promise<void> {
+  await request(creds, "POST", "/message/delete", { id: messageId });
+}
+
+export async function markMessagesRead(creds: UazapiCredentials, messageIds: string[]): Promise<void> {
+  if (messageIds.length === 0) return;
+  await request(creds, "POST", "/message/markread", { id: messageIds });
+}
+
+/**
+ * Mostra "digitando" ou "gravando áudio" para o cliente.
+ *
+ * É o que faz a conversa parecer conversa. Best-effort por natureza: falhar
+ * aqui não pode impedir o envio da mensagem.
+ */
+export async function sendPresence(
+  creds: UazapiCredentials,
+  to: string,
+  presence: "composing" | "recording" | "paused",
+  durationMs = 3000,
+): Promise<void> {
+  await request(creds, "POST", "/message/presence", {
+    number: to.replace(/@.*$/, ""),
+    presence,
+    delay: durationMs,
+  });
+}
+
+export type DownloadedMedia = {
+  url: string | null;
+  base64: string | null;
+  transcription: string | null;
+};
+
+/**
+ * Baixa a mídia de uma mensagem recebida.
+ *
+ * A uazapi também transcreve áudio aqui quando recebe uma chave da OpenAI, o
+ * que evita montar um segundo pipeline de transcrição só para ler o que o
+ * cliente falou.
+ */
+export async function downloadMessageMedia(
+  creds: UazapiCredentials,
+  messageId: string,
+  opts: { transcribe?: boolean; openaiApiKey?: string; returnLink?: boolean } = {},
+): Promise<DownloadedMedia> {
+  const resp = await request(creds, "POST", "/message/download", {
+    id: messageId,
+    return_link: opts.returnLink ?? true,
+    generate_mp3: true,
+    transcribe: opts.transcribe ?? false,
+    openai_apikey: opts.openaiApiKey,
+  });
+  return {
+    url: firstString(get(resp, "fileURL"), get(resp, "url"), get(resp, "link")) || null,
+    base64: firstString(get(resp, "base64")) || null,
+    transcription: firstString(get(resp, "transcription"), get(resp, "text")).trim() || null,
+  };
 }
 
 export type ChatCheckResult = { query: string; exists: boolean; jid: string | null };
@@ -266,12 +387,14 @@ export type ChatCheckResult = { query: string; exists: boolean; jid: string | nu
  * documentação sugere. Ler o campo errado fazia todo número parecer inexistente.
  */
 export async function checkNumbers(creds: UazapiCredentials, numbers: string[]): Promise<ChatCheckResult[]> {
-  const resp = await request<any>(creds, "POST", "/chat/check", { numbers });
-  const rows = Array.isArray(resp) ? resp : (resp?.chats ?? resp?.data ?? []);
-  return (Array.isArray(rows) ? rows : []).map((row: any) => ({
-    query: String(row?.query ?? row?.number ?? ""),
-    exists: Boolean(row?.isInWhatsapp ?? row?.exists ?? row?.isInWhatsApp),
-    jid: row?.jid ?? null,
+  const resp = await request(creds, "POST", "/chat/check", { numbers });
+  const rows = Array.isArray(resp) ? resp : asArray(get(resp, "chats") ?? get(resp, "data"));
+  return rows.map((row) => ({
+    query: firstString(get(row, "query"), get(row, "number")),
+    // O campo real é `isInWhatsapp`; ler o nome errado fazia todo número
+    // parecer inexistente.
+    exists: Boolean(get(row, "isInWhatsapp") ?? get(row, "exists") ?? get(row, "isInWhatsApp")),
+    jid: firstString(get(row, "jid")) || null,
   }));
 }
 
@@ -279,20 +402,13 @@ export async function markChatRead(creds: UazapiCredentials, chatId: string): Pr
   await request(creds, "POST", "/chat/read", { number: chatId.replace(/@.*$/, ""), read: true });
 }
 
-/** URL temporária de download de uma mídia recebida. */
-export async function downloadMedia(creds: UazapiCredentials, messageId: string): Promise<string | null> {
-  const resp = await request<any>(creds, "POST", "/message/download", { id: messageId });
-  return resp?.fileURL ?? resp?.url ?? resp?.file ?? null;
-}
-
 export async function findMessages(
   creds: UazapiCredentials,
   params: { chatid?: string; limit?: number },
-): Promise<any[]> {
-  const resp = await request<any>(creds, "POST", "/message/find", {
+): Promise<Json[]> {
+  const resp = await request(creds, "POST", "/message/find", {
     chatid: params.chatid,
     limit: params.limit ?? 50,
   });
-  const rows = Array.isArray(resp) ? resp : (resp?.messages ?? resp?.data ?? []);
-  return Array.isArray(rows) ? rows : [];
+  return Array.isArray(resp) ? resp : asArray(get(resp, "messages") ?? get(resp, "data"));
 }

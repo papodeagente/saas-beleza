@@ -156,7 +156,12 @@ export type ConversationMessage = {
   status: string;
   mediaUrl: string | null;
   mediaMimeType: string | null;
+  mediaFileName: string | null;
   audioTranscription: string | null;
+  externalId: string | null;
+  quotedExternalId: string | null;
+  reactions: Array<{ emoji: string; fromMe: boolean }> | null;
+  deletedAt: Date | null;
   createdAt: Date;
 };
 
@@ -230,7 +235,14 @@ export async function getConversation(
       status: messages.status,
       mediaUrl: messages.mediaUrl,
       mediaMimeType: messages.mediaMimeType,
+      mediaFileName: messages.mediaFileName,
       audioTranscription: messages.audioTranscription,
+      externalId: messages.externalId,
+      quotedExternalId: messages.quotedExternalId,
+      // O jsonb chega como `unknown`; a forma é garantida por quem escreve
+      // (applyReaction), então a asserção fica no único ponto de leitura.
+      reactions: sql<Array<{ emoji: string; fromMe: boolean }> | null>`${messages.reactions}`,
+      deletedAt: messages.deletedAt,
       createdAt: messages.createdAt,
     })
     .from(messages)

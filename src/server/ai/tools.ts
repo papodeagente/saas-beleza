@@ -567,7 +567,7 @@ const transferTool: AgentTool = {
       additionalProperties: false,
     },
   },
-  async execute(input, runtime) {
+  async execute(input) {
     const motivo = str(input, "motivo") || "Solicitação do cliente";
     const resumo = str(input, "resumo") || motivo;
     // O efeito é aplicado pelo processador ao fim do turno, junto com a última

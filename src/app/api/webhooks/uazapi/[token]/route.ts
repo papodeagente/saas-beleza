@@ -1,9 +1,14 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { whatsappConnections, whatsappWebhookEvents } from "@/db/schema";
 import { connectionByWebhookToken } from "@/server/services/whatsapp-connection-service";
-import { applyStatusUpdate, ingestMessage } from "@/server/services/whatsapp-message-service";
+import {
+  applyReaction,
+  applyStatusUpdate,
+  ingestMessage,
+  markMessageDeleted,
+} from "@/server/services/whatsapp-message-service";
 import { normalizeUazapiWebhook } from "@/server/whatsapp/normalizer";
 
 export const runtime = "nodejs";
@@ -40,7 +45,9 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   const dedupeKey =
     event.kind === "message"
       ? `msg:${event.message.externalId}`
-      : event.kind === "status"
+      : event.kind === "reaction"
+        ? `react:${event.targetExternalId}:${event.emoji}:${event.fromMe ? "me" : "them"}`
+        : event.kind === "status"
         ? `status:${event.externalIds.join(",")}:${event.status}`
         : null;
 
@@ -84,6 +91,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       for (const externalId of event.externalIds) {
         await applyStatusUpdate(connection, externalId, event.status);
       }
+    } else if (event.kind === "reaction") {
+      await applyReaction(connection, event.targetExternalId, event.emoji, event.fromMe);
+    } else if (event.kind === "deleted") {
+      await markMessageDeleted(connection, event.externalId);
     } else if (event.kind === "qrcode") {
       await db
         .update(whatsappConnections)

@@ -16,7 +16,6 @@ import {
   Mic,
   Pause,
   Play,
-  Send,
   TriangleAlert,
   User,
   UserPlus,
@@ -30,9 +29,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, DataRow } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input, Textarea } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { formatBRL } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { loadMediaAction } from "./actions";
+import { Composer, type ReplyTarget } from "./composer";
+import { MessageActions } from "./message-actions";
 import {
   type InboxDetail,
   listConversationsAction,
@@ -127,7 +129,8 @@ export function InboxView({
   );
   const [selectedId, setSelectedId] = useState<number | null>(initialSelectedId);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [draft, setDraft] = useState("");
+  // Mensagem que está sendo respondida — some assim que o envio conclui.
+  const [reply, setReply] = useState<ReplyTarget>(null);
   const [, startSending] = useTransition();
   const [, startSwitching] = useTransition();
   const [acting, startActing] = useTransition();
@@ -185,7 +188,6 @@ export function InboxView({
 
   function open(id: number) {
     setSelectedId(id);
-    setDraft("");
     syncUrl(id);
     // Abrir zera o não lido; refletir na hora evita o contador fantasma.
     setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
@@ -218,14 +220,6 @@ export function InboxView({
     });
   }
 
-  function send() {
-    const body = draft.trim();
-    if (!detail || !body) return;
-    const tempId = `rascunho-${Date.now()}`;
-    setDraft("");
-    setDrafts((prev) => [...prev, { tempId, conversationId: detail.conversationId, body, failed: false }]);
-    deliver(detail.conversationId, body, tempId);
-  }
 
   function assignment(action: "assumir" | "devolver" | "resolver" | "reabrir") {
     if (!detail) return;
@@ -429,25 +423,24 @@ export function InboxView({
               </Button>
               <div className="min-w-0 flex-1">
                 <h2 className="truncate text-card text-ink">{detail.customerName}</h2>
-                <p className="flex min-w-0 items-center gap-1.5 text-caption text-ink-secondary">
-                  <span className="truncate">{CHANNEL_LABEL[detail.channel] ?? detail.channel}</span>
-                  {/* Telefone e responsável só entram quando há largura: com as
-                      ações ao lado, três informações viram três reticências. */}
+                {/* Uma linha só que trunca no fim: em três caixas separadas as
+                    ações ao lado espremiam tudo e cada dado virava reticências. */}
+                <p className="truncate text-caption text-ink-secondary">
+                  {CHANNEL_LABEL[detail.channel] ?? detail.channel}
                   {detail.phone ? (
-                    <>
-                      <span aria-hidden className="hidden text-ink-tertiary xl:inline">·</span>
-                      <span className="hidden truncate tabular xl:inline">{detail.phone}</span>
-                    </>
+                    <span className="hidden xl:inline">
+                      {" · "}
+                      <span className="tabular">{detail.phone}</span>
+                    </span>
                   ) : null}
                   {detail.assignedUserName ? (
-                    <>
-                      <span aria-hidden className="hidden text-ink-tertiary lg:inline">·</span>
-                      <span className="hidden truncate lg:inline">com {detail.assignedUserName}</span>
-                    </>
+                    <span className="hidden lg:inline">{` · com ${detail.assignedUserName}`}</span>
                   ) : null}
                 </p>
               </div>
 
+              {/* Abaixo de sm o rótulo some por CSS — e display:none também o
+                  tira do leitor de tela. Daí o aria-label em cada ação. */}
               <div className="flex shrink-0 items-center gap-1.5">
                 <Button
                   variant={detail.aiPaused ? "secondary" : "ghost"}
@@ -455,6 +448,7 @@ export function InboxView({
                   className="h-11 md:h-8"
                   loading={acting}
                   onClick={toggleAiPause}
+                  aria-label={detail.aiPaused ? "Retomar IA" : "Pausar IA"}
                   title={detail.aiPaused ? "Retomar respostas automáticas" : "Parar respostas automáticas nesta conversa"}
                 >
                   {detail.aiPaused ? <Play aria-hidden /> : <Pause aria-hidden />}
@@ -471,13 +465,27 @@ export function InboxView({
                       <span className="hidden sm:inline">Devolver à fila</span>
                       <span className="sm:hidden">Devolver</span>
                     </Button>
-                    <Button variant="secondary" size="sm" className="h-11 md:h-8" loading={acting} onClick={() => assignment("resolver")}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-11 md:h-8"
+                      loading={acting}
+                      aria-label="Resolver conversa"
+                      onClick={() => assignment("resolver")}
+                    >
                       <Check aria-hidden />
                       <span className="hidden sm:inline">Resolver</span>
                     </Button>
                   </>
                 ) : (
-                  <Button variant="primary" size="sm" className="h-11 md:h-8" loading={acting} onClick={() => assignment("assumir")}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="h-11 md:h-8"
+                    loading={acting}
+                    aria-label="Assumir conversa"
+                    onClick={() => assignment("assumir")}
+                  >
                     <UserPlus aria-hidden />
                     <span className="hidden sm:inline">Assumir</span>
                   </Button>
@@ -503,7 +511,25 @@ export function InboxView({
                   no composer, como em qualquer thread. */}
               <div className="mx-auto mt-auto flex w-full max-w-[680px] flex-col gap-2">
                 {detail.messages.map((message) => (
-                  <MessageBubble key={message.id} message={message} />
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    conversationId={detail.conversationId}
+                    quoted={
+                      message.quotedExternalId
+                        ? (detail.messages.find((m) => m.externalId === message.quotedExternalId) ?? null)
+                        : null
+                    }
+                    onReply={() =>
+                      setReply({
+                        messageId: message.id,
+                        externalId: message.externalId,
+                        preview: (message.audioTranscription || message.body || "Mídia").slice(0, 80),
+                        fromMe: message.direction === "outbound",
+                      })
+                    }
+                    onChanged={() => void reload(detail.conversationId)}
+                  />
                 ))}
                 {conversationDrafts.map((item) => (
                   <div key={item.tempId} className="flex flex-col items-end">
@@ -547,49 +573,18 @@ export function InboxView({
             </div>
 
             <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-2 shadow-sticky md:px-6 md:py-3">
+              <Composer
+                conversationId={detail.conversationId}
+                disabled={!detail.hasWhatsapp}
+                reply={reply}
+                onClearReply={() => setReply(null)}
+                onSent={() => void reload(detail.conversationId)}
+              />
               {detail.hasWhatsapp ? (
-                <div className="mx-auto flex max-w-[680px] items-end gap-2">
-                  <Textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        send();
-                      }
-                    }}
-                    rows={1}
-                    placeholder="Escreva sua mensagem"
-                    aria-label="Escrever mensagem"
-                    aria-describedby="inbox-composer-hint"
-                    className="max-h-32 min-h-11 flex-1 resize-none"
-                  />
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={send}
-                    disabled={!draft.trim()}
-                    // Botão indisponível lê como indisponível, não como
-                    // quebrado: superfície neutra em vez de bordeaux a 45%.
-                    className="h-11 shrink-0 disabled:bg-surface-sunken disabled:text-ink-tertiary disabled:opacity-100"
-                  >
-                    <Send aria-hidden />
-                    <span className="hidden sm:inline">Enviar</span>
-                  </Button>
-                </div>
-              ) : null}
-              {detail.hasWhatsapp ? (
-                <p
-                  id="inbox-composer-hint"
-                  className="mx-auto mt-1.5 max-w-[680px] text-meta text-ink-secondary"
-                >
+                <p className="mx-auto mt-1.5 max-w-[680px] text-meta text-ink-secondary">
                   Enter envia, Shift+Enter quebra a linha.
                 </p>
-              ) : (
-                <p className="mx-auto max-w-[680px] text-center text-caption text-ink-secondary">
-                  Esta conversa não tem número de WhatsApp, então não dá para responder por aqui.
-                </p>
-              )}
+              ) : null}
             </div>
           </>
         )}
@@ -697,7 +692,21 @@ function ContextPanel({
   );
 }
 
-function MessageBubble({ message }: { message: InboxDetail["messages"][number] }) {
+type Message = InboxDetail["messages"][number];
+
+function MessageBubble({
+  message,
+  conversationId,
+  quoted,
+  onReply,
+  onChanged,
+}: {
+  message: Message;
+  conversationId: number;
+  quoted: Message | null;
+  onReply: () => void;
+  onChanged: () => void;
+}) {
   const outbound = message.direction === "outbound";
   const MediaIcon = MEDIA_ICON[message.messageType];
 
@@ -709,41 +718,114 @@ function MessageBubble({ message }: { message: InboxDetail["messages"][number] }
     );
   }
 
-  return (
-    <div className={cn("flex flex-col", outbound ? "items-end" : "items-start")}>
-      <div
-        className={cn(
-          // O bordeaux é reservado para ação e seleção: uma conversa inteira de
-          // bolhas em accent-soft gasta o acento e some com a hierarquia.
-          "max-w-[80%] rounded-card border px-3 py-2 text-body text-ink",
-          outbound ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
-        )}
-      >
-        {MediaIcon && message.messageType !== "text" ? (
-          <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
-            <MediaIcon className="size-3.5" aria-hidden />
-            {message.messageType === "audio"
-              ? "Áudio"
-              : message.messageType === "image"
-                ? "Imagem"
-                : message.messageType === "video"
-                  ? "Vídeo"
-                  : "Arquivo"}
-            {message.mediaUrl ? (
-              <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">
-                abrir
-              </a>
-            ) : null}
-          </span>
-        ) : null}
-        {/* Áudio transcrito aparece como texto: é o que a atendente precisa ler
-            para responder sem ouvir tudo de novo. */}
-        {message.audioTranscription ? (
-          <span className="block whitespace-pre-wrap italic">{message.audioTranscription}</span>
-        ) : message.body ? (
-          <span className="block whitespace-pre-wrap">{message.body}</span>
-        ) : null}
+  if (message.deleted) {
+    return (
+      <div className={cn("flex flex-col", outbound ? "items-end" : "items-start")}>
+        <div className="max-w-[80%] rounded-card border border-dashed border-line px-3 py-2 text-body text-ink-tertiary italic">
+          Mensagem apagada
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className={cn("group flex flex-col", outbound ? "items-end" : "items-start")}>
+      <div className={cn("flex items-center gap-1", outbound ? "flex-row" : "flex-row-reverse")}>
+        {/* As ações só aparecem no hover: a conversa fica limpa para ler. */}
+        <MessageActions
+          conversationId={conversationId}
+          message={message}
+          onReply={onReply}
+          onChanged={onChanged}
+        />
+        <div
+          className={cn(
+            // O bordeaux é reservado para ação e seleção: uma conversa inteira de
+            // bolhas em accent-soft gasta o acento e some com a hierarquia.
+            "max-w-[80%] rounded-card border px-3 py-2 text-body text-ink",
+            outbound ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
+          )}
+        >
+          {quoted ? (
+            <span className="mb-1.5 block border-l-2 border-accent pl-2 text-caption text-ink-secondary">
+              <span className="block font-medium text-accent">
+                {quoted.direction === "outbound" ? "Você" : "Cliente"}
+              </span>
+              <span className="block truncate">
+                {(quoted.audioTranscription || quoted.body || "Mídia").slice(0, 90)}
+              </span>
+            </span>
+          ) : null}
+
+          {message.messageType === "image" ? (
+            message.mediaUrl ? (
+              <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mb-1.5 block">
+                <img
+                  src={message.mediaUrl}
+                  alt={message.body || "Imagem recebida"}
+                  className="max-h-[280px] w-auto rounded-control"
+                />
+              </a>
+            ) : (
+              <MediaPlaceholder
+                conversationId={conversationId}
+                messageId={message.id}
+                outbound={outbound}
+                label="Imagem"
+                onLoaded={onChanged}
+              />
+            )
+          ) : null}
+
+          {message.messageType === "audio" ? (
+            message.mediaUrl ? (
+              // Player nativo: toca sem sair da conversa e sem baixar nada.
+              <audio controls src={message.mediaUrl} className="mb-1.5 h-9 w-[240px] max-w-full" />
+            ) : (
+              <MediaPlaceholder
+                conversationId={conversationId}
+                messageId={message.id}
+                outbound={outbound}
+                label="Mensagem de voz"
+                onLoaded={onChanged}
+              />
+            )
+          ) : null}
+
+          {message.messageType === "video" && message.mediaUrl ? (
+            <video controls src={message.mediaUrl} className="mb-1.5 max-h-[280px] w-auto rounded-control" />
+          ) : null}
+
+          {MediaIcon && message.messageType !== "text" && !["image", "audio", "video"].includes(message.messageType) ? (
+            <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
+              <MediaIcon className="size-3.5" aria-hidden />
+              {message.mediaFileName || "Arquivo"}
+              {message.mediaUrl ? (
+                <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">
+                  abrir
+                </a>
+              ) : null}
+            </span>
+          ) : null}
+
+          {/* Áudio transcrito aparece como texto: é o que a atendente precisa ler
+              para responder sem ouvir tudo de novo. */}
+          {message.audioTranscription ? (
+            <span className="block whitespace-pre-wrap italic">{message.audioTranscription}</span>
+          ) : message.body ? (
+            <span className="block whitespace-pre-wrap">{message.body}</span>
+          ) : null}
+        </div>
+      </div>
+
+      {message.reactions && message.reactions.length > 0 ? (
+        <span className="-mt-1 flex gap-0.5 rounded-full border border-line bg-surface-raised px-1.5 py-0.5 text-[13px] leading-none shadow-sm">
+          {message.reactions.map((r, i) => (
+            <span key={`${r.emoji}-${i}`}>{r.emoji}</span>
+          ))}
+        </span>
+      ) : null}
+
       <span className="mt-0.5 flex items-center gap-1 px-1 text-meta text-ink-secondary">
         {message.sender === "ai" ? (
           <>
@@ -757,6 +839,59 @@ function MessageBubble({ message }: { message: InboxDetail["messages"][number] }
         {outbound ? <DeliveryTick status={message.status} /> : null}
       </span>
     </div>
+  );
+}
+
+/**
+ * Mídia sem link.
+ *
+ * Acontece nos dois sentidos: o que enviamos vai em base64 e não deixa URL, e o
+ * que chega nem sempre traz o link no webhook. Em vez de bolha vazia, mostra o
+ * que é e — quando faz sentido buscar — oferece carregar.
+ */
+function MediaPlaceholder({
+  conversationId,
+  messageId,
+  outbound,
+  label,
+  onLoaded,
+}: {
+  conversationId: number;
+  messageId: number;
+  outbound: boolean;
+  label: string;
+  onLoaded: () => void;
+}) {
+  const [carregando, startCarregando] = useTransition();
+
+  return (
+    <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
+      <Mic className="size-3.5 shrink-0" aria-hidden />
+      {label}
+      {!outbound ? (
+        <button
+          type="button"
+          disabled={carregando}
+          className="text-accent disabled:opacity-60"
+          onClick={() =>
+            startCarregando(async () => {
+              const result = await loadMediaAction({ conversationId, messageId });
+              if (!result.ok) {
+                toast.error(result.error);
+                return;
+              }
+              if (!result.url) {
+                toast.error("A mídia não está mais disponível no WhatsApp.");
+                return;
+              }
+              onLoaded();
+            })
+          }
+        >
+          {carregando ? "carregando…" : "carregar"}
+        </button>
+      ) : null}
+    </span>
   );
 }
 

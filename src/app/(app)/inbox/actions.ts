@@ -13,7 +13,14 @@ import {
   getConversation,
   listConversations,
 } from "@/server/services/inbox-service";
-import { sendFromInbox } from "@/server/services/whatsapp-message-service";
+import {
+  deleteFromInbox,
+  notifyPresence,
+  fetchMediaUrl,
+  reactFromInbox,
+  sendFromInbox,
+  transcribeAudio,
+} from "@/server/services/whatsapp-message-service";
 
 export type InboxResult = { ok: true } | { ok: false; error: string };
 
@@ -40,7 +47,12 @@ export type InboxDetail = {
     status: string;
     mediaUrl: string | null;
     mediaMimeType: string | null;
+    mediaFileName: string | null;
     audioTranscription: string | null;
+    externalId: string | null;
+    quotedExternalId: string | null;
+    reactions: Array<{ emoji: string; fromMe: boolean }> | null;
+    deleted: boolean;
     createdAt: string;
   }>;
   context: {
@@ -67,8 +79,10 @@ function serialize(detail: ConversationDetail): InboxDetail {
     assignedUserName: detail.conversation.assignedUserName,
     lastAssignedUserName: detail.conversation.lastAssignedUserName,
     hasWhatsapp: detail.conversation.hasWhatsapp,
-    messages: detail.messages.map((message) => ({
+    messages: detail.messages.map(({ deletedAt, ...message }) => ({
       ...message,
+      reactions: Array.isArray(message.reactions) ? message.reactions : null,
+      deleted: deletedAt !== null,
       createdAt: message.createdAt.toISOString(),
     })),
     context: detail.context
@@ -123,6 +137,8 @@ export async function listConversationsAction(input: {
 const sendSchema = z.object({
   conversationId: idSchema,
   body: z.string().trim().min(1, "Escreva a mensagem antes de enviar.").max(4000),
+  /** Id da mensagem sendo respondida, no formato do provedor. */
+  replyToExternalId: z.string().trim().max(120).optional(),
 });
 
 /**
@@ -144,7 +160,7 @@ export async function sendMessageAction(input: unknown): Promise<InboxResult> {
       .limit(1);
     if (!conversation) return { ok: false, error: "Conversa não encontrada." };
 
-    await sendFromInbox(ctx, data.conversationId, data.body);
+    await sendFromInbox(ctx, data.conversationId, data.body, { replyToExternalId: data.replyToExternalId });
 
     await db
       .update(conversations)
@@ -241,5 +257,146 @@ export async function setAiPauseAction(input: unknown): Promise<InboxResult> {
   } catch (error) {
     console.error(error);
     return { ok: false, error: "Não foi possível mudar a pausa da IA." };
+  }
+}
+
+const MAX_ANEXO_BYTES = 10 * 1024 * 1024;
+
+const mediaSchema = z.object({
+  conversationId: idSchema,
+  /** Arquivo em data URI, como o navegador entrega ao ler o anexo. */
+  dataUrl: z.string().startsWith("data:").max(16_000_000),
+  kind: z.enum(["image", "video", "document", "audio", "ptt", "sticker"]),
+  fileName: z.string().trim().max(200).optional(),
+  caption: z.string().trim().max(1000).optional(),
+  replyToExternalId: z.string().trim().max(120).optional(),
+});
+
+/**
+ * Envia um anexo.
+ *
+ * O arquivo chega em base64 e segue assim para a uazapi, sem passar por
+ * armazenamento nosso. Simples e sem infraestrutura extra, com o preço de um
+ * teto de tamanho: acima disso o caminho certo é hospedar o arquivo e mandar a
+ * URL, o que fica para quando houver storage.
+ */
+export async function sendMediaAction(input: unknown): Promise<InboxResult> {
+  try {
+    const ctx = await requireSession();
+    const data = mediaSchema.parse(input);
+
+    const [cabecalho, base64] = data.dataUrl.split(",", 2);
+    if (!base64) return { ok: false, error: "Arquivo inválido." };
+    // 4 caracteres de base64 representam 3 bytes.
+    const bytes = Math.floor((base64.length * 3) / 4);
+    if (bytes > MAX_ANEXO_BYTES) {
+      return { ok: false, error: "Arquivo muito grande. O limite é 10 MB." };
+    }
+    const mimeType = cabecalho.match(/data:([^;]+)/)?.[1];
+
+    await sendFromInbox(ctx, data.conversationId, data.caption ?? "", {
+      media: { type: data.kind, url: data.dataUrl, fileName: data.fileName, mimeType },
+      replyToExternalId: data.replyToExternalId,
+    });
+
+    await db
+      .update(conversations)
+      .set({ controlledBy: "human", assignedUserId: ctx.userId, status: "open", resolvedAt: null })
+      .where(and(eq(conversations.id, data.conversationId), eq(conversations.organizationId, ctx.organizationId)));
+
+    revalidatePath("/inbox");
+    return { ok: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível enviar o arquivo." };
+  }
+}
+
+const reactSchema = z.object({
+  conversationId: idSchema,
+  messageId: idSchema,
+  /** Vazio remove a reação, como no WhatsApp. */
+  emoji: z.string().max(8),
+});
+
+export async function reactAction(input: unknown): Promise<InboxResult> {
+  try {
+    const ctx = await requireSession();
+    const data = reactSchema.parse(input);
+    await reactFromInbox(ctx.organizationId, data.conversationId, data.messageId, data.emoji);
+    revalidatePath("/inbox");
+    return { ok: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível reagir." };
+  }
+}
+
+const messageSchema = z.object({ conversationId: idSchema, messageId: idSchema });
+
+/** Apaga para todos. Não há desfazer. */
+export async function deleteMessageAction(input: unknown): Promise<InboxResult> {
+  try {
+    const ctx = await requireSession();
+    const data = messageSchema.parse(input);
+    await deleteFromInbox(ctx.organizationId, data.conversationId, data.messageId);
+    revalidatePath("/inbox");
+    return { ok: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível apagar." };
+  }
+}
+
+/**
+ * Busca a mídia de uma mensagem que chegou sem link.
+ *
+ * A uazapi nem sempre inclui a URL no webhook. Em vez de mostrar uma bolha
+ * vazia, a tela oferece carregar sob demanda — e o link fica salvo para as
+ * próximas aberturas da conversa.
+ */
+export async function loadMediaAction(
+  input: unknown,
+): Promise<{ ok: true; url: string | null } | { ok: false; error: string }> {
+  try {
+    const ctx = await requireSession();
+    const data = messageSchema.parse(input);
+    const url = await fetchMediaUrl(ctx.organizationId, data.conversationId, data.messageId);
+    revalidatePath("/inbox");
+    return { ok: true, url };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível carregar a mídia." };
+  }
+}
+
+export async function transcribeAction(
+  input: unknown,
+): Promise<{ ok: true; text: string | null } | { ok: false; error: string }> {
+  try {
+    const ctx = await requireSession();
+    const data = messageSchema.parse(input);
+    const text = await transcribeAudio(ctx.organizationId, data.conversationId, data.messageId);
+    revalidatePath("/inbox");
+    return { ok: true, text };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível transcrever." };
+  }
+}
+
+const presenceSchema = z.object({
+  conversationId: idSchema,
+  presence: z.enum(["composing", "recording", "paused"]),
+});
+
+/** Mostra "digitando" para o cliente. Melhor esforço: falha aqui não interessa. */
+export async function presenceAction(input: unknown): Promise<void> {
+  try {
+    const ctx = await requireSession();
+    const data = presenceSchema.parse(input);
+    await notifyPresence(ctx.organizationId, data.conversationId, data.presence);
+  } catch {
+    /* silencioso de propósito */
   }
 }

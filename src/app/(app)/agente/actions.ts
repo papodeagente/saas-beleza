@@ -194,7 +194,7 @@ export async function deleteKnowledgeAction(id: number): Promise<ActionResult> {
       .where(and(eq(aiAgentKnowledge.id, id), eq(aiAgentKnowledge.organizationId, ctx.organizationId)));
     revalidatePath("/agente");
     return { ok: true };
-  } catch (error) {
+  } catch {
     return { ok: false, error: "Não foi possível remover." };
   }
 }

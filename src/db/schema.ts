@@ -673,6 +673,13 @@ export const messages = pgTable(
     // Texto do áudio, preenchido em background. O agente só responde depois
     // que a transcrição existe.
     audioTranscription: text("audio_transcription"),
+    // Reações no formato [{emoji, from, at}]. Uma pessoa tem no máximo uma
+    // reação por mensagem, então a lista é reescrita a cada evento.
+    reactions: jsonb("reactions"),
+    // Apagada para todos no WhatsApp. A linha continua aqui para o histórico
+    // não ganhar buracos, e a tela mostra que foi apagada.
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
     errorMessage: text("error_message"),
     // Horário do provedor, que pode divergir do nosso relógio.
     sentAt: timestamp("sent_at", { withTimezone: true }),
