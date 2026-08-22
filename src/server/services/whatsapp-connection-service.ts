@@ -4,7 +4,13 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
-import { getStatus, normalizeBaseUrl, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
+import {
+  connectInstance,
+  disconnectInstance,
+  getStatus,
+  normalizeBaseUrl,
+  type UazapiCredentials,
+} from "@/server/whatsapp/uazapi-client";
 
 /**
  * Conexão com o WhatsApp.
@@ -26,6 +32,9 @@ export type ConnectionView = {
   profileName: string | null;
   status: "disconnected" | "connecting" | "connected" | "error";
   statusDetail: string | null;
+  pairingQrCode: string | null;
+  pairingCode: string | null;
+  pairingUpdatedAt: Date | null;
   webhookUrl: string;
   webhookSeenAt: Date | null;
   lastCheckedAt: Date | null;
@@ -59,6 +68,9 @@ function toView(row: typeof whatsappConnections.$inferSelect): ConnectionView {
     profileName: row.profileName,
     status: row.status,
     statusDetail: row.statusDetail,
+    pairingQrCode: row.pairingQrCode,
+    pairingCode: row.pairingCode,
+    pairingUpdatedAt: row.pairingUpdatedAt,
     webhookUrl: webhookUrlFor(row.webhookToken),
     webhookSeenAt: row.webhookSeenAt,
     lastCheckedAt: row.lastCheckedAt,
@@ -153,6 +165,8 @@ export async function refreshConnectionStatus(ctx: TenantContext): Promise<Conne
         phoneNumber: status.phoneNumber ?? existing.phoneNumber,
         profileName: status.profileName ?? existing.profileName,
         connectedAt: status.connected ? (existing.connectedAt ?? new Date()) : existing.connectedAt,
+        // Conectou: o QR na tela virou lixo visual e precisa sumir.
+        ...(status.connected ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null } : {}),
         lastCheckedAt: new Date(),
         updatedAt: new Date(),
       })
@@ -168,6 +182,70 @@ export async function refreshConnectionStatus(ctx: TenantContext): Promise<Conne
       .returning();
     return toView(row);
   }
+}
+
+/**
+ * Inicia o pareamento do aparelho.
+ *
+ * Sem número, devolve o QR para escanear; com número, um código de oito dígitos
+ * para digitar no celular. O resultado é gravado porque a uazapi também emite
+ * QR novo por webhook quando o atual expira, e as duas origens precisam
+ * alimentar a mesma tela.
+ */
+export async function startPairing(
+  ctx: TenantContext,
+  opts: { phone?: string } = {},
+): Promise<ConnectionView> {
+  const existing = await getConnectionRow(ctx.organizationId);
+  if (!existing) throw new Error("Configure a URL e o token da instância antes de parear.");
+
+  const result = await connectInstance(credentialsOf(existing), opts);
+
+  const [row] = await db
+    .update(whatsappConnections)
+    .set({
+      status: result.connected ? "connected" : "connecting",
+      statusDetail: result.connected ? result.status : "aguardando leitura do QR",
+      pairingQrCode: result.connected ? null : result.qrCode,
+      pairingCode: result.connected ? null : result.pairCode,
+      pairingUpdatedAt: result.connected ? null : new Date(),
+      connectedAt: result.connected ? (existing.connectedAt ?? new Date()) : existing.connectedAt,
+      lastCheckedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(whatsappConnections.id, existing.id))
+    .returning();
+  return toView(row);
+}
+
+/**
+ * Desconecta o aparelho na uazapi.
+ *
+ * É logout: para voltar a receber mensagem é preciso parear de novo. Fica
+ * separado de `disconnectConnection`, que apenas remove a conexão daqui sem
+ * tocar na instância.
+ */
+export async function disconnectDevice(ctx: TenantContext): Promise<ConnectionView> {
+  const existing = await getConnectionRow(ctx.organizationId);
+  if (!existing) throw new Error("Nenhuma conexão configurada.");
+
+  await disconnectInstance(credentialsOf(existing));
+
+  const [row] = await db
+    .update(whatsappConnections)
+    .set({
+      status: "disconnected",
+      statusDetail: "desconectado por aqui",
+      pairingQrCode: null,
+      pairingCode: null,
+      pairingUpdatedAt: null,
+      connectedAt: null,
+      lastCheckedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(whatsappConnections.id, existing.id))
+    .returning();
+  return toView(row);
 }
 
 /** Troca o segredo da URL do webhook. A URL antiga para de ser aceita na hora. */

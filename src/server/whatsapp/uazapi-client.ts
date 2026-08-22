@@ -150,6 +150,70 @@ export async function getStatus(creds: UazapiCredentials): Promise<UazapiStatus>
   };
 }
 
+export type PairingResult = {
+  qrCode: string | null;
+  pairCode: string | null;
+  status: string;
+  connected: boolean;
+};
+
+/**
+ * O QR chega como base64 puro em algumas versões e como data URI em outras.
+ * A tag `img` precisa do prefixo, então ele é normalizado aqui.
+ */
+function asDataUri(raw: string): string | null {
+  const value = (raw || "").trim();
+  if (!value) return null;
+  return value.startsWith("data:") ? value : `data:image/png;base64,${value}`;
+}
+
+/**
+ * Inicia o pareamento da instância.
+ *
+ * Sem `phone`, a uazapi devolve o QR para escanear. Com `phone`, devolve um
+ * código de oito dígitos para digitar no celular — a saída para quem não
+ * consegue apontar a câmera para outra tela.
+ *
+ * A instância já conectada responde sem QR: é assim que se distingue "pronto"
+ * de "esperando leitura".
+ */
+export async function connectInstance(
+  creds: UazapiCredentials,
+  opts?: { phone?: string },
+): Promise<PairingResult> {
+  const body: Record<string, unknown> = {};
+  if (opts?.phone) {
+    const digits = opts.phone.replace(/\D/g, "");
+    if (digits.length < 12) {
+      // Sem país o pareamento falha silenciosamente do lado do WhatsApp.
+      throw new UazapiError("Informe o número com código do país, por exemplo 5511999998888.", 400, "");
+    }
+    body.phone = digits;
+  }
+
+  const resp = await request<any>(creds, "POST", "/instance/connect", body);
+  const instance = resp?.instance ?? resp ?? {};
+  const status = String(instance?.status ?? resp?.status ?? "").toLowerCase();
+  const qrCode = asDataUri(String(instance?.qrcode ?? resp?.qrcode ?? ""));
+
+  return {
+    qrCode,
+    pairCode: String(instance?.paircode ?? resp?.paircode ?? "").trim() || null,
+    status: status || "unknown",
+    connected: (status === "connected" || status === "open") && !qrCode,
+  };
+}
+
+/**
+ * Desconecta o aparelho na uazapi.
+ *
+ * É logout de verdade: para voltar a receber mensagem é preciso parear de novo.
+ * Por isso não é usado em nenhuma rotina automática, só em ação explícita.
+ */
+export async function disconnectInstance(creds: UazapiCredentials): Promise<void> {
+  await request(creds, "POST", "/instance/disconnect", {});
+}
+
 export type SendResult = { messageId: string; status: string };
 
 function extractMessageId(resp: any): string {

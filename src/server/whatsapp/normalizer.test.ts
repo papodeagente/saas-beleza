@@ -89,7 +89,30 @@ describe("normalizeUazapiWebhook", () => {
     expect(event).toMatchObject({ kind: "status", externalId: "ABC", status: "delivered" });
   });
 
-  it("ignora o que não sabe tratar, em vez de inventar mensagem", () => {
+it("reconhece o QR de pareamento e o entrega pronto para exibir", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "qrcode",
+      instance: { name: "clinica" },
+      event: { qrcode: "iVBORw0KGgoAAAANSUhEUg==" },
+    });
+
+    expect(event.kind).toBe("qrcode");
+    if (event.kind !== "qrcode") return;
+    // Sem o prefixo a tag img não renderiza nada, e o pareamento trava sem erro.
+    expect(event.qrCode).toBe("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==");
+  });
+
+  it("não duplica o prefixo quando o QR já vem como data URI", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "qrcode",
+      instance: { name: "clinica" },
+      event: { qrcode: "data:image/png;base64,AAAA" },
+    });
+    if (event.kind !== "qrcode") throw new Error("esperava qrcode");
+    expect(event.qrCode).toBe("data:image/png;base64,AAAA");
+  });
+
+    it("ignora o que não sabe tratar, em vez de inventar mensagem", () => {
     expect(normalizeUazapiWebhook({ EventType: "presence", instance: { name: "c" } }).kind).toBe("ignored");
     expect(normalizeUazapiWebhook(null).kind).toBe("ignored");
     expect(

@@ -6,10 +6,12 @@ import { requireRole, requireSession } from "@/server/auth";
 import {
   type ConnectionView,
   disconnectConnection,
+  disconnectDevice,
   getConnection,
   refreshConnectionStatus,
   rotateWebhookToken,
   saveConnection,
+  startPairing,
 } from "@/server/services/whatsapp-connection-service";
 
 export type ConnectionResult =
@@ -35,6 +37,55 @@ export async function saveConnectionAction(input: unknown): Promise<ConnectionRe
     requireRole(ctx, "admin");
     const data = saveSchema.parse(input);
     const connection = await saveConnection(ctx, data);
+    revalidatePath("/whatsapp");
+    return { ok: true, connection };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+const pairingSchema = z.object({
+  phone: z.string().trim().max(20).optional(),
+});
+
+/**
+ * Pede à uazapi o código de pareamento.
+ *
+ * Sem número devolve o QR; com número, o código de oito dígitos. A tela decide
+ * qual pedir, mas o caminho é o mesmo.
+ */
+export async function startPairingAction(input: unknown): Promise<ConnectionResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const data = pairingSchema.parse(input ?? {});
+    const connection = await startPairing(ctx, { phone: data.phone || undefined });
+    revalidatePath("/whatsapp");
+    return { ok: true, connection };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+/**
+ * Estado atual do pareamento, para a tela acompanhar sem recarregar.
+ *
+ * Lê do banco em vez de perguntar à uazapi a cada segundo: o QR renovado chega
+ * por webhook, e a confirmação de conexão também.
+ */
+export async function pairingStateAction(): Promise<ConnectionView | null> {
+  const ctx = await requireSession();
+  return getConnection(ctx);
+}
+
+/** Logout do aparelho na uazapi. Voltar a receber mensagem exige parear de novo. */
+export async function disconnectDeviceAction(): Promise<ConnectionResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const connection = await disconnectDevice(ctx);
     revalidatePath("/whatsapp");
     return { ok: true, connection };
   } catch (error) {

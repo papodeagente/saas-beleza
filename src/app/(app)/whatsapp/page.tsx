@@ -35,6 +35,7 @@ export default async function WhatsappPage() {
               webhookUrl: connection.webhookUrl.startsWith("http")
                 ? connection.webhookUrl
                 : `${origin}${connection.webhookUrl}`,
+              pairingUpdatedAt: connection.pairingUpdatedAt?.toISOString() ?? null,
               webhookSeenAt: connection.webhookSeenAt?.toISOString() ?? null,
               lastCheckedAt: connection.lastCheckedAt?.toISOString() ?? null,
               connectedAt: connection.connectedAt?.toISOString() ?? null,

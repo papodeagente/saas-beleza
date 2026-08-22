@@ -537,6 +537,12 @@ export const whatsappConnections = pgTable(
     profileName: text("profile_name"),
     status: waConnectionStatus("status").notNull().default("disconnected"),
     statusDetail: text("status_detail"),
+    // QR de pareamento. Fica no banco porque a uazapi emite um novo por webhook
+    // quando o anterior expira: guardar o último é o que permite a tela mostrar
+    // sempre um código válido, sem pedir outro a cada expiração.
+    pairingQrCode: text("pairing_qr_code"),
+    pairingCode: text("pairing_code"),
+    pairingUpdatedAt: timestamp("pairing_updated_at", { withTimezone: true }),
     // Segredo embutido na URL do webhook: o uazapi não assina o payload, então
     // a própria URL é a credencial. Rotacionável sem trocar a conexão.
     webhookToken: text("webhook_token").notNull(),

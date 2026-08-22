@@ -50,6 +50,7 @@ export type WaEvent =
       status: "sent" | "delivered" | "read" | "failed";
     }
   | { kind: "connection"; instance: string; status: string; connected: boolean }
+  | { kind: "qrcode"; instance: string; qrCode: string | null; pairCode: string | null }
   | { kind: "ignored"; reason: string };
 
 const TYPE_ALIASES: Record<string, WaMessageKind> = {
@@ -121,6 +122,18 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
     typeof raw.type === "string" ? raw.type : "",
   ).toLowerCase();
   const body = (typeof raw.event === "object" && raw.event) || raw.data || raw.message || raw;
+
+  // A uazapi emite um QR novo sozinha quando o anterior expira. Guardar esse
+  // evento é o que mantém a tela de pareamento com um código sempre válido.
+  if (eventName === "qrcode" || eventName === "qr" || body?.qrcode) {
+    const qr = firstString(body?.qrcode, raw.qrcode, body?.qr, raw.qr);
+    return {
+      kind: "qrcode",
+      instance,
+      qrCode: qr ? (qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`) : null,
+      pairCode: firstString(body?.paircode, raw.paircode) || null,
+    };
+  }
 
   if (eventName === "connection" || eventName.includes("connect") || raw.connection) {
     const status = firstString(raw.connection, body?.connection, raw.instance?.status, body?.status).toLowerCase();

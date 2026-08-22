@@ -82,6 +82,18 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       }
     } else if (event.kind === "status") {
       await applyStatusUpdate(connection, event.externalId, event.status);
+    } else if (event.kind === "qrcode") {
+      await db
+        .update(whatsappConnections)
+        .set({
+          status: "connecting",
+          statusDetail: "aguardando leitura do QR",
+          pairingQrCode: event.qrCode,
+          pairingCode: event.pairCode,
+          pairingUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(whatsappConnections.id, connection.id));
     } else if (event.kind === "connection") {
       await db
         .update(whatsappConnections)
@@ -89,6 +101,11 @@ export async function POST(request: Request, context: { params: Promise<{ token:
           status: event.connected ? "connected" : "disconnected",
           statusDetail: event.status,
           connectedAt: event.connected ? (connection.connectedAt ?? new Date()) : connection.connectedAt,
+          // Pareou: o código não serve mais para nada e não deve continuar
+          // visível na tela.
+          ...(event.connected
+            ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null }
+            : {}),
           updatedAt: new Date(),
         })
         .where(eq(whatsappConnections.id, connection.id));
