@@ -36,12 +36,17 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs ./scripts/mig
 USER nextjs
 EXPOSE 3000
 
-# Sinal de saúde para o orquestrador. Sem ele o Coolify não distingue "no ar"
-# de "morto" e marca a aplicação como caída mesmo servindo tráfego.
-# Usa o fetch nativo do Node em vez de curl: a imagem alpine não tem curl e
-# instalar um pacote só para isso engorda a imagem à toa.
-HEALTHCHECK --interval=20s --timeout=5s --start-period=40s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# Sinal de saúde para o orquestrador. Sem ele o Coolify marcava a aplicação
+# como caída mesmo servindo tráfego — era a causa do status vermelho.
+#
+# Usa o `wget` do busybox, que já vem na alpine: o healthcheck do Coolify exige
+# curl ou wget, e instalar curl só para isso engorda a imagem à toa.
+#
+# A janela é curta de propósito. O Coolify tenta 3 vezes com 5s de intervalo e
+# desiste; um start-period longo faz o contêiner ainda estar "starting" quando
+# ele desiste, e o deploy é revertido por engano.
+HEALTHCHECK --interval=5s --timeout=4s --start-period=10s --retries=8 \
+  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1
 
 # `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
 # SIGTERM do `docker stop` nunca chega na aplicação.
