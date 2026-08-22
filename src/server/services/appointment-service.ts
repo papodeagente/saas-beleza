@@ -97,7 +97,8 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
           source: input.source ?? "admin",
           conversationId: input.conversationId ?? null,
           notes: input.notes ?? null,
-          createdByUserId: ctx.userId,
+          // Booking público e IA não têm usuário — o autor real fica no histórico
+          createdByUserId: ctx.userId || null,
         })
         .returning();
 
@@ -105,7 +106,7 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
         organizationId: ctx.organizationId,
         appointmentId: created.id,
         actorType: input.source === "ai" ? "ai" : input.source === "public" ? "public" : "user",
-        actorId: ctx.userId,
+        actorId: ctx.userId || null,
         action: "created",
         after: { startsAt: created.startsAt, professionalId: created.professionalId, status: created.status },
       });
