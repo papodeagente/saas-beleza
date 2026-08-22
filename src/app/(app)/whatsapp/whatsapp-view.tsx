@@ -2,13 +2,14 @@
 
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CheckCircle2, Copy, Link2, RefreshCw, RotateCcw, TriangleAlert, Unplug } from "lucide-react";
-import { useState, useTransition } from "react";
+import { Check, CheckCircle2, Copy, Link2, RefreshCw, RotateCcw, TriangleAlert, Unplug } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
+import { copyToClipboard } from "@/lib/clipboard";
 import {
   disconnectAction,
   refreshStatusAction,
@@ -62,6 +63,14 @@ export function WhatsappView({
   const [saving, startSaving] = useTransition();
   const [refreshing, startRefreshing] = useTransition();
   const [rotating, startRotating] = useTransition();
+  const [copied, setCopied] = useState(false);
+
+  // A confirmação no próprio botão volta ao normal sozinha.
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const status = current ? STATUS[current.status] : null;
 
@@ -107,7 +116,12 @@ export function WhatsappView({
 
   async function copyWebhook() {
     if (!current) return;
-    await navigator.clipboard.writeText(current.webhookUrl);
+    const ok = await copyToClipboard(current.webhookUrl);
+    if (!ok) {
+      toast.error("Não consegui copiar. Toque no endereço para selecionar e copie manualmente.");
+      return;
+    }
+    setCopied(true);
     toast.success("URL copiada");
   }
 
@@ -222,10 +236,17 @@ export function WhatsappView({
 
             <div className="flex items-center gap-2 rounded-control bg-surface-sunken px-3 py-2">
               <Link2 className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
-              <code className="min-w-0 flex-1 truncate text-caption text-ink">{current.webhookUrl}</code>
-              <Button variant="ghost" size="sm" onClick={copyWebhook}>
-                <Copy aria-hidden />
-                Copiar
+              <input
+                readOnly
+                value={current.webhookUrl}
+                aria-label="URL do webhook"
+                onFocus={(event) => event.currentTarget.select()}
+                onClick={(event) => event.currentTarget.select()}
+                className="min-w-0 flex-1 truncate bg-transparent text-caption text-ink outline-none"
+              />
+              <Button variant="ghost" size="sm" onClick={copyWebhook} className="shrink-0">
+                {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+                {copied ? "Copiado" : "Copiar"}
               </Button>
             </div>
 
