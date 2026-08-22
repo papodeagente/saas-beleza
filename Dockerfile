@@ -46,11 +46,14 @@ EXPOSE 3000
 # Usa o `wget` do busybox, que já vem na alpine: o healthcheck do Coolify exige
 # curl ou wget, e instalar curl só para isso engorda a imagem à toa.
 #
-# A janela é curta de propósito. O Coolify tenta 3 vezes com 5s de intervalo e
-# desiste; um start-period longo faz o contêiner ainda estar "starting" quando
-# ele desiste, e o deploy é revertido por engano.
+# Aponta para /api/live, que não toca no banco: liveness não é readiness — uma
+# oscilação do Postgres não pode fazer o orquestrador derrubar o contêiner.
+#
+# A janela é curta de propósito. O Coolify tenta poucas vezes e desiste; um
+# start-period longo faz o contêiner ainda estar "starting" quando ele desiste,
+# e o deploy é revertido por engano.
 HEALTHCHECK --interval=5s --timeout=4s --start-period=10s --retries=8 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1
+  CMD curl -fsS http://127.0.0.1:3000/api/live >/dev/null || exit 1
 
 # `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
 # SIGTERM do `docker stop` nunca chega na aplicação.
