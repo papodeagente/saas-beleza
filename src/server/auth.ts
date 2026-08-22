@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { and, eq, gt } from "drizzle-orm";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 
@@ -38,6 +38,19 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
+/**
+ * `Secure` depende da conexão, não do ambiente.
+ *
+ * Marcar pelo NODE_ENV quebra qualquer deploy servido por HTTP (o navegador
+ * aceita o cookie no login e não o devolve na navegação seguinte, derrubando a
+ * sessão). Aqui a decisão vem do protocolo real, atrás do proxy.
+ */
+async function isSecureConnection(): Promise<boolean> {
+  const requestHeaders = await headers();
+  const proto = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return proto === "https";
+}
+
 export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
@@ -47,7 +60,7 @@ export async function createSession(userId: number): Promise<void> {
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: await isSecureConnection(),
     path: "/",
     expires: expiresAt,
   });
