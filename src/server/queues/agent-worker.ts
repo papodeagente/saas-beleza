@@ -47,6 +47,12 @@ export function startAgentWorker(): Worker<AgentTurnJob> | null {
     console.error(`[agent worker] job ${job?.id} falhou:`, error?.message);
   });
 
+  // Obrigatório: um EventEmitter sem ouvinte de "error" derruba o processo Node
+  // inteiro. Uma oscilação do Redis não pode tirar a agenda da clínica do ar.
+  worker.on("error", (error) => {
+    console.error("[agent worker] erro de conexão:", error?.message);
+  });
+
   global.__agentWorker = worker;
   console.log("[agent worker] ativo");
   return worker;
