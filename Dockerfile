@@ -40,20 +40,17 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs ./scripts/mig
 USER nextjs
 EXPOSE 3000
 
-# Sinal de saúde para o orquestrador. Sem ele o Coolify marcava a aplicação
-# como caída mesmo servindo tráfego — era a causa do status vermelho.
+# Sem HEALTHCHECK na imagem, de propósito.
 #
-# Usa o `wget` do busybox, que já vem na alpine: o healthcheck do Coolify exige
-# curl ou wget, e instalar curl só para isso engorda a imagem à toa.
+# O Coolify deste servidor não lê a saúde real do contêiner: com um healthcheck
+# que não pode falhar (`CMD exit 0`) ele continuou marcando a aplicação como
+# "unhealthy", enquanto o log do próprio deploy dizia "New container is healthy"
+# e a aplicação respondia 200 sem parar. Com healthcheck declarado ele chegou a
+# reverter um deploy bom por engano.
 #
-# Aponta para /api/live, que não toca no banco: liveness não é readiness — uma
-# oscilação do Postgres não pode fazer o orquestrador derrubar o contêiner.
-#
-# A janela é curta de propósito. O Coolify tenta poucas vezes e desiste; um
-# start-period longo faz o contêiner ainda estar "starting" quando ele desiste,
-# e o deploy é revertido por engano.
-HEALTHCHECK --interval=5s --timeout=4s --start-period=10s --retries=8 \
-  CMD exit 0
+# As rotas continuam existindo para monitoramento de verdade:
+#   /api/live   — processo de pé, sem I/O (liveness)
+#   /api/health — processo de pé E banco respondendo (readiness)
 
 # `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
 # SIGTERM do `docker stop` nunca chega na aplicação.
