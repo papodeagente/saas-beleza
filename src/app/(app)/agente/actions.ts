@@ -6,7 +6,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { aiAgentKnowledge, aiAgentPermissions, aiAgents } from "@/db/schema";
 import { requireRole, requireSession } from "@/server/auth";
-import { AGENT_MODELS, DEFAULT_MODEL, hasApiKeyFor, normalizeModel } from "@/server/ai/llm";
+import { AGENT_MODELS, hasApiKeyFor, normalizeModel } from "@/server/ai/llm";
 import { executeAgentTurn } from "@/server/ai/orchestrator";
 import { invalidateAgentCache } from "@/server/queues/agent-turn-queue";
 
@@ -276,5 +276,3 @@ export async function listRecentActivityAction() {
     .orderBy(desc(aiExecutionLogs.createdAt))
     .limit(20);
 }
-
-export const DEFAULT_AGENT_MODEL = DEFAULT_MODEL;
