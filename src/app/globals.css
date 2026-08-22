@@ -1,26 +1,163 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Design tokens — ver docs/design-system.md
+   Neutros quentes (porcelana), acento bordeaux, status dessaturados.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  --color-surface: #faf9f7;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #f3f1ee;
+
+  --color-ink: #231f1d;
+  --color-ink-secondary: #6e6660;
+  --color-ink-tertiary: #9c948d;
+
+  --color-line: #e8e4df;
+  --color-line-strong: #d6d0c9;
+
+  --color-accent: #7c2d3e;
+  --color-accent-hover: #68242f;
+  --color-accent-soft: #f6e9ec;
+
+  --color-positive: #3d7a50;
+  --color-positive-soft: #e8f2eb;
+  --color-attention: #996a1f;
+  --color-attention-soft: #f7eedd;
+  --color-danger: #b03a2e;
+  --color-danger-soft: #f9e9e7;
+  --color-info: #3e5f8a;
+  --color-info-soft: #e9eff6;
+
+  --radius-sm: 6px;
+  --radius-DEFAULT: 10px;
+  --radius-lg: 14px;
+
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), Georgia, serif;
+
+  --ease-out-quint: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --shadow-overlay: 0 8px 24px rgb(35 31 29 / 0.1), 0 2px 8px rgb(35 31 29 / 0.06);
+  --shadow-raised: 0 1px 2px rgb(35 31 29 / 0.04);
+  /* agenda: 15 minutos = 14px */
+  --slot-height: 14px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  border-color: var(--color-line);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Números em tabelas, métricas e horários nunca "dançam" */
+.tabular,
+time,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar discreta — a agenda e o inbox rolam muito */
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-line-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-ink-tertiary);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.animate-overlay-in {
+  animation: overlay-in 180ms var(--ease-out-quint);
+}
+.animate-sheet-in {
+  animation: sheet-in 240ms var(--ease-out-quint);
+}
+.animate-dialog-in {
+  animation: dialog-in 200ms var(--ease-out-quint);
 }
