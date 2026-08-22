@@ -4,6 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { copyToClipboard } from "@/lib/clipboard";
 
 /**
  * O link público é o ativo que a clínica mais compartilha — copiar o endereço
@@ -19,13 +20,15 @@ export function CopyLink({ url }: { url: string }) {
   }, [copied]);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      toast.success("Link copiado");
-    } catch {
+    // Fora de HTTPS o navegador não expõe a área de transferência moderna; o
+    // helper cuida da reserva.
+    const ok = await copyToClipboard(url);
+    if (!ok) {
       toast.error("Não foi possível copiar. Selecione o endereço e copie manualmente.");
+      return;
     }
+    setCopied(true);
+    toast.success("Link copiado");
   }
 
   return (

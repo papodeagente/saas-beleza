@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/server/auth";
@@ -72,14 +72,18 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [panel, setPanel] = useState<"none" | "avisos" | "mais" | "usuario">("none");
+  // Fecha qualquer painel ao trocar de rota. Ajuste durante o render (padrão
+  // documentado do React) em vez de efeito: evita o render em cascata.
+  const [panelPath, setPanelPath] = useState(pathname);
+  if (panelPath !== pathname) {
+    setPanelPath(pathname);
+    setPanel("none");
+  }
 
   const visible = NAV.filter((item) => RANK[user.role] >= RANK[item.minRole]);
   const operacao = visible.filter((i) => i.group === "operacao");
   const gestao = visible.filter((i) => i.group === "gestao");
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
-
-  // Fecha qualquer painel ao trocar de rota
-  useEffect(() => setPanel("none"), [pathname]);
 
   const mobilePrimary = visible.slice(0, 4);
   const mobileRest = visible.slice(4);

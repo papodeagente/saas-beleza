@@ -18,10 +18,12 @@ const button = cva(
       size: {
         // Alturas alinhadas com os controles de formulário (36/32) e o alvo de
         // toque mínimo do mobile (44) no tamanho lg.
-        sm: "h-8 px-3 text-label [&_svg]:size-3.5",
-        md: "h-9 px-3.5 text-label [&_svg]:size-4",
+        // `pointer-coarse` eleva o alvo para 44px só onde se toca com o dedo;
+        // no mouse a densidade compacta é preservada.
+        sm: "h-8 px-3 text-label pointer-coarse:min-h-11 [&_svg]:size-3.5",
+        md: "h-9 px-3.5 text-label pointer-coarse:min-h-11 [&_svg]:size-4",
         lg: "h-11 px-5 text-body font-medium [&_svg]:size-4",
-        icon: "size-9 [&_svg]:size-4",
+        icon: "size-9 pointer-coarse:min-h-11 pointer-coarse:min-w-11 [&_svg]:size-4",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },

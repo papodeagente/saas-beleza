@@ -16,6 +16,7 @@ export const Select = React.forwardRef<
       className={cn(
         "w-full appearance-none rounded-control border border-line-strong bg-surface-raised pl-2.5 pr-8 text-label text-ink transition-colors duration-[120ms] hover:border-ink-tertiary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:bg-surface-sunken disabled:text-ink-tertiary",
         size === "md" ? "h-9" : "h-8",
+        "pointer-coarse:min-h-11",
         className,
       )}
       {...props}

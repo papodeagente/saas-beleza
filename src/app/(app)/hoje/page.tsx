@@ -161,6 +161,7 @@ export default async function TodayPage() {
         {nextUp.length === 0 ? (
           <Card className="mt-3">
             <EmptyState
+              size="sm"
               icon={CalendarPlus}
               title="O dia já está encerrado"
               description={

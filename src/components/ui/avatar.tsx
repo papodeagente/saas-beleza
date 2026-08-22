@@ -1,3 +1,4 @@
+import { identityTint } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
 function initials(name: string): string {
@@ -7,9 +8,9 @@ function initials(name: string): string {
 }
 
 const SIZES = {
-  sm: "size-6 text-[10px]",
-  md: "size-8 text-[11px]",
-  lg: "size-10 text-[13px]",
+  sm: "size-6 text-meta",
+  md: "size-8 text-meta",
+  lg: "size-10 text-label",
 } as const;
 
 export function Avatar({
@@ -20,6 +21,7 @@ export function Avatar({
 }: {
   name: string;
   size?: keyof typeof SIZES;
+  /** Cor de identidade (profissional). Pode ser qualquer valor cadastrado. */
   color?: string;
   className?: string;
 }) {
@@ -32,7 +34,17 @@ export function Avatar({
         !color && "bg-accent-soft text-accent",
         className,
       )}
-      style={color ? { backgroundColor: `${color}1a`, color } : undefined}
+      style={
+        color
+          ? (() => {
+              // A cor cadastrada é livre e pode não ter contraste sobre o próprio
+              // tom claro (a âmbar media 4,18:1). identityTint escurece só o
+              // necessário para cruzar 4.5:1, preservando a identidade.
+              const tint = identityTint(color);
+              return { backgroundColor: tint.background, color: tint.foreground };
+            })()
+          : undefined
+      }
     >
       {initials(name)}
     </span>

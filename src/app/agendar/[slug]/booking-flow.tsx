@@ -186,7 +186,7 @@ export function BookingFlow({
   }
 
   return (
-    <main className="mx-auto min-h-dvh max-w-[440px] px-5 pb-28 pt-6">
+    <main className="mx-auto min-h-dvh max-w-[440px] px-5 pb-28 pt-6 sm:pt-14">
       <header>
         {step !== "service" ? (
           <button

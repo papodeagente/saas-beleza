@@ -3,7 +3,6 @@ import Link from "next/link";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatBRLCompact } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";

@@ -202,7 +202,7 @@ export default async function ManagementPage() {
 
         <div className="grid gap-8 lg:grid-cols-2">
           {/* Unidades */}
-          <section aria-labelledby="unidades">
+          <section className="min-w-0" aria-labelledby="unidades">
             <SectionLabel>
               <span id="unidades">Unidades</span>
             </SectionLabel>
@@ -252,7 +252,7 @@ export default async function ManagementPage() {
           </section>
 
           {/* Acessos */}
-          <section aria-labelledby="acessos">
+          <section className="min-w-0" aria-labelledby="acessos">
             <SectionLabel>
               <span id="acessos">Quem tem acesso</span>
             </SectionLabel>

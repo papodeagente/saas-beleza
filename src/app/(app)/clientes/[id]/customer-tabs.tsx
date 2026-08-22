@@ -66,7 +66,7 @@ export function CustomerTabs({
               aria-selected={active}
               onClick={() => setTab(item.key)}
               className={cn(
-                "-mb-px border-b-2 px-3 py-2 text-label transition-colors duration-[120ms]",
+                "-mb-px border-b-2 px-3 py-2 text-label transition-colors duration-[120ms] pointer-coarse:min-h-11",
                 active
                   ? "border-accent font-medium text-accent"
                   : "border-transparent text-ink-secondary hover:text-ink",

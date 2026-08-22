@@ -297,40 +297,51 @@ export default async function FinancePage({
           ) : (
             <Card className="mt-3">
               <ul className="divide-y divide-line">
-                {transactions.map((row) => (
-                  <li
-                    key={row.id}
-                    className="flex min-h-[52px] flex-col gap-1 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3"
-                  >
-                    {/* O nome do lançamento quebra em vez de truncar: no celular ele é a linha */}
+                {transactions.map((row) => {
+                  // O nome do cliente já costuma vir no texto do lançamento —
+                  // repeti-lo na linha de apoio só empurra a data para fora.
+                  const origin =
+                    row.categoryName ?? (row.kind === "income" ? "Atendimento" : "Sem categoria");
+                  const customer =
+                    row.customerName && !row.description.includes(row.customerName)
+                      ? row.customerName
+                      : null;
+                  const day = formatTz(new Date(`${row.dueDate}T12:00:00Z`), ctx.timezone, "d MMM");
+                  return (
+                  <li key={row.id} className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
+                    {/* No celular o nome quebra em vez de truncar, e o estado desce
+                        para a linha de apoio — a data nunca some de lista de dinheiro. */}
                     <span className="min-w-0 flex-1">
-                      <span className="block text-label text-ink sm:truncate">{row.description}</span>
-                      <span className="block truncate text-meta text-ink-secondary">
-                        {[
-                          row.categoryName ?? (row.kind === "income" ? "Atendimento" : "Sem categoria"),
-                          row.customerName,
-                          formatTz(new Date(`${row.dueDate}T12:00:00Z`), ctx.timezone, "d MMM"),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                      <span className="block text-label text-ink line-clamp-2 sm:line-clamp-1">
+                        {row.description}
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                        <Badge className="sm:hidden" tone={STATUS[row.status]?.tone ?? "neutral"}>
+                          {STATUS[row.status]?.label ?? row.status}
+                        </Badge>
+                        <span className="min-w-0 truncate text-meta text-ink-secondary">
+                          {[origin, customer, day].filter(Boolean).join(" · ")}
+                        </span>
                       </span>
                     </span>
-                    <span className="flex items-center gap-2 sm:contents">
-                      <Badge className="shrink-0" tone={STATUS[row.status]?.tone ?? "neutral"}>
-                        {STATUS[row.status]?.label ?? row.status}
-                      </Badge>
-                      <span
-                        className={cn(
-                          "shrink-0 text-label tabular sm:w-[92px] sm:text-right",
-                          row.kind === "income" ? "text-positive" : "text-ink",
-                        )}
-                      >
-                        {row.kind === "income" ? "+" : "−"}
-                        {formatBRL(row.amountCents)}
-                      </span>
+                    <Badge
+                      className="hidden shrink-0 sm:inline-flex"
+                      tone={STATUS[row.status]?.tone ?? "neutral"}
+                    >
+                      {STATUS[row.status]?.label ?? row.status}
+                    </Badge>
+                    <span
+                      className={cn(
+                        "w-[92px] shrink-0 text-right text-label tabular",
+                        row.kind === "income" ? "text-positive" : "text-ink",
+                      )}
+                    >
+                      {row.kind === "income" ? "+" : "−"}
+                      {formatBRL(row.amountCents)}
                     </span>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             </Card>
           )}

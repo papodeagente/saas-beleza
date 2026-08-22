@@ -8,7 +8,7 @@ import { Card, DataRow } from "@/components/ui/card";
 import { Metric, MetricRow } from "@/components/ui/metric";
 import { formatBRL } from "@/lib/money";
 import { formatPhone, normalizePhone } from "@/lib/phone";
-import { formatTz, formatTzCapitalized } from "@/lib/tz";
+import { formatTz } from "@/lib/tz";
 import { requireSession } from "@/server/auth";
 import {
   getCustomer,
@@ -217,12 +217,13 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
           {/* Trilho de contexto */}
           <aside className="w-full shrink-0 space-y-5 lg:w-[var(--rail-width)]">
             <Card className="px-4 py-4">
+              {/* O nome já está no cabeçalho da página; aqui ele seria eco. */}
               <div className="flex items-center gap-3">
                 <Avatar name={customer.name} size="lg" />
                 <div className="min-w-0">
-                  <p className="truncate text-card text-ink">{customer.name}</p>
+                  <h3 className="text-card text-ink">Contato</h3>
                   <p className="text-caption text-ink-secondary">
-                    {SOURCE_LABEL[customer.source] ?? customer.source}
+                    Origem: {SOURCE_LABEL[customer.source] ?? customer.source}
                   </p>
                 </div>
               </div>

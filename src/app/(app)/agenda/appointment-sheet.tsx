@@ -79,6 +79,7 @@ export function AppointmentSheet({
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<(typeof PAYMENT_METHODS)[number]["value"]>("pix");
   const [showPayment, setShowPayment] = useState(false);
+  const [running, setRunning] = useState<string | null>(null);
 
   // Remarcar reaproveita a mesma consulta de horários livres do agendamento novo.
   const [rescheduling, setRescheduling] = useState(false);
@@ -93,7 +94,13 @@ export function AppointmentSheet({
   const closed = isClosed(appointment.status);
   const status = appointment.status as AppointmentStatus;
 
-  function run(action: () => Promise<{ ok: true } | { ok: false; error: string }>, success: string) {
+  /** Qual botão disparou a transição — é ele que gira, não todos. */
+  function run(
+    tag: string,
+    action: () => Promise<{ ok: true } | { ok: false; error: string }>,
+    success: string,
+  ) {
+    setRunning(tag);
     startTransition(async () => {
       const result = await action();
       if (result.ok) {
@@ -102,11 +109,12 @@ export function AppointmentSheet({
       } else {
         toast.error(result.error);
       }
+      setRunning(null);
     });
   }
 
-  function changeStatus(next: AppointmentStatus, success: string) {
-    run(() => updateStatusAction({ appointmentId: appointment.id, status: next }), success);
+  function changeStatus(tag: string, next: AppointmentStatus, success: string) {
+    run(tag, () => updateStatusAction({ appointmentId: appointment.id, status: next }), success);
   }
 
   function submitPayment() {
@@ -116,6 +124,7 @@ export function AppointmentSheet({
       return;
     }
     run(
+      "payment",
       () => registerPaymentAction({ appointmentId: appointment.id, method, amountCents: cents }),
       "Pagamento registrado",
     );
@@ -143,6 +152,7 @@ export function AppointmentSheet({
 
   function submitReschedule() {
     if (!slot) return;
+    setRunning("reschedule");
     startTransition(async () => {
       const result = await rescheduleAction({
         appointmentId: appointment.id,
@@ -164,6 +174,7 @@ export function AppointmentSheet({
         setSlots(fresh);
         setSlot(null);
       }
+      setRunning(null);
     });
   }
 
@@ -190,7 +201,13 @@ export function AppointmentSheet({
               <Button variant="ghost" size="md" onClick={() => setRescheduling(false)}>
                 Voltar
               </Button>
-              <Button variant="primary" size="md" loading={pending} disabled={!slot} onClick={submitReschedule}>
+              <Button
+                variant="primary"
+                size="md"
+                loading={pending && running === "reschedule"}
+                disabled={!slot}
+                onClick={submitReschedule}
+              >
                 <CalendarClock />
                 Remarcar
               </Button>
@@ -199,8 +216,8 @@ export function AppointmentSheet({
             <Button
               variant="primary"
               size="md"
-              loading={pending}
-              onClick={() => changeStatus(primary.next, primary.success)}
+              loading={pending && running === "primary"}
+              onClick={() => changeStatus("primary", primary.next, primary.success)}
             >
               <primary.icon />
               {primary.label}
@@ -376,7 +393,7 @@ export function AppointmentSheet({
                         </Select>
                       </Field>
                       <div className="flex gap-2">
-                        <Button variant="primary" size="md" onClick={submitPayment} loading={pending}>
+                        <Button variant="primary" size="md" onClick={submitPayment} loading={pending && running === "payment"}>
                           Registrar pagamento
                         </Button>
                         <Button variant="ghost" size="md" onClick={() => setShowPayment(false)}>
@@ -402,7 +419,9 @@ export function AppointmentSheet({
 
               <Link
                 href={`/clientes/${appointment.customerId}`}
-                className="flex items-center gap-2 text-label text-accent transition-colors hover:text-accent-hover"
+                // O bordeaux fica reservado à ação primária e à seleção: aqui o
+                // sublinhado já diz que é um link.
+                className="flex items-center gap-2 text-label text-ink underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-ink"
               >
                 <User className="size-3.5" />
                 Ver ficha completa do cliente
@@ -418,7 +437,8 @@ export function AppointmentSheet({
                     variant="ghost"
                     size="md"
                     disabled={pending}
-                    onClick={() => changeStatus("cancelled", "Atendimento cancelado")}
+                    loading={pending && running === "cancel"}
+                    onClick={() => changeStatus("cancel", "cancelled", "Atendimento cancelado")}
                   >
                     <X />
                     Cancelar atendimento
@@ -427,7 +447,8 @@ export function AppointmentSheet({
                     variant="ghost"
                     size="md"
                     disabled={pending}
-                    onClick={() => changeStatus("no_show", "Falta registrada")}
+                    loading={pending && running === "noshow"}
+                    onClick={() => changeStatus("noshow", "no_show", "Falta registrada")}
                   >
                     Registrar falta
                   </Button>

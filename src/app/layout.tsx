@@ -7,7 +7,8 @@ const sans = Instrument_Sans({
   variable: "--font-instrument-sans",
   subsets: ["latin"],
   display: "swap",
-  weight: ["400", "500", "600", "700"],
+  // Sem `weight`: a fonte carrega variável, que é o que permite os pesos
+  // intermediários da escala (450 no corpo, 550 no display).
 });
 
 // Voz do produto — usada com contenção (saudação, empty states, booking público).
