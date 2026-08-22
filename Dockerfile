@@ -18,10 +18,14 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-# Sem isto o servidor do Next escuta apenas no hostname do contêiner (o Docker
-# define HOSTNAME com o id da instância) e 127.0.0.1 não responde — foi o que
-# derrubou o healthcheck, que testa justamente o loopback.
+# O servidor standalone do Next escuta em `process.env.HOSTNAME`, e no Docker
+# essa variável é o ID do contêiner — o processo então NÃO atende em 127.0.0.1
+# e todo healthcheck local falha. Era a causa do status vermelho no Coolify.
 ENV HOSTNAME=0.0.0.0
+# O healthcheck do Coolify roda DENTRO do contêiner e chama curl. A alpine não
+# traz curl, então o comando falhava com "not found" e a aplicação aparecia
+# como caída mesmo servindo 200. ~1 MB para a plataforma poder dizer a verdade.
+RUN apk add --no-cache curl
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
 # `output: standalone` já traz apenas o necessário para rodar
