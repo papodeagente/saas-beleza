@@ -32,4 +32,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs ./scripts/mig
 USER nextjs
 EXPOSE 3000
 
-CMD ["sh", "-c", "node scripts/migrate.mjs && node server.js"]
+# Sinal de saúde para o orquestrador. Sem ele o Coolify não distingue "no ar"
+# de "morto" e marca a aplicação como caída mesmo servindo tráfego.
+# Usa o fetch nativo do Node em vez de curl: a imagem alpine não tem curl e
+# instalar um pacote só para isso engorda a imagem à toa.
+HEALTHCHECK --interval=20s --timeout=5s --start-period=40s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
+# SIGTERM do `docker stop` nunca chega na aplicação.
+CMD ["sh", "-c", "node scripts/migrate.mjs && exec node server.js"]
