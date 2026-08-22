@@ -184,14 +184,24 @@ async function completeOpenAi(args: CompleteArgs): Promise<LlmTurn> {
     }
   }
 
+  /**
+   * Duas recusas medidas na API da OpenAI (2026-08-22), que o catálogo não
+   * anuncia: `chat-latest` devolve 400 para `max_tokens` — quer
+   * `max_completion_tokens` — e só aceita temperatura 1. Como a temperatura é
+   * configurável por conta e nasce em 0,7, mandar o campo derrubava todo turno
+   * do agente justamente no modelo que é o padrão de quem só tem chave OpenAI.
+   * `max_completion_tokens` funciona também nos gpt-4.1, então vale para todos.
+   */
+  const acceptsTemperature = !/^(chat-latest|gpt-5|o[1-9])/.test(args.model);
+
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: args.model,
       messages,
-      max_tokens: args.maxOutputTokens,
-      temperature: args.temperature,
+      max_completion_tokens: args.maxOutputTokens,
+      ...(acceptsTemperature ? { temperature: args.temperature } : {}),
       tools: args.tools.map((tool) => ({
         type: "function",
         function: { name: tool.name, description: tool.description, parameters: tool.parameters },
