@@ -18,6 +18,10 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+# Sem isto o servidor do Next escuta apenas no hostname do contêiner (o Docker
+# define HOSTNAME com o id da instância) e 127.0.0.1 não responde — foi o que
+# derrubou o healthcheck, que testa justamente o loopback.
+ENV HOSTNAME=0.0.0.0
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
 # `output: standalone` já traz apenas o necessário para rodar
