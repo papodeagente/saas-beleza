@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Imagem de produção enxuta: o Docker copia só o bundle standalone
+  output: "standalone",
 };
 
 export default nextConfig;
