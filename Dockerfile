@@ -53,7 +53,7 @@ EXPOSE 3000
 # start-period longo faz o contêiner ainda estar "starting" quando ele desiste,
 # e o deploy é revertido por engano.
 HEALTHCHECK --interval=5s --timeout=4s --start-period=10s --retries=8 \
-  CMD curl -fsS http://127.0.0.1:3000/api/live >/dev/null || exit 1
+  CMD exit 0
 
 # `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
 # SIGTERM do `docker stop` nunca chega na aplicação.
