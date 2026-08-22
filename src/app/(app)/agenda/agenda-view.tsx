@@ -1,7 +1,7 @@
 "use client";
 
 import { addDays, parseISO } from "date-fns";
-import { CalendarPlus, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { CalendarCog, CalendarPlus, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { PageHeader } from "@/components/app-shell";
@@ -16,6 +16,7 @@ import { useCurrentMinute } from "@/lib/use-current-minute";
 import { identityTint } from "@/lib/color";
 import { cn } from "@/lib/utils";
 import { AppointmentSheet } from "./appointment-sheet";
+import { AvailabilitySheet, type ScheduleData } from "./availability-sheet";
 import { NewAppointmentSheet } from "./new-appointment-sheet";
 
 export type AgendaAppointment = {
@@ -53,6 +54,9 @@ export type AgendaFormData = {
 /** Estado do painel de criação: a grade vazia entrega hora e profissional já escolhidos. */
 type Creating = { startsAt?: string; professionalId?: number };
 
+/** Cliente que já chega escolhido (link do inbox ou da ficha do cliente). */
+export type PresetCustomer = { id: number; name: string; phone: string | null };
+
 const PX_PER_MIN = 14 / 15; // 15 min = 14px
 const SNAP_MIN = 15;
 
@@ -63,8 +67,12 @@ export function AgendaView({
   isToday,
   agenda,
   formData,
+  schedule,
+  canManageSchedule,
   selectedBranchId,
   openAppointmentId,
+  openNew,
+  presetCustomer,
 }: {
   dateISO: string;
   dayStartUtcISO: string;
@@ -72,14 +80,20 @@ export function AgendaView({
   isToday: boolean;
   agenda: { appointments: AgendaAppointment[]; columns: Column[]; gridStart: number; gridEnd: number };
   formData: AgendaFormData;
+  schedule: ScheduleData;
+  canManageSchedule: boolean;
   selectedBranchId: number | null;
   openAppointmentId: number | null;
+  openNew: boolean;
+  presetCustomer: PresetCustomer | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [navigating, startNavigation] = useTransition();
   const [selectedId, setSelectedId] = useState<number | null>(openAppointmentId);
-  const [creating, setCreating] = useState<Creating | null>(null);
+  const [creating, setCreating] = useState<Creating | null>(openNew ? {} : null);
+  // Painel de disponibilidade; `professionalId` null abre no primeiro da lista.
+  const [scheduleEditor, setScheduleEditor] = useState<{ professionalId: number | null } | null>(null);
   const [scrolled, setScrolled] = useState(false);
 
   // O dia mostrado no título muda no clique; o servidor confirma depois.
@@ -117,6 +131,19 @@ export function AgendaView({
     params.delete("dia");
     params.delete("atendimento");
     navigate(params);
+  }
+
+  /**
+   * Fechar o painel de criação também limpa `novo` e `cliente` da URL: sem
+   * isso, um F5 depois de agendar reabriria o painel com o mesmo cliente.
+   */
+  function closeCreation() {
+    setCreating(null);
+    if (!searchParams.has("novo") && !searchParams.has("cliente")) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("novo");
+    params.delete("cliente");
+    router.replace(`/agenda${params.size ? `?${params}` : ""}`);
   }
 
   function setBranch(value: string) {
@@ -228,6 +255,18 @@ export function AgendaView({
               </Select>
             ) : null}
 
+            {canManageSchedule ? (
+              <Button
+                variant="secondary"
+                className="h-11 md:h-9"
+                onClick={() => setScheduleEditor({ professionalId: null })}
+                title="Definir os horários em que cada profissional atende"
+              >
+                <CalendarCog />
+                <span className="hidden sm:inline">Disponibilidade</span>
+              </Button>
+            ) : null}
+
             <Button
               variant="primary"
               className="h-11 flex-1 md:h-9 sm:flex-none"
@@ -247,9 +286,21 @@ export function AgendaView({
             title="Ninguém trabalha neste dia"
             description="Defina a grade de horários dos profissionais para que a agenda passe a receber atendimentos."
             action={
-              <Button variant="primary" size="md" onClick={() => setCreating({})}>
-                Criar atendimento mesmo assim
-              </Button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {canManageSchedule ? (
+                  <Button variant="primary" size="md" onClick={() => setScheduleEditor({ professionalId: null })}>
+                    <CalendarCog />
+                    Definir horários
+                  </Button>
+                ) : null}
+                <Button
+                  variant={canManageSchedule ? "secondary" : "primary"}
+                  size="md"
+                  onClick={() => setCreating({})}
+                >
+                  Criar atendimento mesmo assim
+                </Button>
+              </div>
             }
           />
         </div>
@@ -452,7 +503,18 @@ export function AgendaView({
           formData={formData}
           defaultProfessionalId={creating.professionalId}
           defaultStartsAt={creating.startsAt}
-          onClose={() => setCreating(null)}
+          defaultCustomer={presetCustomer}
+          onClose={closeCreation}
+        />
+      ) : null}
+
+      {scheduleEditor ? (
+        <AvailabilitySheet
+          timezone={timezone}
+          formData={formData}
+          schedule={schedule}
+          defaultProfessionalId={scheduleEditor.professionalId}
+          onClose={() => setScheduleEditor(null)}
         />
       ) : null}
     </div>

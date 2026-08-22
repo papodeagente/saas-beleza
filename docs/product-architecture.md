@@ -130,6 +130,17 @@ AvailabilityService (I/O)
 2. `AppointmentService.create` revalida dentro de transação;
 3. Constraint `EXCLUDE USING gist` no Postgres sobre `(professional_id, tstzrange(starts_at, ends_at))` (e `resource_id`) para status ativos — a garantia final é do banco, imune a race conditions.
 
+**Escrita da grade:** `ScheduleSettingsService` é o único caminho que grava
+`professional_working_hours` e `schedule_blocks`, com a mesma validação pura de
+`src/domain/working-hours.ts` que a tela usa para avisar antes de salvar. A
+edição vive em `/agenda` → Disponibilidade, por unidade: salvar substitui a
+jornada daquele profissional naquela unidade, sem tocar na outra.
+
+**Encaixe:** a agenda permite marcar fora dos slots (cliente que chega sem hora,
+atendimento fora do expediente). É um desvio consciente da camada 1 — as camadas
+2 e 3 continuam valendo, então encaixe nunca gera choque de profissional ou de
+sala. O encaixe não reserva recurso, porque recurso vem da grade.
+
 ## 7. Mensageria e IA (arquitetura, implementação fases 4–5)
 
 - `MessagingProvider` é uma interface (`sendMessage`, `webhook parsing`) — WhatsApp é a primeira implementação, nunca um acoplamento.
@@ -181,7 +192,7 @@ Hoje | Agenda | Clientes | Inbox | Financeiro | Catálogo | Gestão
 |---|---|
 | `/entrar` | Login por e-mail e senha, sessão em banco |
 | `/hoje` | Briefing do dia, fila de atenção acionável, próximos atendimentos, sinal de retorno |
-| `/agenda` | Dia por profissional, linha do agora, painel contextual (confirmar → check-in → iniciar → concluir), pagamento, cancelamento/falta, agendamento rápido |
+| `/agenda` | Dia por profissional, linha do agora, painel contextual (confirmar → check-in → iniciar → concluir), pagamento, cancelamento/falta, agendamento rápido, encaixe fora da grade, edição da disponibilidade (jornada semanal + bloqueios) |
 | `/clientes` | Lista com busca e filtros no servidor (retorno, novos, inativos) |
 | `/clientes/[id]` | Customer 360 com timeline única de atendimentos e pagamentos |
 | `/inbox` | Conversas, thread, contexto do cliente, handoff IA ↔ humano |
@@ -197,7 +208,7 @@ Hoje | Agenda | Clientes | Inbox | Financeiro | Catálogo | Gestão
 3. **Financeiro é somente leitura na UI** — lançamentos nascem dos pagamentos; criar despesa manual ainda não tem tela.
 4. **Sem drag & drop na agenda** — remarcar existe pelo domínio (`rescheduleAppointment`), falta a interação.
 5. **Booking público não sinaliza dias sem vaga** nos chips de data (exigiria pré-cálculo de 14 dias).
-6. **Onboarding não existe** — um tenant novo cai numa aplicação vazia; hoje só o seed cria uma clínica completa.
+6. **Onboarding não existe** — um tenant novo cai numa aplicação vazia; hoje só o seed cria uma clínica completa. A jornada dos profissionais já é editável pela agenda (`/agenda` → Disponibilidade), então o buraco que restou é cadastrar profissional, serviço e unidade pela UI.
 7. **Command palette (⌘K) não implementado.**
 
 **Nota de priorização:** WhatsApp + IA (fases 4–5) vêm antes de administrativo secundário (estoque, relatórios avançados). O diferencial é transformar conversa em receita.

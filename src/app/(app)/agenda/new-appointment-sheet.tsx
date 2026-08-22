@@ -12,7 +12,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBRL } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";
-import { formatTz } from "@/lib/tz";
+import { formatTz, localDateTimeToUtc } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import {
   type SlotOption,
@@ -20,7 +20,7 @@ import {
   fetchSlotsAction,
   searchCustomersAction,
 } from "./actions";
-import type { AgendaFormData } from "./agenda-view";
+import type { AgendaFormData, PresetCustomer } from "./agenda-view";
 
 type Customer = { id: number; name: string; phone: string | null; lastVisitAt: Date | string | null };
 
@@ -36,6 +36,7 @@ export function NewAppointmentSheet({
   formData,
   defaultProfessionalId,
   defaultStartsAt,
+  defaultCustomer,
   onClose,
 }: {
   dateISO: string;
@@ -44,6 +45,8 @@ export function NewAppointmentSheet({
   defaultProfessionalId?: number;
   /** Instante escolhido na grade (ISO). Vira o horário pré-selecionado. */
   defaultStartsAt?: string;
+  /** Cliente que veio pronto do inbox ou da ficha: pula a busca. */
+  defaultCustomer?: PresetCustomer | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -51,7 +54,9 @@ export function NewAppointmentSheet({
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
-  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [customer, setCustomer] = useState<Customer | null>(
+    defaultCustomer ? { ...defaultCustomer, lastVisitAt: null } : null,
+  );
 
   const [serviceId, setServiceId] = useState<number | null>(null);
   const [professionalId, setProfessionalId] = useState<number | null>(defaultProfessionalId ?? null);
@@ -66,6 +71,18 @@ export function NewAppointmentSheet({
   // Horário pedido pelo clique na grade: aplicado assim que a lista de livres chega.
   const wanted = useRef<string | null>(defaultStartsAt ?? null);
   const [wantedTaken, setWantedTaken] = useState<string | null>(null);
+
+  /**
+   * Encaixe: agendar fora da grade de horários livres. Existe porque a vida do
+   * salão tem exceção — cliente que chega sem hora marcada, atendimento fora do
+   * expediente. A proteção continua no banco: choque com outro atendimento do
+   * mesmo profissional (ou do mesmo recurso) é recusado de qualquer forma.
+   */
+  const [manual, setManual] = useState(false);
+  const [manualTime, setManualTime] = useState(
+    defaultStartsAt ? formatTz(new Date(defaultStartsAt), timezone, "HH:mm") : "09:00",
+  );
+  const [manualBranchId, setManualBranchId] = useState<number | null>(formData.branches[0]?.id ?? null);
 
   const service = formData.services.find((s) => s.id === serviceId) ?? null;
   const startLabel = defaultStartsAt ? formatTz(new Date(defaultStartsAt), timezone, "HH:mm") : null;
@@ -111,23 +128,34 @@ export function NewAppointmentSheet({
     });
   }
 
+  const ready = manual
+    ? Boolean(customer && service && professionalId && manualBranchId && manualTime)
+    : Boolean(customer && service && slot);
+
   function submit() {
-    if (!customer || !service || !slot) return;
+    if (!customer || !service || !ready) return;
+    const startsAt = manual
+      ? localDateTimeToUtc(day, manualTime, timezone).toISOString()
+      : slot!.startsAt;
+    const label = manual ? manualTime : slot!.label;
+
     startTransition(async () => {
       const result = await createAppointmentAction({
         customerId: customer.id,
         serviceId: service.id,
-        professionalId: slot.professionalId,
-        branchId: slot.branchId,
-        startsAt: slot.startsAt,
-        resourceId: slot.resourceId,
+        professionalId: manual ? professionalId! : slot!.professionalId,
+        branchId: manual ? manualBranchId! : slot!.branchId,
+        startsAt,
+        // Encaixe não reserva sala: o recurso vem da grade, que aqui não existe.
+        resourceId: manual ? null : slot!.resourceId,
       });
       if (result.ok) {
-        toast.success(`${service.name} agendado para ${customer.name} às ${slot.label}`);
+        toast.success(`${service.name} agendado para ${customer.name} às ${label}`);
         router.refresh();
         onClose();
       } else {
         toast.error(result.error);
+        if (manual) return;
         // O horário pode ter sido ocupado por outra pessoa — recarrega a grade
         const fresh = await fetchSlotsAction({
           serviceId: service.id,
@@ -169,7 +197,7 @@ export function NewAppointmentSheet({
             <Button
               variant="primary"
               size="md"
-              disabled={!customer || !service || !slot}
+              disabled={!ready}
               loading={pending}
               onClick={submit}
             >
@@ -266,7 +294,11 @@ export function NewAppointmentSheet({
           <Field
             label="Profissional"
             htmlFor="profissional"
-            hint="Deixe em branco para ver todos os horários livres."
+            hint={
+              manual
+                ? "No encaixe o profissional é obrigatório."
+                : "Deixe em branco para ver todos os horários livres."
+            }
           >
             <Select
               id="profissional"
@@ -302,7 +334,47 @@ export function NewAppointmentSheet({
           {serviceId ? (
             <div>
               <span className="mb-1.5 block text-label text-ink">Horário</span>
-              {loadingSlots ? (
+              {manual ? (
+                <div className="space-y-2 rounded-card border border-line p-3">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Field label="Hora" htmlFor="encaixe-hora">
+                      <Input
+                        id="encaixe-hora"
+                        type="time"
+                        value={manualTime}
+                        onChange={(e) => setManualTime(e.target.value)}
+                        className="w-[112px] tabular"
+                      />
+                    </Field>
+                    {formData.branches.length > 1 ? (
+                      <Field label="Unidade" htmlFor="encaixe-unidade">
+                        <Select
+                          id="encaixe-unidade"
+                          value={manualBranchId ?? ""}
+                          onChange={(e) => setManualBranchId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-[168px]"
+                        >
+                          {formData.branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    ) : null}
+                  </div>
+                  {professionalId ? (
+                    <p className="text-caption text-ink-tertiary">
+                      O encaixe entra fora da jornada e sem reservar sala. Só é recusado se o
+                      profissional já tiver atendimento nesse horário.
+                    </p>
+                  ) : (
+                    <p className="text-caption text-attention">
+                      Escolha o profissional acima: encaixe precisa saber de quem é a agenda.
+                    </p>
+                  )}
+                </div>
+              ) : loadingSlots ? (
                 <div className="grid grid-cols-4 gap-1.5">
                   {Array.from({ length: 8 }).map((_, i) => (
                     <Skeleton key={i} className="h-9" />
@@ -336,16 +408,25 @@ export function NewAppointmentSheet({
                   })}
                 </div>
               )}
-              {wantedTaken && !slot ? (
+              {!manual && wantedTaken && !slot ? (
                 <p className="mt-2 text-caption text-attention">
-                  {wantedTaken} não está livre para esse serviço. Escolha um dos horários acima.
+                  {wantedTaken} não está livre para esse serviço. Escolha um dos horários acima ou
+                  marque um encaixe.
                 </p>
               ) : null}
-              {slot && !professionalId ? (
+              {!manual && slot && !professionalId ? (
                 <p className="mt-2 text-caption text-ink-secondary">
                   Será atendido por {slot.professionalName}.
                 </p>
               ) : null}
+              <Button
+                variant="link"
+                size="sm"
+                className="mt-2 text-caption"
+                onClick={() => setManual((current) => !current)}
+              >
+                {manual ? "Voltar aos horários livres" : "Não achou o horário? Marcar encaixe"}
+              </Button>
             </div>
           ) : null}
         </div>
