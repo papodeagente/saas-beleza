@@ -33,10 +33,20 @@ export class DomainError extends Error {
 
 const SLOT_TAKEN = "Esse horário acabou de ser ocupado. Escolha outro horário disponível.";
 
+/**
+ * O drizzle embrulha o erro do driver, então o código do Postgres fica em
+ * `cause` — percorrer a cadeia é o que faz o usuário ver "esse horário acabou
+ * de ser ocupado" em vez de uma falha genérica.
+ */
 function isOverlapViolation(error: unknown): boolean {
-  const code = (error as { code?: string })?.code;
-  const constraint = (error as { constraint?: string })?.constraint ?? "";
-  return code === "23P01" || constraint.includes("no_professional_overlap") || constraint.includes("no_resource_overlap");
+  for (let current = error, depth = 0; current && depth < 5; depth++) {
+    const { code, constraint } = current as { code?: string; constraint?: string };
+    if (code === "23P01") return true;
+    if (constraint?.includes("no_professional_overlap") || constraint?.includes("no_resource_overlap"))
+      return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export type CreateAppointmentInput = {
