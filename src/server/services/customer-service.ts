@@ -169,6 +169,103 @@ export async function getCustomer(ctx: TenantContext, customerId: number): Promi
   };
 }
 
+export type CustomerAppointment = {
+  id: number;
+  startsAt: Date;
+  endsAt: Date;
+  status: string;
+  priceCents: number;
+  paidCents: number;
+  serviceName: string;
+  professionalName: string;
+  professionalColor: string;
+  branchName: string;
+  source: string;
+};
+
+/**
+ * Atendimentos separados por tempo, não misturados.
+ * "Histórico" que contém o atendimento de amanhã é histórico errado.
+ */
+export async function getCustomerAppointments(
+  ctx: TenantContext,
+  customerId: number,
+): Promise<{ upcoming: CustomerAppointment[]; past: CustomerAppointment[] }> {
+  const paidByAppointment = db
+    .select({
+      appointmentId: payments.appointmentId,
+      paid: sql<number>`sum(${payments.amountCents})`.mapWith(Number).as("paid"),
+    })
+    .from(payments)
+    .where(eq(payments.organizationId, ctx.organizationId))
+    .groupBy(payments.appointmentId)
+    .as("paid_by_appointment");
+
+  const rows = await db
+    .select({
+      id: appointments.id,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt,
+      status: appointments.status,
+      priceCents: appointments.priceCents,
+      paidCents: sql<number>`coalesce(${paidByAppointment.paid}, 0)`.mapWith(Number),
+      serviceName: services.name,
+      professionalName: professionals.name,
+      professionalColor: professionals.color,
+      branchName: branches.name,
+      source: appointments.source,
+    })
+    .from(appointments)
+    .innerJoin(services, eq(services.id, appointments.serviceId))
+    .innerJoin(professionals, eq(professionals.id, appointments.professionalId))
+    .innerJoin(branches, eq(branches.id, appointments.branchId))
+    .leftJoin(paidByAppointment, eq(paidByAppointment.appointmentId, appointments.id))
+    .where(
+      and(eq(appointments.organizationId, ctx.organizationId), eq(appointments.customerId, customerId)),
+    )
+    .orderBy(desc(appointments.startsAt))
+    .limit(120);
+
+  const now = Date.now();
+  const isOpen = (status: string) =>
+    ["scheduled", "confirmed", "checked_in", "in_progress"].includes(status);
+
+  return {
+    upcoming: rows
+      .filter((r) => r.startsAt.getTime() >= now && isOpen(r.status))
+      .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime()),
+    past: rows.filter((r) => !(r.startsAt.getTime() >= now && isOpen(r.status))),
+  };
+}
+
+export type CustomerPayment = {
+  id: number;
+  paidAt: Date;
+  amountCents: number;
+  method: string;
+  serviceName: string | null;
+};
+
+export async function getCustomerPayments(
+  ctx: TenantContext,
+  customerId: number,
+): Promise<CustomerPayment[]> {
+  return db
+    .select({
+      id: payments.id,
+      paidAt: payments.paidAt,
+      amountCents: payments.amountCents,
+      method: payments.method,
+      serviceName: services.name,
+    })
+    .from(payments)
+    .leftJoin(appointments, eq(appointments.id, payments.appointmentId))
+    .leftJoin(services, eq(services.id, appointments.serviceId))
+    .where(and(eq(payments.organizationId, ctx.organizationId), eq(payments.customerId, customerId)))
+    .orderBy(desc(payments.paidAt))
+    .limit(60);
+}
+
 export type TimelineEntry = {
   id: string;
   at: Date;
@@ -252,6 +349,104 @@ export async function getCustomerTimeline(
   ];
 
   return entries.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
+}
+
+export class CustomerError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly field?: string,
+  ) {
+    super(message);
+  }
+}
+
+export type CustomerInput = {
+  name: string;
+  phone: string | null;
+  email: string | null;
+  birthdate: string | null;
+  notes: string | null;
+  preferredProfessionalId: number | null;
+  preferredBranchId: number | null;
+  consentMarketing: boolean;
+};
+
+/** O índice único é parcial em (organization_id, phone) — o driver devolve 23505. */
+function isDuplicatePhone(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 5; depth++) {
+    const { code, constraint } = current as { code?: string; constraint?: string };
+    if (code === "23505" && (constraint ?? "").includes("customers_org_phone")) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+export async function createCustomer(ctx: TenantContext, input: CustomerInput) {
+  try {
+    const [created] = await db
+      .insert(customers)
+      .values({
+        organizationId: ctx.organizationId,
+        name: input.name.trim(),
+        phone: input.phone,
+        email: input.email,
+        birthdate: input.birthdate,
+        notes: input.notes,
+        preferredProfessionalId: input.preferredProfessionalId,
+        preferredBranchId: input.preferredBranchId,
+        consentMarketing: input.consentMarketing,
+        source: "manual",
+      })
+      .returning();
+    return created;
+  } catch (error) {
+    if (isDuplicatePhone(error))
+      throw new CustomerError("Já existe um cliente com esse telefone.", "DUPLICATE_PHONE", "phone");
+    throw error;
+  }
+}
+
+export async function updateCustomer(ctx: TenantContext, customerId: number, input: CustomerInput) {
+  try {
+    const [updated] = await db
+      .update(customers)
+      .set({
+        name: input.name.trim(),
+        phone: input.phone,
+        email: input.email,
+        birthdate: input.birthdate,
+        notes: input.notes,
+        preferredProfessionalId: input.preferredProfessionalId,
+        preferredBranchId: input.preferredBranchId,
+        consentMarketing: input.consentMarketing,
+      })
+      .where(and(eq(customers.id, customerId), eq(customers.organizationId, ctx.organizationId)))
+      .returning();
+    if (!updated) throw new CustomerError("Cliente não encontrado.", "NOT_FOUND");
+    return updated;
+  } catch (error) {
+    if (isDuplicatePhone(error))
+      throw new CustomerError("Já existe um cliente com esse telefone.", "DUPLICATE_PHONE", "phone");
+    throw error;
+  }
+}
+
+/** Opções de preferência para o formulário de cliente. */
+export async function getCustomerFormOptions(ctx: TenantContext) {
+  const [professionalRows, branchRows] = await Promise.all([
+    db
+      .select({ id: professionals.id, name: professionals.name })
+      .from(professionals)
+      .where(and(eq(professionals.organizationId, ctx.organizationId), eq(professionals.active, true)))
+      .orderBy(asc(professionals.name)),
+    db
+      .select({ id: branches.id, name: branches.name })
+      .from(branches)
+      .where(and(eq(branches.organizationId, ctx.organizationId), eq(branches.active, true)))
+      .orderBy(asc(branches.name)),
+  ]);
+  return { professionals: professionalRows, branches: branchRows };
 }
 
 export async function listTags(ctx: TenantContext) {

@@ -149,7 +149,47 @@ export type SlotOption = {
 export async function fetchSlotsAction(input: unknown): Promise<SlotOption[]> {
   const ctx = await requireSession();
   const data = slotsSchema.parse(input);
-  const slots = await getAvailableSlots(ctx, data);
+  return listSlots(ctx, data);
+}
+
+const rescheduleSlotsSchema = z.object({
+  appointmentId: z.number().int().positive(),
+  dateISO: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  professionalId: z.number().int().positive().optional(),
+});
+
+/**
+ * Horários livres para remarcar: o serviço vem do próprio atendimento, então
+ * o painel da agenda não precisa carregar serviceId só para essa consulta.
+ */
+export async function fetchRescheduleSlotsAction(input: unknown): Promise<SlotOption[]> {
+  const ctx = await requireSession();
+  const data = rescheduleSlotsSchema.parse(input);
+
+  const { db } = await import("@/db");
+  const { appointments } = await import("@/db/schema");
+  const { and, eq } = await import("drizzle-orm");
+  const [row] = await db
+    .select({ serviceId: appointments.serviceId })
+    .from(appointments)
+    .where(
+      and(eq(appointments.id, data.appointmentId), eq(appointments.organizationId, ctx.organizationId)),
+    )
+    .limit(1);
+  if (!row) return [];
+
+  return listSlots(ctx, {
+    serviceId: row.serviceId,
+    dateISO: data.dateISO,
+    professionalId: data.professionalId,
+  });
+}
+
+async function listSlots(
+  ctx: Awaited<ReturnType<typeof requireSession>>,
+  query: { serviceId: number; dateISO: string; professionalId?: number; branchId?: number },
+): Promise<SlotOption[]> {
+  const slots = await getAvailableSlots(ctx, query);
 
   const { formatTz } = await import("@/lib/tz");
   const { db } = await import("@/db");

@@ -7,18 +7,25 @@ const sans = Instrument_Sans({
   variable: "--font-instrument-sans",
   subsets: ["latin"],
   display: "swap",
+  weight: ["400", "500", "600", "700"],
 });
 
-// Voz do produto — usada com contenção (saudação, empty states, booking público)
+// Voz do produto — usada com contenção (saudação, empty states, booking público).
+// Sem os pesos declarados a Fraunces cai em 400 e lê como serifada de livro.
 const display = Fraunces({
   variable: "--font-fraunces",
   subsets: ["latin"],
   display: "swap",
+  // Fonte variável: com `axes` declarado o peso precisa ficar variável (o
+  // build quebra com uma lista fixa) — e é o que permite o 550 do display.
   axes: ["SOFT", "WONK", "opsz"],
 });
 
 export const metadata: Metadata = {
-  title: "Lumina",
+  title: {
+    default: "Lumina",
+    template: "%s · Lumina",
+  },
   description: "O sistema operacional do seu negócio de estética.",
 };
 

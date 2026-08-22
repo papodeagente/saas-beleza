@@ -63,7 +63,7 @@ export function CustomerSearch({
               onClick={() => setFilter(option.value)}
               aria-pressed={active}
               className={cn(
-                "h-7 rounded-[var(--radius-sm)] px-2.5 text-[12px] transition-colors duration-[120ms]",
+                "h-7 rounded-control px-2.5 text-[12px] transition-colors duration-[120ms]",
                 active
                   ? "bg-accent-soft font-medium text-accent"
                   : "text-ink-secondary hover:bg-surface-sunken hover:text-ink",

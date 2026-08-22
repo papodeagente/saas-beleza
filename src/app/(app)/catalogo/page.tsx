@@ -1,24 +1,36 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { LayoutGrid } from "lucide-react";
-import { PageHeader } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardList } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { db } from "@/db";
 import { professionalServices, professionals, serviceCategories, services } from "@/db/schema";
-import { Badge } from "@/components/ui/badge";
-import { EmptyState } from "@/components/ui/empty-state";
 import { formatBRL } from "@/lib/money";
 import { requireSession } from "@/server/auth";
 
 export const metadata = { title: "Catálogo — Lumina" };
 export const dynamic = "force-dynamic";
 
+const RESOURCE_NEED: Record<string, string> = {
+  room: "precisa de sala",
+  cabin: "precisa de cabine",
+  equipment: "precisa de equipamento",
+};
+
 export default async function CatalogPage() {
   const ctx = await requireSession();
+
+  /**
+   * Margem é custo interno: a recepção precisa do preço e da duração para
+   * atender, não da rentabilidade do serviço.
+   */
+  const canSeeMargin = ctx.role === "admin" || ctx.role === "owner";
 
   const rows = await db
     .select({
       id: services.id,
       name: services.name,
-      description: services.description,
       durationMin: services.durationMin,
       priceCents: services.priceCents,
       costCents: services.costCents,
@@ -27,7 +39,6 @@ export default async function CatalogPage() {
       returnIntervalDays: services.returnIntervalDays,
       requiredResourceType: services.requiredResourceType,
       categoryName: serviceCategories.name,
-      categoryPosition: serviceCategories.position,
       professionals: sql<string[]>`coalesce(array_agg(distinct ${professionals.name}) filter (where ${professionals.name} is not null), '{}')`,
     })
     .from(services)
@@ -41,11 +52,7 @@ export default async function CatalogPage() {
     )
     .leftJoin(professionals, eq(professionals.id, professionalServices.professionalId))
     .where(eq(services.organizationId, ctx.organizationId))
-    .groupBy(
-      services.id,
-      serviceCategories.name,
-      serviceCategories.position,
-    )
+    .groupBy(services.id, serviceCategories.name, serviceCategories.position)
     .orderBy(asc(serviceCategories.position), asc(services.name));
 
   const grouped = rows.reduce((map, row) => {
@@ -56,89 +63,109 @@ export default async function CatalogPage() {
     return map;
   }, new Map<string, typeof rows>());
 
+  const description =
+    rows.length === 0
+      ? "Nenhum serviço cadastrado"
+      : `${rows.length} ${rows.length === 1 ? "serviço" : "serviços"} em ${grouped.size} ${
+          grouped.size === 1 ? "categoria" : "categorias"
+        }`;
+
   return (
     <div>
-      <PageHeader
-        title="Catálogo"
-        description={`${rows.length} ${rows.length === 1 ? "serviço" : "serviços"}`}
-      />
+      <PageHeader title="Catálogo" description={description} />
 
-      <div className="mx-auto max-w-[1120px] px-5 py-6 md:px-8">
+      <PageBody>
         {rows.length === 0 ? (
-          <div className="rounded-[var(--radius)] border border-line bg-surface-raised">
+          <Card>
             <EmptyState
               icon={LayoutGrid}
               title="Seu catálogo está vazio"
               description="Cadastre os serviços com duração e preço para que a agenda saiba calcular horários."
             />
-          </div>
+          </Card>
         ) : (
-          <div className="space-y-7">
+          <div className="space-y-6">
             {[...grouped.entries()].map(([category, list]) => (
-              <section key={category}>
-                <h2 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-tertiary">
-                  {category}
-                </h2>
-                <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
+              <Card key={category}>
+                {/* Categoria e cabeçalho de colunas na mesma linha: os números
+                    da direita nunca aparecem sem dizer o que são. */}
+                <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+                  <h2 className="min-w-0 flex-[2] text-card text-ink">{category}</h2>
+                  <span className="hidden w-16 shrink-0 text-section sm:block">Duração</span>
+                  <span className="hidden w-24 shrink-0 text-right text-section sm:block">Preço</span>
+                  {canSeeMargin ? (
+                    <span className="hidden w-16 shrink-0 text-right text-section sm:block">Margem</span>
+                  ) : null}
+                </div>
+
+                <CardList>
                   {list.map((service) => {
-                    const marginBps =
-                      service.priceCents > 0
+                    const marginPct =
+                      service.priceCents > 0 && service.costCents > 0
                         ? Math.round(((service.priceCents - service.costCents) / service.priceCents) * 100)
-                        : 0;
+                        : null;
+
+                    const meta = [
+                      service.professionals.length > 0
+                        ? service.professionals.map((n) => n.split(" ")[0]).join(", ")
+                        : "Nenhum profissional habilitado",
+                      service.requiredResourceType
+                        ? RESOURCE_NEED[service.requiredResourceType]
+                        : null,
+                      service.returnIntervalDays
+                        ? `retorno a cada ${service.returnIntervalDays} dias`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+
                     return (
-                      <li key={service.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                        <span className="min-w-0 flex-[2]">
+                      <li
+                        key={service.id}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3"
+                      >
+                        {/* No celular o nome ocupa a linha inteira: quem é o
+                            serviço nunca é o dado sacrificado pela coluna. */}
+                        <span className="min-w-0 basis-full sm:flex-[2] sm:basis-0">
                           <span className="flex flex-wrap items-center gap-1.5">
-                            <span className="truncate text-[13px] font-medium text-ink">
-                              {service.name}
-                            </span>
+                            <span className="text-label text-ink">{service.name}</span>
                             {!service.active ? <Badge tone="neutral">Inativo</Badge> : null}
-                            {service.onlineBooking ? (
-                              <Badge tone="accent">Agendamento online</Badge>
-                            ) : null}
-                            {service.requiredResourceType ? (
-                              <Badge tone="info">
-                                {service.requiredResourceType === "equipment"
-                                  ? "Usa equipamento"
-                                  : service.requiredResourceType === "room"
-                                    ? "Usa sala"
-                                    : "Usa cabine"}
-                              </Badge>
+                            {/* O normal é aceitar agendamento online — só a
+                                exceção merece um selo. */}
+                            {!service.onlineBooking ? (
+                              <Badge tone="neutral">Fora do agendamento online</Badge>
                             ) : null}
                           </span>
-                          <span className="mt-0.5 block truncate text-[12px] text-ink-tertiary">
-                            {service.professionals.length > 0
-                              ? service.professionals.map((n) => n.split(" ")[0]).join(", ")
-                              : "Nenhum profissional habilitado"}
-                            {service.returnIntervalDays
-                              ? ` · retorno a cada ${service.returnIntervalDays} dias`
-                              : ""}
+                          <span className="mt-0.5 block truncate text-caption text-ink-secondary">
+                            {meta}
                           </span>
                         </span>
 
-                        <span className="w-16 shrink-0 text-[12px] tabular text-ink-secondary">
+                        <span className="w-16 shrink-0 text-caption tabular text-ink-secondary">
                           {service.durationMin} min
                         </span>
 
-                        <span className="w-24 shrink-0 text-right">
-                          <span className="block text-[13px] font-medium tabular text-ink">
-                            {formatBRL(service.priceCents)}
-                          </span>
-                          {service.costCents > 0 ? (
-                            <span className="block text-[11px] tabular text-ink-tertiary">
-                              {marginBps}% de margem
-                            </span>
-                          ) : null}
+                        <span className="w-24 shrink-0 text-right text-label tabular text-ink">
+                          {formatBRL(service.priceCents)}
                         </span>
+
+                        {canSeeMargin ? (
+                          <span className="shrink-0 text-caption tabular text-ink-secondary sm:w-16 sm:text-right">
+                            {marginPct !== null ? `${marginPct}%` : "—"}
+                            {/* Sem cabeçalho de coluna no celular, o número
+                                carrega o próprio rótulo. */}
+                            <span className="sm:sr-only"> de margem</span>
+                          </span>
+                        ) : null}
                       </li>
                     );
                   })}
-                </ul>
-              </section>
+                </CardList>
+              </Card>
             ))}
           </div>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

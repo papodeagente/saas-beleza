@@ -124,15 +124,17 @@ export async function getAttentionItems(ctx: TenantContext, today: TodayAppointm
     ctx.timezone,
   );
 
+  // Vocabulário: o produto não tem canal de confirmação (nada é enviado ao
+  // cliente). O que existe é o registro do status — e é isso que o texto diz.
   const unconfirmedToday = today.filter((a) => a.status === "scheduled");
   if (unconfirmedToday.length > 0) {
     items.push({
       id: "unconfirmed-today",
-      label: `${unconfirmedToday.length} ${unconfirmedToday.length === 1 ? "atendimento de hoje ainda não foi confirmado" : "atendimentos de hoje ainda não foram confirmados"}`,
+      label: `${unconfirmedToday.length} ${unconfirmedToday.length === 1 ? "atendimento de hoje sem confirmação registrada" : "atendimentos de hoje sem confirmação registrada"}`,
       detail: unconfirmedToday.map((a) => a.customerName).slice(0, 3).join(", "),
       tone: "attention",
-      href: "/agenda",
-      actionLabel: "Ver na agenda",
+      href: unconfirmedToday.length === 1 ? `/agenda?atendimento=${unconfirmedToday[0].id}` : "/agenda",
+      actionLabel: "Marcar como confirmado",
     });
   }
 
@@ -150,7 +152,7 @@ export async function getAttentionItems(ctx: TenantContext, today: TodayAppointm
   if (tomorrowUnconfirmed.total > 0) {
     items.push({
       id: "unconfirmed-tomorrow",
-      label: `${tomorrowUnconfirmed.total} ${tomorrowUnconfirmed.total === 1 ? "cliente ainda não confirmou" : "clientes ainda não confirmaram"} para amanhã`,
+      label: `${tomorrowUnconfirmed.total} ${tomorrowUnconfirmed.total === 1 ? "atendimento de amanhã sem confirmação registrada" : "atendimentos de amanhã sem confirmação registrada"}`,
       tone: "info",
       href: "/agenda?dia=amanha",
       actionLabel: "Ver amanhã",
@@ -164,7 +166,7 @@ export async function getAttentionItems(ctx: TenantContext, today: TodayAppointm
       label: `${unpaidCompleted.length} ${unpaidCompleted.length === 1 ? "atendimento concluído sem pagamento registrado" : "atendimentos concluídos sem pagamento registrado"}`,
       detail: unpaidCompleted.map((a) => a.customerName).slice(0, 3).join(", "),
       tone: "danger",
-      href: "/agenda",
+      href: unpaidCompleted.length === 1 ? `/agenda?atendimento=${unpaidCompleted[0].id}` : "/agenda",
       actionLabel: "Registrar pagamento",
     });
   }
@@ -185,11 +187,19 @@ export async function getAttentionItems(ctx: TenantContext, today: TodayAppointm
       label: `${overdue.total} ${overdue.total === 1 ? "conta venceu" : "contas venceram"} e continua${overdue.total === 1 ? "" : "m"} em aberto`,
       tone: "danger",
       href: "/financeiro",
-      actionLabel: "Ver financeiro",
+      actionLabel: "Ver contas em aberto",
     });
   }
 
   return items;
+}
+
+/**
+ * Pendências do dia para o shell (sino de avisos).
+ * Mesma fonte da tela "Hoje" — um sinal nunca aparece num lugar e some no outro.
+ */
+export async function getAttentionSignals(ctx: TenantContext): Promise<AttentionItem[]> {
+  return getAttentionItems(ctx, await getTodayAppointments(ctx));
 }
 
 /** Sinal de retenção: clientes no período ideal de retorno que ainda não voltaram. */

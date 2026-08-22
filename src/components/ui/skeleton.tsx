@@ -4,7 +4,7 @@ export function Skeleton({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={cn("rounded-[var(--radius-sm)] bg-surface-sunken", className)}
+      className={cn("rounded-control bg-surface-sunken", className)}
       style={{
         backgroundImage:
           "linear-gradient(90deg, var(--color-surface-sunken) 0%, #EDEAE5 50%, var(--color-surface-sunken) 100%)",

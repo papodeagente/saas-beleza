@@ -42,12 +42,15 @@ const bookingSchema = z.object({
     .transform(normalizePhone)
     .refine((v) => v.length >= 10 && v.length <= 13, "Informe um celular com DDD."),
   email: z.string().trim().email("E-mail inválido.").optional().or(z.literal("")),
+  /** Opt-in de comunicação. Opcional e desmarcado por padrão — o agendamento não depende dele. */
+  consentMarketing: z.boolean().optional(),
 });
 
 export type BookingConfirmation = {
   serviceName: string;
   professionalName: string;
   branchName: string;
+  branchAddress: string | null;
   whenLabel: string;
 };
 
@@ -68,6 +71,7 @@ export async function publicBookingAction(input: unknown): Promise<BookingAction
     const result = await createPublicBooking({
       ...parsed.data,
       email: parsed.data.email || null,
+      consentMarketing: parsed.data.consentMarketing === true,
     });
 
     return {
@@ -76,6 +80,7 @@ export async function publicBookingAction(input: unknown): Promise<BookingAction
         serviceName: result.serviceName,
         professionalName: result.professionalName,
         branchName: result.branchName,
+        branchAddress: result.branchAddress,
         whenLabel: formatTz(
           result.startsAt,
           org.organization.timezone,

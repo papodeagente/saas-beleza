@@ -3,4 +3,5 @@
 # conhecidas — sem isso o `pnpm install` falha em CI (ERR_PNPM_IGNORED_BUILDS).
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
   unrs-resolver: true

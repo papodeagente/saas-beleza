@@ -3,6 +3,9 @@
 /* ---------------------------------------------------------------------------
    Design tokens — ver docs/design-system.md
    Neutros quentes (porcelana), acento bordeaux, status dessaturados.
+
+   Regra de contraste: todo par texto/fundo abaixo foi medido. Nenhum token de
+   texto fica abaixo de 4.5:1 sobre surface, surface-raised ou surface-sunken.
    --------------------------------------------------------------------------- */
 
 @theme {
@@ -10,9 +13,10 @@
   --color-surface-raised: #ffffff;
   --color-surface-sunken: #f3f1ee;
 
+  /* 15.5:1 · 6.7:1 · 4.9:1 sobre surface */
   --color-ink: #231f1d;
-  --color-ink-secondary: #6e6660;
-  --color-ink-tertiary: #9c948d;
+  --color-ink-secondary: #5f584f;
+  --color-ink-tertiary: #746c64;
 
   --color-line: #e8e4df;
   --color-line-strong: #d6d0c9;
@@ -21,18 +25,60 @@
   --color-accent-hover: #68242f;
   --color-accent-soft: #f6e9ec;
 
-  --color-positive: #3d7a50;
+  /* Cada par sólido/soft mede >= 5.5:1 */
+  --color-positive: #2f6b43;
   --color-positive-soft: #e8f2eb;
-  --color-attention: #996a1f;
+  --color-attention: #835613;
   --color-attention-soft: #f7eedd;
-  --color-danger: #b03a2e;
+  --color-danger: #9e2e22;
   --color-danger-soft: #f9e9e7;
-  --color-info: #3e5f8a;
+  --color-info: #33527a;
   --color-info-soft: #e9eff6;
 
-  --radius-sm: 6px;
-  --radius-DEFAULT: 10px;
-  --radius-lg: 14px;
+  /* Raios semânticos: o nome diz onde usar, não o tamanho */
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-overlay: 14px;
+
+  /* Escala tipográfica — os 9 papéis do design system.
+     Fora desta escala não existe tamanho de texto no produto. */
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--font-weight: 550;
+
+  --text-entity: 20px;
+  --text-entity--line-height: 28px;
+  --text-entity--font-weight: 600;
+  --text-entity--letter-spacing: -0.015em;
+
+  --text-title: 17px;
+  --text-title--line-height: 24px;
+  --text-title--font-weight: 600;
+  --text-title--letter-spacing: -0.01em;
+
+  --text-metric: 22px;
+  --text-metric--line-height: 28px;
+  --text-metric--font-weight: 600;
+
+  --text-card: 14px;
+  --text-card--line-height: 20px;
+  --text-card--font-weight: 600;
+
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-body--font-weight: 450;
+
+  --text-label: 13px;
+  --text-label--line-height: 16px;
+  --text-label--font-weight: 500;
+
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-caption--font-weight: 450;
+
+  --text-meta: 11px;
+  --text-meta--line-height: 16px;
+  --text-meta--font-weight: 450;
 
   --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), Georgia, serif;
@@ -41,46 +87,77 @@
 }
 
 :root {
+  /* Profundidade é privilégio de quem flutua ou adere. Card em página nunca
+     recebe sombra — o corpo dele vem do raio e do agrupamento. */
   --shadow-overlay: 0 8px 24px rgb(35 31 29 / 0.1), 0 2px 8px rgb(35 31 29 / 0.06);
-  --shadow-raised: 0 1px 2px rgb(35 31 29 / 0.04);
+  --shadow-sticky: 0 2px 6px rgb(35 31 29 / 0.06);
+
   /* agenda: 15 minutos = 14px */
   --slot-height: 14px;
+  /* largura do trilho de contexto em telas largas */
+  --rail-width: 300px;
 }
 
-* {
-  border-color: var(--color-line);
+@layer base {
+  /* Precisa estar em @layer base: sem layer, esta regra vence as utilities do
+     Tailwind e anula todo border-line-strong e focus:border-accent do produto. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 450;
+    line-height: 20px;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
-html {
-  -webkit-text-size-adjust: 100%;
+/* Rótulo de seção — o elemento que responde "o que é este bloco".
+   Caixa alta com tracking lê maior que o tamanho nominal. */
+@utility text-section {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-ink-secondary);
 }
 
-body {
-  background-color: var(--color-surface);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 20px;
-  font-feature-settings: "cv11", "ss01";
-  -webkit-font-smoothing: antialiased;
-}
-
-/* Números em tabelas, métricas e horários nunca "dançam" */
-.tabular,
-time,
-[data-numeric] {
+/* Números que se alinham em coluna nunca dançam. */
+@utility tabular {
   font-variant-numeric: tabular-nums;
 }
 
-::selection {
-  background-color: var(--color-accent-soft);
-  color: var(--color-accent);
+/* Elemento aderente ganha sombra só quando há conteúdo passando por baixo. */
+@utility shadow-sticky {
+  box-shadow: var(--shadow-sticky);
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+time,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -160,4 +237,14 @@ time,
 }
 .animate-dialog-in {
   animation: dialog-in 200ms var(--ease-out-quint);
+}
+
+/* Impressão: a ficha do cliente precisa sair em papel de forma legível. */
+@media print {
+  [data-print="hide"] {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
 }

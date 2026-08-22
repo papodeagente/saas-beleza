@@ -51,7 +51,7 @@ export function SheetContent({
             )}
           </div>
           <SheetPrimitive.Close
-            className="-mr-1 rounded-[var(--radius-sm)] p-1.5 text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink"
+            className="-mr-1 rounded-control p-1.5 text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink"
             aria-label="Fechar painel"
           >
             <X className="size-4" />

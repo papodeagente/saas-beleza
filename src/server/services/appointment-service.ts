@@ -125,11 +125,15 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
   }
 }
 
+/** Quem executou a ação. Ausente significa o usuário logado do contexto. */
+export type Actor = { type: "user" | "ai" | "automation" | "public" | "system"; id?: number | null };
+
 export async function rescheduleAppointment(
   ctx: TenantContext,
   appointmentId: number,
   startsAt: Date,
   professionalId?: number,
+  actor?: Actor,
 ) {
   const [current] = await db
     .select()
@@ -158,8 +162,8 @@ export async function rescheduleAppointment(
       await tx.insert(appointmentHistory).values({
         organizationId: ctx.organizationId,
         appointmentId,
-        actorType: "user",
-        actorId: ctx.userId,
+        actorType: actor?.type ?? "user",
+        actorId: actor ? (actor.id ?? null) : ctx.userId,
         action: "rescheduled",
         before: { startsAt: current.startsAt, professionalId: current.professionalId },
         after: { startsAt: updated.startsAt, professionalId: updated.professionalId },
@@ -183,7 +187,7 @@ export async function changeStatus(
   ctx: TenantContext,
   appointmentId: number,
   next: AppointmentStatus,
-  options: { cancelReason?: string } = {},
+  options: { cancelReason?: string; actor?: Actor } = {},
 ) {
   const [current] = await db
     .select()
@@ -225,8 +229,8 @@ export async function changeStatus(
     await tx.insert(appointmentHistory).values({
       organizationId: ctx.organizationId,
       appointmentId,
-      actorType: "user",
-      actorId: ctx.userId,
+      actorType: options.actor?.type ?? "user",
+      actorId: options.actor ? (options.actor.id ?? null) : ctx.userId,
       action: `status:${next}`,
       before: { status: current.status },
       after: { status: next },

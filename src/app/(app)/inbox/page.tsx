@@ -1,5 +1,6 @@
 import { requireSession } from "@/server/auth";
-import { getConversation, listConversations } from "@/server/services/inbox-service";
+import { listConversations } from "@/server/services/inbox-service";
+import { loadConversationAction } from "./actions";
 import { InboxView } from "./inbox-view";
 
 export const metadata = { title: "Inbox — Lumina" };
@@ -14,8 +15,15 @@ export default async function InboxPage({
   const params = await searchParams;
   const conversations = await listConversations(ctx);
 
-  const selectedId = params.conversa ? Number(params.conversa) : conversations[0]?.id;
-  const detail = selectedId ? await getConversation(ctx, selectedId) : null;
+  const requested = params.conversa ? Number(params.conversa) : null;
+  const selectedId =
+    requested && conversations.some((c) => c.id === requested) ? requested : null;
+
+  // O detalhe padrão existe para o desktop, onde os dois painéis convivem. No
+  // celular a seleção começa vazia: a lista é a tela, e abrir uma conversa é
+  // uma navegação com volta — sem isso a lista fica inalcançável.
+  const defaultId = selectedId ?? conversations[0]?.id ?? null;
+  const initialDetail = defaultId ? await loadConversationAction(defaultId) : null;
 
   return (
     <InboxView
@@ -23,29 +31,8 @@ export default async function InboxPage({
         ...c,
         lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
       }))}
-      detail={
-        detail
-          ? {
-              conversationId: detail.conversation.id,
-              controlledBy: detail.conversation.controlledBy,
-              customerName: detail.conversation.customerName,
-              channel: detail.conversation.channel,
-              messages: detail.messages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
-              context: detail.context
-                ? {
-                    ...detail.context,
-                    lastVisitAt: detail.context.lastVisitAt?.toISOString() ?? null,
-                    nextAppointment: detail.context.nextAppointment
-                      ? {
-                          ...detail.context.nextAppointment,
-                          startsAt: detail.context.nextAppointment.startsAt.toISOString(),
-                        }
-                      : null,
-                  }
-                : null,
-            }
-          : null
-      }
+      initialDetail={initialDetail}
+      initialSelectedId={selectedId}
     />
   );
 }

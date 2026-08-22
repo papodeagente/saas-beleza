@@ -1,17 +1,23 @@
-import { ArrowLeft, CalendarCheck, Receipt } from "lucide-react";
+import { ArrowLeft, MessageCircle } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { SectionLabel } from "@/components/app-shell";
+import { PageBody, PageHeader, SectionLabel } from "@/components/app-shell";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
-import { STATUS_LABEL, STATUS_TONE, type AppointmentStatus } from "@/domain/appointment-status";
+import { Card, DataRow } from "@/components/ui/card";
+import { Metric, MetricRow } from "@/components/ui/metric";
 import { formatBRL } from "@/lib/money";
-import { formatPhone } from "@/lib/phone";
+import { formatPhone, normalizePhone } from "@/lib/phone";
 import { formatTz, formatTzCapitalized } from "@/lib/tz";
 import { requireSession } from "@/server/auth";
-import { getCustomer, getCustomerTimeline } from "@/server/services/customer-service";
+import {
+  getCustomer,
+  getCustomerAppointments,
+  getCustomerFormOptions,
+  getCustomerPayments,
+} from "@/server/services/customer-service";
+import { CustomerActions } from "./customer-actions";
+import { CustomerTabs } from "./customer-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +29,41 @@ const SOURCE_LABEL: Record<string, string> = {
   import: "Importação",
 };
 
+const METHOD_LABEL: Record<string, string> = {
+  pix: "PIX",
+  cartao_credito: "Cartão de crédito",
+  cartao_debito: "Cartão de débito",
+  dinheiro: "Dinheiro",
+  transferencia: "Transferência",
+  outro: "Outro meio",
+};
+
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireSession();
   const profile = await getCustomer(ctx, Number((await params).id));
-  return { title: profile ? `${profile.customer.name} — Lumina` : "Cliente — Lumina" };
+  return { title: profile ? profile.customer.name : "Cliente" };
+}
+
+function ageFrom(birthdate: string | null): number | null {
+  if (!birthdate) return null;
+  const born = new Date(`${birthdate}T12:00:00Z`);
+  if (Number.isNaN(born.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - born.getUTCFullYear();
+  const monthDelta = now.getUTCMonth() - born.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getUTCDate() < born.getUTCDate())) age -= 1;
+  return age;
+}
+
+/** Dias até o próximo aniversário — vira sinal de relacionamento quando está perto. */
+function daysToBirthday(birthdate: string | null): number | null {
+  if (!birthdate) return null;
+  const born = new Date(`${birthdate}T12:00:00Z`);
+  if (Number.isNaN(born.getTime())) return null;
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), born.getUTCMonth(), born.getUTCDate(), 12));
+  if (next.getTime() < now.getTime()) next.setUTCFullYear(next.getUTCFullYear() + 1);
+  return Math.round((next.getTime() - now.getTime()) / 86_400_000);
 }
 
 export default async function CustomerPage({ params }: { params: Promise<{ id: string }> }) {
@@ -38,161 +75,227 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
   // Registro de outro tenant se comporta como inexistente, nunca como proibido
   if (!profile) notFound();
 
-  const timeline = await getCustomerTimeline(ctx, id);
-  const { customer, tags, nextAppointment, ticketAverageCents } = profile;
+  const [{ upcoming, past }, paymentRows, formOptions] = await Promise.all([
+    getCustomerAppointments(ctx, id),
+    getCustomerPayments(ctx, id),
+    getCustomerFormOptions(ctx),
+  ]);
 
-  // Agrupa a timeline por dia — a recepção lê o histórico por data, não por item
-  const days = timeline.reduce((map, entry) => {
-    const key = formatTz(entry.at, ctx.timezone, "yyyy-MM-dd");
-    const list = map.get(key) ?? [];
-    list.push(entry);
-    map.set(key, list);
-    return map;
-  }, new Map<string, typeof timeline>());
+  const { customer, tags, ticketAverageCents } = profile;
+  const age = ageFrom(customer.birthdate);
+  const birthdayIn = daysToBirthday(customer.birthdate);
+  const totalPaidCents = paymentRows.reduce((sum, p) => sum + p.amountCents, 0);
+  const openCents = past
+    .filter((a) => a.status === "completed")
+    .reduce((sum, a) => sum + Math.max(0, a.priceCents - a.paidCents), 0);
+
+  const preferredProfessional = formOptions.professionals.find(
+    (p) => p.id === customer.preferredProfessionalId,
+  );
+  const preferredBranch = formOptions.branches.find((b) => b.id === customer.preferredBranchId);
+
+  const mapAppointment = (a: (typeof upcoming)[number]) => ({
+    id: a.id,
+    startsAtLabel: formatTz(a.startsAt, ctx.timezone, "d MMM yyyy"),
+    timeLabel: `${formatTz(a.startsAt, ctx.timezone, "HH:mm")}–${formatTz(a.endsAt, ctx.timezone, "HH:mm")}`,
+    status: a.status,
+    priceCents: a.priceCents,
+    paidCents: a.paidCents,
+    serviceName: a.serviceName,
+    professionalName: a.professionalName,
+    professionalColor: a.professionalColor,
+    branchName: a.branchName,
+  });
+
+  const whatsappHref = customer.phone
+    ? `https://wa.me/55${normalizePhone(customer.phone)}`
+    : null;
 
   return (
-    <div className="mx-auto max-w-[820px] px-5 py-6 md:px-8 md:py-8">
-      <Link
-        href="/clientes"
-        className="inline-flex items-center gap-1.5 text-[12px] text-ink-tertiary transition-colors hover:text-ink"
-      >
-        <ArrowLeft className="size-3.5" />
-        Clientes
-      </Link>
+    <div>
+      <PageHeader
+        entity
+        title={customer.name}
+        description={[
+          customer.phone ? formatPhone(customer.phone) : null,
+          customer.firstVisitAt
+            ? `cliente desde ${formatTz(customer.firstVisitAt, ctx.timezone, "MMM yyyy")}`
+            : SOURCE_LABEL[customer.source],
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        actions={
+          <CustomerActions
+            customer={{
+              id: customer.id,
+              name: customer.name,
+              phone: customer.phone ?? "",
+              email: customer.email ?? "",
+              birthdate: customer.birthdate ?? "",
+              notes: customer.notes ?? "",
+              preferredProfessionalId: customer.preferredProfessionalId,
+              preferredBranchId: customer.preferredBranchId,
+              consentMarketing: customer.consentMarketing,
+            }}
+            options={formOptions}
+          />
+        }
+      />
 
-      {/* Identidade + os números que importam */}
-      <header className="mt-4 flex flex-wrap items-start gap-4">
-        <Avatar name={customer.name} size="lg" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[19px] font-semibold leading-6 tracking-[-0.01em] text-ink">
-              {customer.name}
-            </h1>
-            {tags.map((tag) => (
-              <Badge key={tag} tone={tag === "VIP" ? "accent" : "neutral"}>
-                {tag}
-              </Badge>
-            ))}
-          </div>
-          <p className="mt-1 text-[13px] text-ink-secondary">
-            {customer.phone ? formatPhone(customer.phone) : "Sem telefone"}
-            {customer.email ? ` · ${customer.email}` : ""}
-          </p>
-          <p className="mt-0.5 text-[12px] text-ink-tertiary">
-            Origem: {SOURCE_LABEL[customer.source] ?? customer.source}
-            {customer.firstVisitAt
-              ? ` · Cliente desde ${formatTz(customer.firstVisitAt, ctx.timezone, "MMM yyyy")}`
-              : ""}
-          </p>
-        </div>
-        <Button variant="primary" size="md" asChild>
-          <Link href="/agenda">Agendar</Link>
-        </Button>
-      </header>
+      <PageBody>
+        <Link
+          href="/clientes"
+          data-print="hide"
+          className="mb-5 inline-flex items-center gap-1.5 text-caption text-ink-secondary transition-colors hover:text-ink"
+        >
+          <ArrowLeft className="size-3.5" />
+          Todos os clientes
+        </Link>
 
-      <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius)] border border-line bg-line sm:grid-cols-4">
-        <Metric label="Atendimentos" value={String(customer.visitsCount)} />
-        <Metric label="Total gasto" value={formatBRL(customer.totalSpentCents)} />
-        <Metric label="Ticket médio" value={ticketAverageCents ? formatBRL(ticketAverageCents) : "—"} />
-        <Metric
-          label="Faltas"
-          value={String(customer.noShowCount)}
-          tone={customer.noShowCount > 0 ? "danger" : undefined}
-        />
-      </div>
+        <div className="flex flex-col gap-8 lg:flex-row">
+          {/* Coluna de leitura */}
+          <div className="min-w-0 flex-1 space-y-8">
+            <MetricRow>
+              <Metric label="Atendimentos" value={String(customer.visitsCount)} />
+              <Metric label="Total gasto" value={formatBRL(customer.totalSpentCents)} />
+              <Metric
+                label="Ticket médio"
+                value={ticketAverageCents ? formatBRL(ticketAverageCents) : "—"}
+              />
+              <Metric
+                label="Faltas"
+                value={String(customer.noShowCount)}
+                tone={customer.noShowCount > 0 ? "danger" : "neutral"}
+                hint={
+                  customer.cancellationsCount > 0
+                    ? `${customer.cancellationsCount} cancelamento${customer.cancellationsCount === 1 ? "" : "s"}`
+                    : undefined
+                }
+              />
+            </MetricRow>
 
-      {nextAppointment ? (
-        <div className="mt-4 flex items-center gap-3 rounded-[var(--radius)] border border-line bg-positive-soft/60 px-4 py-3">
-          <CalendarCheck className="size-4 shrink-0 text-positive" />
-          <p className="text-[13px] text-ink">
-            <span className="font-medium">Próximo atendimento</span> ·{" "}
-            {formatTzCapitalized(nextAppointment.startsAt, ctx.timezone, "EEEE, d 'de' MMMM 'às' HH:mm")} ·{" "}
-            {nextAppointment.serviceName} com {nextAppointment.professionalName.split(" ")[0]}
-          </p>
-        </div>
-      ) : null}
+            {openCents > 0 ? (
+              <Card className="border-attention/40 bg-attention-soft/50 px-4 py-3">
+                <p className="text-label text-ink">
+                  {formatBRL(openCents)} em aberto de atendimentos já concluídos.
+                </p>
+                <p className="mt-0.5 text-caption text-ink-secondary">
+                  Registre o pagamento pela agenda para o financeiro fechar.
+                </p>
+              </Card>
+            ) : null}
 
-      {/* Timeline única do relacionamento */}
-      <section className="mt-8">
-        <SectionLabel>Histórico</SectionLabel>
+            {/* O bloco clínico: é o que a profissional lê antes de encostar na cliente */}
+            <section>
+              <SectionLabel>Antes de atender</SectionLabel>
+              <Card className="mt-3 px-4 py-3.5">
+                {customer.notes ? (
+                  <p className="whitespace-pre-wrap text-body text-ink">{customer.notes}</p>
+                ) : (
+                  <p className="text-body text-ink-secondary">
+                    Nada registrado. Alergias, gestação, uso de ácido e contraindicações entram aqui
+                    e aparecem para quem for atender.
+                  </p>
+                )}
+              </Card>
+            </section>
 
-        {timeline.length === 0 ? (
-          <div className="mt-3 rounded-[var(--radius)] border border-line bg-surface-raised">
-            <EmptyState
-              icon={Receipt}
-              title="Ainda sem histórico"
-              description="Quando esse cliente for atendido, tudo o que acontecer aparece aqui em ordem."
-              action={
-                <Button variant="secondary" size="md" asChild>
-                  <Link href="/agenda">Marcar primeiro atendimento</Link>
-                </Button>
-              }
+            <CustomerTabs
+              upcoming={upcoming.map(mapAppointment)}
+              past={past.map(mapAppointment)}
+              paymentsList={paymentRows.map((p) => ({
+                id: p.id,
+                dateLabel: formatTz(p.paidAt, ctx.timezone, "d MMM yyyy"),
+                amountCents: p.amountCents,
+                methodLabel: METHOD_LABEL[p.method] ?? p.method,
+                serviceName: p.serviceName,
+              }))}
+              totalPaidCents={totalPaidCents}
             />
           </div>
-        ) : (
-          <div className="mt-3 space-y-5">
-            {[...days.entries()].map(([day, entries]) => (
-              <div key={day}>
-                <p className="mb-2 text-[12px] font-medium text-ink-tertiary">
-                  {formatTzCapitalized(entries[0].at, ctx.timezone, "d 'de' MMMM 'de' yyyy")}
-                </p>
-                <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-                  {entries.map((entry) => (
-                    <li key={entry.id} className="flex items-center gap-3 px-4 py-2.5">
-                      <time
-                        dateTime={entry.at.toISOString()}
-                        className="w-11 shrink-0 text-[12px] tabular text-ink-tertiary"
-                      >
-                        {formatTz(entry.at, ctx.timezone, "HH:mm")}
-                      </time>
-                      <span
-                        aria-hidden
-                        className={`size-1.5 shrink-0 rounded-full ${
-                          entry.kind === "payment" ? "bg-positive" : "bg-line-strong"
-                        }`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] text-ink">{entry.title}</span>
-                        <span className="block truncate text-[12px] text-ink-tertiary">{entry.detail}</span>
-                      </span>
-                      {entry.status ? (
-                        <Badge tone={STATUS_TONE[entry.status as keyof typeof STATUS_TONE]}>
-                          {STATUS_LABEL[entry.status as AppointmentStatus]}
-                        </Badge>
-                      ) : null}
-                      {entry.amountCents !== undefined ? (
-                        <span
-                          className={`w-[86px] shrink-0 text-right text-[13px] tabular ${
-                            entry.kind === "payment" ? "text-positive" : "text-ink-secondary"
-                          }`}
-                        >
-                          {entry.kind === "payment" ? "+" : ""}
-                          {formatBRL(entry.amountCents)}
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "danger" }) {
-  return (
-    <div className="bg-surface-raised px-4 py-3">
-      <p className="text-[12px] text-ink-tertiary">{label}</p>
-      <p
-        className={`mt-0.5 text-[17px] font-semibold leading-6 tabular ${
-          tone === "danger" ? "text-danger" : "text-ink"
-        }`}
-      >
-        {value}
-      </p>
+          {/* Trilho de contexto */}
+          <aside className="w-full shrink-0 space-y-5 lg:w-[var(--rail-width)]">
+            <Card className="px-4 py-4">
+              <div className="flex items-center gap-3">
+                <Avatar name={customer.name} size="lg" />
+                <div className="min-w-0">
+                  <p className="truncate text-card text-ink">{customer.name}</p>
+                  <p className="text-caption text-ink-secondary">
+                    {SOURCE_LABEL[customer.source] ?? customer.source}
+                  </p>
+                </div>
+              </div>
+
+              {tags.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {tags.map((tag) => (
+                    <Badge key={tag} tone={tag === "VIP" ? "accent" : "neutral"}>
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+
+              <dl className="mt-4 border-t border-line pt-2">
+                {customer.phone ? (
+                  <DataRow label="Celular">{formatPhone(customer.phone)}</DataRow>
+                ) : null}
+                {customer.email ? (
+                  <DataRow label="E-mail">
+                    <span className="break-all">{customer.email}</span>
+                  </DataRow>
+                ) : null}
+                {customer.birthdate ? (
+                  <DataRow label="Nascimento">
+                    {formatTz(new Date(`${customer.birthdate}T12:00:00Z`), ctx.timezone, "d MMM yyyy")}
+                    {age !== null ? ` · ${age} anos` : ""}
+                  </DataRow>
+                ) : null}
+                <DataRow label="Última visita">
+                  {customer.lastVisitAt
+                    ? formatTz(customer.lastVisitAt, ctx.timezone, "d MMM yyyy")
+                    : "Ainda não veio"}
+                </DataRow>
+              </dl>
+
+              {birthdayIn !== null && birthdayIn <= 30 ? (
+                <p className="mt-3 rounded-control bg-accent-soft px-2.5 py-1.5 text-caption text-accent">
+                  {birthdayIn === 0 ? "Faz aniversário hoje" : `Aniversário em ${birthdayIn} dias`}
+                </p>
+              ) : null}
+
+              {whatsappHref ? (
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-print="hide"
+                  className="mt-4 flex h-9 items-center justify-center gap-2 rounded-control border border-line-strong bg-surface-raised text-label text-ink transition-colors hover:bg-surface-sunken"
+                >
+                  <MessageCircle className="size-4 text-ink-tertiary" />
+                  Abrir conversa no WhatsApp
+                </a>
+              ) : null}
+            </Card>
+
+            <Card className="px-4 py-3.5">
+              <h3 className="text-card text-ink">Preferências</h3>
+              <dl className="mt-2">
+                <DataRow label="Profissional">
+                  {preferredProfessional?.name ?? <span className="text-ink-tertiary">Sem preferência</span>}
+                </DataRow>
+                <DataRow label="Unidade">
+                  {preferredBranch?.name ?? <span className="text-ink-tertiary">Sem preferência</span>}
+                </DataRow>
+                <DataRow label="Divulgação">
+                  {customer.consentMarketing ? "Autorizada" : "Não autorizada"}
+                </DataRow>
+              </dl>
+            </Card>
+          </aside>
+        </div>
+      </PageBody>
     </div>
   );
 }

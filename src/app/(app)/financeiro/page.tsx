@@ -1,12 +1,17 @@
-import { Wallet } from "lucide-react";
-import { PageHeader, SectionLabel } from "@/components/app-shell";
+import { ChevronLeft, ChevronRight, Wallet } from "lucide-react";
+import Link from "next/link";
+import { PageBody, PageHeader, SectionLabel } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Metric, MetricRow } from "@/components/ui/metric";
+import { ProfessionalDot } from "@/components/ui/status-stripe";
 import { formatBRL, formatBRLCompact } from "@/lib/money";
-import { formatTzCapitalized } from "@/lib/tz";
+import { formatTz, formatTzCapitalized } from "@/lib/tz";
 import { cn } from "@/lib/utils";
-import { requireSession } from "@/server/auth";
+import { requireRole, requireSession } from "@/server/auth";
 import {
+  type Period,
   currentMonth,
   getCashSummary,
   getCommissionsByProfessional,
@@ -25,70 +30,150 @@ const STATUS: Record<string, { label: string; tone: "positive" | "attention" | "
   cancelled: { label: "Cancelado", tone: "neutral" },
 };
 
-export default async function FinancePage() {
+type Filter = "todos" | "entradas" | "saidas" | "em_aberto";
+
+const FILTERS: Array<{ value: Filter; label: string }> = [
+  { value: "todos", label: "Todos" },
+  { value: "entradas", label: "Entradas" },
+  { value: "saidas", label: "Saídas" },
+  { value: "em_aberto", label: "Em aberto" },
+];
+
+/** "2026-08" → período do mês inteiro. Fora do formato, cai no mês corrente. */
+function monthPeriod(month: string): Period {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return { fromISO: `${month}-01`, toISO: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function shiftMonth(month: string, delta: number): string {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, monthNumber - 1 + delta, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export default async function FinancePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ mes?: string; filtro?: string }>;
+}) {
   const ctx = await requireSession();
-  const period = currentMonth(ctx);
+  // Comissão dos colegas e resultado da clínica não são assunto de recepção.
+  requireRole(ctx, "admin");
+
+  const params = await searchParams;
+  const thisMonth = currentMonth(ctx).fromISO.slice(0, 7);
+  const requestedMonth = params.mes ?? "";
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth) ? requestedMonth : thisMonth;
+  const period = monthPeriod(month);
+  const filter = FILTERS.find((f) => f.value === params.filtro)?.value ?? "todos";
 
   const [summary, transactions, result, byService, byProfessional] = await Promise.all([
     getCashSummary(ctx, period),
-    listTransactions(ctx, period),
+    listTransactions(ctx, period, filter),
     getManagementResult(ctx, period),
     getRevenueByService(ctx, period),
     getCommissionsByProfessional(ctx, period),
   ]);
 
-  const monthLabel = formatTzCapitalized(
-    new Date(`${period.fromISO}T12:00:00Z`),
-    ctx.timezone,
-    "MMMM 'de' yyyy",
-  );
+  const monthDate = new Date(`${period.fromISO}T12:00:00Z`);
+  const monthLabel = formatTzCapitalized(monthDate, ctx.timezone, "MMMM 'de' yyyy");
+  const monthName = formatTz(monthDate, ctx.timezone, "MMMM");
   const topRevenue = byService[0]?.total ?? 0;
+  const href = (next: { mes?: string; filtro?: Filter }) => {
+    const query = new URLSearchParams();
+    const targetMonth = next.mes ?? month;
+    const targetFilter = next.filtro ?? filter;
+    if (targetMonth !== thisMonth) query.set("mes", targetMonth);
+    if (targetFilter !== "todos") query.set("filtro", targetFilter);
+    const search = query.toString();
+    return search ? `/financeiro?${search}` : "/financeiro";
+  };
 
   return (
     <div>
-      <PageHeader title="Financeiro" description={monthLabel} />
+      <PageHeader
+        title="Financeiro"
+        description={
+          month === thisMonth ? "Mês em andamento" : month < thisMonth ? "Mês fechado" : "Mês a vencer"
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-1">
+            <MonthStep
+              href={href({ mes: shiftMonth(month, -1) })}
+              label={`Ver ${formatTz(new Date(`${shiftMonth(month, -1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
+              direction="prev"
+            />
+            <span className="whitespace-nowrap px-1 text-center text-label text-ink md:min-w-[132px]">
+              {monthLabel}
+            </span>
+            <MonthStep
+              href={href({ mes: shiftMonth(month, 1) })}
+              label={`Ver ${formatTz(new Date(`${shiftMonth(month, 1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
+              direction="next"
+            />
+            {month !== thisMonth ? (
+              <Link
+                href={href({ mes: thisMonth })}
+                className="ml-1 inline-flex min-h-[44px] items-center rounded-control px-2 text-label text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink md:min-h-[36px]"
+              >
+                Mês atual
+              </Link>
+            ) : null}
+          </div>
+        }
+      />
 
-      <div className="mx-auto max-w-[1120px] space-y-9 px-5 py-6 md:px-8">
-        {/* Fluxo de caixa — as quatro perguntas do dono */}
+      <PageBody className="space-y-8">
+        {/* Caixa: o que já passou pela conta e o que ainda vai passar */}
         <section aria-labelledby="caixa">
           <SectionLabel>
             <span id="caixa">Caixa do mês</span>
           </SectionLabel>
-          <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius)] border border-line bg-line lg:grid-cols-4">
+          <MetricRow className="mt-3">
             <Metric label="Entrou" value={formatBRL(summary.receivedCents)} tone="positive" />
             <Metric label="Saiu" value={formatBRL(summary.paidOutCents)} />
             <Metric
               label="Ainda entra"
               value={formatBRL(summary.toReceiveCents)}
-              hint={summary.overdueInCents > 0 ? `${formatBRLCompact(summary.overdueInCents)} vencido` : undefined}
+              hint={
+                summary.toReceiveCents > 0 && summary.overdueInCents > 0
+                  ? `${formatBRLCompact(summary.overdueInCents)} já venceu`
+                  : undefined
+              }
             />
             <Metric
               label="Ainda sai"
               value={formatBRL(summary.toPayCents)}
-              hint={summary.overdueOutCents > 0 ? `${formatBRLCompact(summary.overdueOutCents)} vencido` : undefined}
+              hint={
+                summary.toPayCents > 0 && summary.overdueOutCents > 0
+                  ? `${formatBRLCompact(summary.overdueOutCents)} já venceu`
+                  : undefined
+              }
             />
-          </div>
-          <p className="mt-2 text-[12px] text-ink-tertiary">
-            Saldo realizado no mês:{" "}
-            <span className={cn("font-medium tabular", summary.balanceCents >= 0 ? "text-positive" : "text-danger")}>
-              {formatBRL(summary.balanceCents)}
-            </span>
-          </p>
+          </MetricRow>
         </section>
 
-        {/* DRE gerencial */}
+        {/* Uma única resposta final para o mês */}
         <section aria-labelledby="resultado">
           <SectionLabel>
-            <span id="resultado">Resultado gerencial</span>
+            <span id="resultado">Como fechou o mês</span>
           </SectionLabel>
-          <dl className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-            <ResultRow label="Receita recebida" value={result.revenueCents} />
-            <ResultRow label="Custos variáveis" value={-result.variableCostCents} />
-            <ResultRow label="Comissões" value={-result.commissionCents} />
-            <ResultRow label="Margem de contribuição" value={result.contributionMarginCents} emphasis />
-            <ResultRow label="Despesas pagas" value={-result.expensesCents} />
-            <ResultRow label="Resultado operacional" value={result.operatingResultCents} emphasis />
-          </dl>
+          <Card className="mt-3">
+            <dl className="divide-y divide-line">
+              <ResultRow label="Entrou" value={result.revenueCents} />
+              <ResultRow label="Custo dos atendimentos" value={-result.variableCostCents} />
+              <ResultRow label="Comissões" value={-result.commissionCents} />
+              <ResultRow label="Sobrou dos atendimentos" value={result.contributionMarginCents} level="subtotal" />
+              <ResultRow label="Saiu" value={-result.expensesCents} />
+              <ResultRow label="Resultado do mês" value={result.operatingResultCents} level="total" />
+            </dl>
+          </Card>
+          <p className="mt-2 max-w-[62ch] text-caption text-ink-secondary">
+            Conta o que foi recebido no mês, menos o custo dos atendimentos concluídos, as comissões
+            apuradas nesses atendimentos (que não viram lançamento) e as contas já pagas. O que
+            continua em aberto fica de fora.
+          </p>
         </section>
 
         <div className="grid gap-8 lg:grid-cols-2">
@@ -98,27 +183,29 @@ export default async function FinancePage() {
               <span id="servicos">Receita por serviço</span>
             </SectionLabel>
             {byService.length === 0 ? (
-              <p className="mt-3 rounded-[var(--radius)] border border-line bg-surface-raised px-4 py-4 text-[13px] text-ink-secondary">
-                Nenhum pagamento registrado neste mês ainda.
-              </p>
+              <Card className="mt-3 px-4 py-4">
+                <p className="text-body text-ink-secondary">
+                  Nenhum pagamento registrado em {monthLabel.toLowerCase()}.
+                </p>
+              </Card>
             ) : (
-              <ul className="mt-3 space-y-2.5">
+              <ul className="mt-3 space-y-3">
                 {byService.map((row) => (
                   <li key={row.name}>
                     <div className="flex items-baseline justify-between gap-3">
-                      <span className="truncate text-[13px] text-ink">{row.name}</span>
-                      <span className="shrink-0 text-[13px] tabular text-ink">
+                      <span className="min-w-0 truncate text-label text-ink">{row.name}</span>
+                      <span className="shrink-0 text-label tabular text-ink">
                         {formatBRL(row.total ?? 0)}
                       </span>
                     </div>
                     {/* Barra monocromática: comparação de tamanho, não categoria */}
-                    <div className="mt-1 h-1 overflow-hidden rounded-full bg-surface-sunken">
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-sunken">
                       <div
-                        className="h-full rounded-full bg-accent"
+                        className="h-full rounded-full bg-line-strong"
                         style={{ width: `${topRevenue ? ((row.total ?? 0) / topRevenue) * 100 : 0}%` }}
                       />
                     </div>
-                    <span className="mt-0.5 block text-[11px] text-ink-tertiary">
+                    <span className="mt-1 block text-meta text-ink-secondary">
                       {row.count} {row.count === 1 ? "atendimento" : "atendimentos"}
                     </span>
                   </li>
@@ -133,142 +220,193 @@ export default async function FinancePage() {
               <span id="comissoes">Comissões do mês</span>
             </SectionLabel>
             {byProfessional.length === 0 ? (
-              <p className="mt-3 rounded-[var(--radius)] border border-line bg-surface-raised px-4 py-4 text-[13px] text-ink-secondary">
-                Nenhuma comissão gerada. Elas são calculadas quando o atendimento é concluído.
-              </p>
+              <Card className="mt-3 px-4 py-4">
+                <p className="text-body text-ink-secondary">
+                  Nenhuma comissão apurada. Elas nascem quando o atendimento é concluído.
+                </p>
+              </Card>
             ) : (
-              <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-                {byProfessional.map((row) => (
-                  <li key={row.name} className="flex items-center gap-3 px-4 py-2.5">
-                    <span
-                      aria-hidden
-                      className="size-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: row.color }}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{row.name}</span>
-                    <span className="text-[11px] text-ink-tertiary">
-                      {row.count} {row.count === 1 ? "atend." : "atends."}
-                    </span>
-                    <span className="w-24 text-right text-[13px] font-medium tabular text-ink">
-                      {formatBRL(row.total ?? 0)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <Card className="mt-3">
+                  <ul className="divide-y divide-line">
+                    {byProfessional.map((row) => (
+                      <li key={row.name} className="flex min-h-[52px] items-center gap-2.5 px-4 py-2.5">
+                        <ProfessionalDot color={row.color} className="size-1.5 shrink-0 rounded-full" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-label text-ink">{row.name}</span>
+                          <span className="block text-meta text-ink-secondary">
+                            {row.count} {row.count === 1 ? "atendimento" : "atendimentos"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-label tabular text-ink">
+                          {formatBRL(row.total ?? 0)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+                <p className="mt-2 text-caption text-ink-secondary">
+                  Valor a acertar com cada profissional. Já está descontado no resultado do mês, mas
+                  ainda não virou lançamento.
+                </p>
+              </>
             )}
           </section>
         </div>
 
         {/* Lançamentos */}
         <section aria-labelledby="lancamentos">
-          <SectionLabel>
-            <span id="lancamentos">Lançamentos</span>
-          </SectionLabel>
-          {transactions.length === 0 ? (
-            <div className="mt-3 rounded-[var(--radius)] border border-line bg-surface-raised">
-              <EmptyState
-                icon={Wallet}
-                title="Nada lançado neste mês"
-                description="Cada pagamento registrado num atendimento entra aqui automaticamente."
-              />
-            </div>
-          ) : (
-            <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-              {transactions.map((row) => (
-                <li key={row.id} className="flex items-center gap-3 px-4 py-2.5">
-                  <span
-                    aria-hidden
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SectionLabel>
+              <span id="lancamentos">Lançamentos</span>
+            </SectionLabel>
+            <nav aria-label="Filtrar lançamentos" className="flex flex-wrap items-center gap-1.5">
+              {FILTERS.map((option) => {
+                const active = option.value === filter;
+                return (
+                  <Link
+                    key={option.value}
+                    href={href({ filtro: option.value })}
+                    aria-current={active ? "true" : undefined}
                     className={cn(
-                      "size-1.5 shrink-0 rounded-full",
-                      row.kind === "income" ? "bg-positive" : "bg-ink-tertiary",
-                    )}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] text-ink">{row.description}</span>
-                    <span className="block truncate text-[11px] text-ink-tertiary">
-                      {row.categoryName ?? (row.kind === "income" ? "Atendimento" : "Sem categoria")}
-                      {row.customerName ? ` · ${row.customerName}` : ""}
-                    </span>
-                  </span>
-                  <span className="hidden w-20 shrink-0 text-[12px] tabular text-ink-tertiary sm:block">
-                    {row.dueDate.split("-").reverse().slice(0, 2).join("/")}
-                  </span>
-                  <Badge tone={STATUS[row.status]?.tone ?? "neutral"}>
-                    {STATUS[row.status]?.label ?? row.status}
-                  </Badge>
-                  <span
-                    className={cn(
-                      "w-24 shrink-0 text-right text-[13px] tabular",
-                      row.kind === "income" ? "text-positive" : "text-ink",
+                      "inline-flex min-h-[44px] items-center rounded-control border px-3 text-label transition-colors duration-[120ms] md:min-h-[32px]",
+                      active
+                        ? "border-accent bg-accent-soft font-medium text-accent"
+                        : "border-line text-ink-secondary hover:border-line-strong hover:text-ink",
                     )}
                   >
-                    {row.kind === "income" ? "+" : "−"}
-                    {formatBRL(row.amountCents)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+                    {option.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+
+          {transactions.length === 0 ? (
+            <Card className="mt-3">
+              <EmptyState
+                icon={Wallet}
+                title={filter === "todos" ? "Nada lançado neste mês" : "Nenhum lançamento com esse filtro"}
+                description={
+                  filter === "todos"
+                    ? "Cada pagamento registrado num atendimento entra aqui automaticamente."
+                    : "Troque o filtro acima ou volte para Todos."
+                }
+              />
+            </Card>
+          ) : (
+            <Card className="mt-3">
+              <ul className="divide-y divide-line">
+                {transactions.map((row) => (
+                  <li
+                    key={row.id}
+                    className="flex min-h-[52px] flex-col gap-1 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3"
+                  >
+                    {/* O nome do lançamento quebra em vez de truncar: no celular ele é a linha */}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-label text-ink sm:truncate">{row.description}</span>
+                      <span className="block truncate text-meta text-ink-secondary">
+                        {[
+                          row.categoryName ?? (row.kind === "income" ? "Atendimento" : "Sem categoria"),
+                          row.customerName,
+                          formatTz(new Date(`${row.dueDate}T12:00:00Z`), ctx.timezone, "d MMM"),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-2 sm:contents">
+                      <Badge className="shrink-0" tone={STATUS[row.status]?.tone ?? "neutral"}>
+                        {STATUS[row.status]?.label ?? row.status}
+                      </Badge>
+                      <span
+                        className={cn(
+                          "shrink-0 text-label tabular sm:w-[92px] sm:text-right",
+                          row.kind === "income" ? "text-positive" : "text-ink",
+                        )}
+                      >
+                        {row.kind === "income" ? "+" : "−"}
+                        {formatBRL(row.amountCents)}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
           )}
+          {transactions.length > 0 ? (
+            <p className="mt-2 text-caption text-ink-secondary">
+              {transactions.length} {transactions.length === 1 ? "lançamento" : "lançamentos"} com
+              vencimento em {monthName}.
+            </p>
+          ) : null}
         </section>
-      </div>
+      </PageBody>
     </div>
   );
 }
 
-function Metric({
+function MonthStep({
+  href,
   label,
-  value,
-  hint,
-  tone,
+  direction,
 }: {
+  href: string;
   label: string;
-  value: string;
-  hint?: string;
-  tone?: "positive";
+  direction: "prev" | "next";
 }) {
+  const Icon = direction === "prev" ? ChevronLeft : ChevronRight;
   return (
-    <div className="bg-surface-raised px-4 py-3.5">
-      <p className="text-[12px] text-ink-tertiary">{label}</p>
-      <p
-        className={cn(
-          "mt-1 text-[19px] font-semibold leading-6 tabular",
-          tone === "positive" ? "text-positive" : "text-ink",
-        )}
-      >
-        {value}
-      </p>
-      {hint ? <p className="mt-0.5 text-[11px] text-danger">{hint}</p> : null}
-    </div>
+    <Link
+      href={href}
+      aria-label={label}
+      className="inline-flex size-11 items-center justify-center rounded-control border border-line text-ink-secondary transition-colors duration-[120ms] hover:border-line-strong hover:text-ink md:size-9"
+    >
+      <Icon className="size-4" aria-hidden />
+    </Link>
   );
 }
 
+/**
+ * Linha do resultado. A conclusão é o maior número do bloco — e o sinal é
+ * conteúdo: valor negativo nunca fica mais discreto que positivo.
+ */
 function ResultRow({
   label,
   value,
-  emphasis,
+  level = "line",
 }: {
   label: string;
   value: number;
-  emphasis?: boolean;
+  level?: "line" | "subtotal" | "total";
 }) {
+  const negative = value < 0;
   return (
     <div
       className={cn(
-        "flex items-baseline justify-between gap-4 px-4 py-2.5",
-        emphasis && "bg-surface",
+        "flex items-baseline justify-between gap-4 px-4",
+        level === "line" && "py-2.5",
+        level === "subtotal" && "bg-surface py-3",
+        level === "total" && "bg-surface-sunken py-3.5",
       )}
     >
-      <dt className={cn("text-[13px]", emphasis ? "font-medium text-ink" : "text-ink-secondary")}>
+      <dt
+        className={cn(
+          "min-w-0 text-label",
+          level === "line" ? "text-ink-secondary" : "font-semibold text-ink",
+        )}
+      >
         {label}
       </dt>
       <dd
         className={cn(
-          "text-[13px] tabular",
-          emphasis ? "font-semibold" : "",
-          value < 0 ? "text-ink-secondary" : emphasis ? "text-ink" : "text-ink",
+          "shrink-0 tabular",
+          level === "line" && "text-label text-ink",
+          level === "subtotal" && (negative ? "text-title text-danger" : "text-title text-ink"),
+          level === "total" && (negative ? "text-metric text-danger" : "text-metric text-ink"),
         )}
       >
-        {value < 0 ? "−" : ""}
+        {negative ? "−" : ""}
         {formatBRL(Math.abs(value))}
       </dd>
     </div>

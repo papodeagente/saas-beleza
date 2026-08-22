@@ -2,15 +2,17 @@
 
 import { Check, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBRL } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";
+import { formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import {
   type SlotOption,
@@ -25,17 +27,23 @@ type Customer = { id: number; name: string; phone: string | null; lastVisitAt: D
 /**
  * Agendamento rápido: cliente → serviço → horário.
  * Unidade, duração, preço e recurso são inferidos — não se pergunta o que o
- * sistema já sabe.
+ * sistema já sabe. Quando o painel nasce de um clique na grade, profissional,
+ * data e horário já vêm preenchidos.
  */
 export function NewAppointmentSheet({
   dateISO,
+  timezone,
   formData,
   defaultProfessionalId,
+  defaultStartsAt,
   onClose,
 }: {
   dateISO: string;
+  timezone: string;
   formData: AgendaFormData;
   defaultProfessionalId?: number;
+  /** Instante escolhido na grade (ISO). Vira o horário pré-selecionado. */
+  defaultStartsAt?: string;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -47,13 +55,20 @@ export function NewAppointmentSheet({
 
   const [serviceId, setServiceId] = useState<number | null>(null);
   const [professionalId, setProfessionalId] = useState<number | null>(defaultProfessionalId ?? null);
-  const [day, setDay] = useState(dateISO);
+  const [day, setDay] = useState(
+    defaultStartsAt ? formatTz(new Date(defaultStartsAt), timezone, "yyyy-MM-dd") : dateISO,
+  );
 
   const [slots, setSlots] = useState<SlotOption[] | null>(null);
   const [loadingSlots, startSlotsTransition] = useTransition();
   const [slot, setSlot] = useState<SlotOption | null>(null);
 
+  // Horário pedido pelo clique na grade: aplicado assim que a lista de livres chega.
+  const wanted = useRef<string | null>(defaultStartsAt ?? null);
+  const [wantedTaken, setWantedTaken] = useState<string | null>(null);
+
   const service = formData.services.find((s) => s.id === serviceId) ?? null;
+  const startLabel = defaultStartsAt ? formatTz(new Date(defaultStartsAt), timezone, "HH:mm") : null;
 
   // Busca de cliente sempre no servidor — nunca filtra só o que já veio na tela
   useEffect(() => {
@@ -86,6 +101,13 @@ export function NewAppointmentSheet({
         professionalId: next.professionalId ?? undefined,
       });
       setSlots(rows);
+      const target = wanted.current;
+      if (target) {
+        wanted.current = null;
+        const match = rows.find((r) => r.startsAt === target);
+        if (match) setSlot(match);
+        else setWantedTaken(formatTz(new Date(target), timezone, "HH:mm"));
+      }
     });
   }
 
@@ -134,7 +156,11 @@ export function NewAppointmentSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         title="Novo atendimento"
-        description="Escolha o cliente, o serviço e o horário."
+        description={
+          startLabel
+            ? `Horário escolhido na agenda: ${startLabel}. Falta o cliente e o serviço.`
+            : "Escolha o cliente, o serviço e o horário."
+        }
         footer={
           <>
             <Button variant="ghost" size="md" onClick={onClose}>
@@ -143,11 +169,12 @@ export function NewAppointmentSheet({
             <Button
               variant="primary"
               size="md"
-              disabled={!customer || !service || !slot || pending}
+              disabled={!customer || !service || !slot}
+              loading={pending}
               onClick={submit}
             >
               <Check />
-              {pending ? "Agendando…" : "Agendar"}
+              Agendar
             </Button>
           </>
         }
@@ -155,14 +182,14 @@ export function NewAppointmentSheet({
         <div className="space-y-5 px-5 py-4">
           {/* 1. Cliente */}
           <div>
-            <span className="mb-1.5 block text-[13px] font-medium text-ink">Cliente</span>
+            <span className="mb-1.5 block text-label text-ink">Cliente</span>
             {customer ? (
-              <div className="flex items-center gap-2.5 rounded-[var(--radius-sm)] border border-line bg-surface px-3 py-2">
+              <div className="flex items-center gap-2.5 rounded-control border border-line bg-surface px-3 py-2">
                 <Avatar name={customer.name} size="sm" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-ink">{customer.name}</span>
+                  <span className="block truncate text-label text-ink">{customer.name}</span>
                   {customer.phone ? (
-                    <span className="block text-[12px] text-ink-tertiary">
+                    <span className="block text-caption text-ink-secondary">
                       {formatPhone(customer.phone)}
                     </span>
                   ) : null}
@@ -185,7 +212,7 @@ export function NewAppointmentSheet({
                   />
                 </div>
                 {results.length > 0 ? (
-                  <ul className="mt-1.5 max-h-[188px] divide-y divide-line overflow-y-auto rounded-[var(--radius-sm)] border border-line">
+                  <ul className="mt-1.5 max-h-[188px] divide-y divide-line overflow-y-auto rounded-control border border-line">
                     {results.map((c) => (
                       <li key={c.id}>
                         <button
@@ -195,9 +222,9 @@ export function NewAppointmentSheet({
                         >
                           <Avatar name={c.name} size="sm" />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] text-ink">{c.name}</span>
+                            <span className="block truncate text-label text-ink">{c.name}</span>
                             {c.phone ? (
-                              <span className="block text-[12px] text-ink-tertiary">
+                              <span className="block text-caption text-ink-secondary">
                                 {formatPhone(c.phone)}
                               </span>
                             ) : null}
@@ -207,7 +234,7 @@ export function NewAppointmentSheet({
                     ))}
                   </ul>
                 ) : query.trim() ? (
-                  <p className="mt-2 text-[12px] text-ink-tertiary">
+                  <p className="mt-2 text-caption text-ink-secondary">
                     Nenhum cliente encontrado com esse nome ou telefone.
                   </p>
                 ) : null}
@@ -217,7 +244,7 @@ export function NewAppointmentSheet({
 
           {/* 2. Serviço */}
           <Field label="Serviço" htmlFor="servico">
-            <select
+            <Select
               id="servico"
               value={serviceId ?? ""}
               onChange={(e) => {
@@ -225,7 +252,6 @@ export function NewAppointmentSheet({
                 setServiceId(value);
                 loadSlots({ serviceId: value, professionalId, day });
               }}
-              className="h-9 w-full rounded-[var(--radius-sm)] border border-line-strong bg-surface-raised px-2.5 text-[13px] text-ink"
             >
               <option value="">Selecione o serviço</option>
               {formData.services.map((s) => (
@@ -233,12 +259,16 @@ export function NewAppointmentSheet({
                   {s.name} — {s.durationMin}min · {formatBRL(s.priceCents)}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
 
           {/* 3. Profissional (opcional — vazio significa "quem estiver livre") */}
-          <Field label="Profissional" htmlFor="profissional" hint="Deixe em branco para ver todos os horários livres.">
-            <select
+          <Field
+            label="Profissional"
+            htmlFor="profissional"
+            hint="Deixe em branco para ver todos os horários livres."
+          >
+            <Select
               id="profissional"
               value={professionalId ?? ""}
               onChange={(e) => {
@@ -246,7 +276,6 @@ export function NewAppointmentSheet({
                 setProfessionalId(value);
                 loadSlots({ serviceId, professionalId: value, day });
               }}
-              className="h-9 w-full rounded-[var(--radius-sm)] border border-line-strong bg-surface-raised px-2.5 text-[13px] text-ink"
             >
               <option value="">Qualquer profissional</option>
               {formData.professionals.map((p) => (
@@ -254,7 +283,7 @@ export function NewAppointmentSheet({
                   {p.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
 
           <Field label="Data" htmlFor="data">
@@ -272,15 +301,15 @@ export function NewAppointmentSheet({
           {/* 4. Horário */}
           {serviceId ? (
             <div>
-              <span className="mb-1.5 block text-[13px] font-medium text-ink">Horário</span>
+              <span className="mb-1.5 block text-label text-ink">Horário</span>
               {loadingSlots ? (
                 <div className="grid grid-cols-4 gap-1.5">
                   {Array.from({ length: 8 }).map((_, i) => (
-                    <Skeleton key={i} className="h-8" />
+                    <Skeleton key={i} className="h-9" />
                   ))}
                 </div>
               ) : grouped.length === 0 ? (
-                <p className="rounded-[var(--radius-sm)] border border-line bg-surface px-3 py-3 text-[12px] leading-4 text-ink-secondary">
+                <p className="rounded-control border border-line bg-surface px-3 py-3 text-caption text-ink-secondary">
                   Não há horário livre neste dia para esse serviço. Tente outra data ou outro
                   profissional.
                 </p>
@@ -293,11 +322,12 @@ export function NewAppointmentSheet({
                         key={label}
                         type="button"
                         onClick={() => setSlot(options[0])}
+                        aria-pressed={active}
                         className={cn(
-                          "h-8 rounded-[var(--radius-sm)] border text-[13px] tabular transition-colors duration-[120ms]",
+                          "h-9 rounded-control border text-label tabular transition-colors duration-[120ms]",
                           active
                             ? "border-accent bg-accent text-white"
-                            : "border-line-strong bg-surface-raised text-ink hover:border-accent hover:text-accent",
+                            : "border-line-strong bg-surface-raised text-ink hover:border-ink-tertiary",
                         )}
                       >
                         {label}
@@ -306,15 +336,19 @@ export function NewAppointmentSheet({
                   })}
                 </div>
               )}
+              {wantedTaken && !slot ? (
+                <p className="mt-2 text-caption text-attention">
+                  {wantedTaken} não está livre para esse serviço. Escolha um dos horários acima.
+                </p>
+              ) : null}
               {slot && !professionalId ? (
-                <p className="mt-2 text-[12px] text-ink-tertiary">
+                <p className="mt-2 text-caption text-ink-secondary">
                   Será atendido por {slot.professionalName}.
                 </p>
               ) : null}
             </div>
           ) : null}
         </div>
-
       </SheetContent>
     </Sheet>
   );

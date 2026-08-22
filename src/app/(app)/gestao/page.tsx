@@ -1,9 +1,12 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { Copy, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { headers } from "next/headers";
 import Link from "next/link";
-import { PageHeader, SectionLabel } from "@/components/app-shell";
+import { PageBody, PageHeader, SectionLabel } from "@/components/app-shell";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardList } from "@/components/ui/card";
 import { db } from "@/db";
 import {
   branches,
@@ -14,7 +17,9 @@ import {
   resources,
   users,
 } from "@/db/schema";
-import { requireSession } from "@/server/auth";
+import { formatPhone } from "@/lib/phone";
+import { requireRole, requireSession } from "@/server/auth";
+import { CopyLink } from "./copy-link";
 
 export const metadata = { title: "Gestão — Lumina" };
 export const dynamic = "force-dynamic";
@@ -26,16 +31,34 @@ const ROLE_LABEL: Record<string, string> = {
   professional: "Profissional",
 };
 
-const RESOURCE_LABEL: Record<string, string> = {
-  room: "Sala",
-  cabin: "Cabine",
-  equipment: "Equipamento",
-};
+/** Ordem de leitura dos recursos de uma unidade, do mais estrutural ao móvel. */
+const RESOURCE_KINDS = [
+  { type: "room", one: "Sala", many: "Salas" },
+  { type: "cabin", one: "Cabine", many: "Cabines" },
+  { type: "equipment", one: "Equipamento", many: "Equipamentos" },
+] as const;
 
 const WEEKDAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 
+/** "Cabine Ponta Negra" sob o rótulo "Cabine" vira só "Ponta Negra". */
+function withoutKindPrefix(name: string, kind: string): string {
+  const prefix = `${kind} `;
+  if (name.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const rest = name.slice(prefix.length).trim();
+    // "Sala 1" continua "Sala 1": sem o prefixo sobraria um número solto.
+    if (/\p{L}/u.test(rest)) return rest;
+  }
+  return name;
+}
+
+function formatCommission(bps: number): string {
+  return `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+}
+
 export default async function ManagementPage() {
   const ctx = await requireSession();
+  // Comissão, acessos e unidades são assunto de quem administra a clínica.
+  requireRole(ctx, "admin");
 
   const [professionalRows, branchRows, resourceRows, memberRows] = await Promise.all([
     db
@@ -73,37 +96,41 @@ export default async function ManagementPage() {
       .orderBy(asc(users.name)),
   ]);
 
+  // Endereço completo — é ele que a clínica cola na bio, não o caminho relativo.
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  const proto = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
   const bookingPath = `/agendar/${ctx.organizationSlug}`;
+  const bookingUrl = host ? `${proto}://${host}${bookingPath}` : bookingPath;
 
   return (
     <div>
       <PageHeader title="Gestão" description={ctx.organizationName} />
 
-      <div className="mx-auto max-w-[1120px] space-y-9 px-5 py-6 md:px-8">
+      <PageBody className="space-y-8">
         {/* Link público — o ativo que a clínica realmente divulga */}
         <section aria-labelledby="link-publico">
           <SectionLabel>
             <span id="link-publico">Link de agendamento</span>
           </SectionLabel>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface-raised px-4 py-3.5">
+          <Card className="mt-2.5 flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
             <div className="min-w-0">
-              <p className="truncate text-[13px] text-ink">
-                <span className="text-ink-tertiary">.../agendar/</span>
-                {ctx.organizationSlug}
-              </p>
-              <p className="mt-0.5 text-[12px] text-ink-tertiary">
-                Compartilhe na bio, no WhatsApp e nos anúncios. O cliente agenda sem criar conta.
+              <p className="text-label break-all text-ink">{bookingUrl.replace(/^https?:\/\//, "")}</p>
+              <p className="mt-1 text-caption text-ink-secondary">
+                Publique na bio e mande para quem chama: o cliente escolhe o horário sozinho, sem
+                criar conta.
               </p>
             </div>
-            <Link
-              href={bookingPath}
-              target="_blank"
-              className="inline-flex items-center gap-1.5 text-[13px] text-accent transition-colors hover:text-accent-hover"
-            >
-              Abrir página
-              <ExternalLink className="size-3.5" />
-            </Link>
-          </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" className="h-11 md:h-9" asChild>
+                <Link href={bookingPath} target="_blank" rel="noreferrer">
+                  Abrir página
+                  <ExternalLink aria-hidden />
+                </Link>
+              </Button>
+              <CopyLink url={bookingUrl} />
+            </div>
+          </Card>
         </section>
 
         {/* Profissionais */}
@@ -111,38 +138,66 @@ export default async function ManagementPage() {
           <SectionLabel>
             <span id="profissionais">Profissionais</span>
           </SectionLabel>
-          <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-            {professionalRows.map((professional) => (
-              <li key={professional.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                <Avatar name={professional.name} size="md" color={professional.color} />
-                <span className="min-w-0 flex-[2]">
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate text-[13px] font-medium text-ink">{professional.name}</span>
-                    {!professional.active ? <Badge tone="neutral">Inativo</Badge> : null}
-                  </span>
-                  <span className="mt-0.5 block truncate text-[12px] text-ink-tertiary">
-                    {professional.specialty ?? "Sem especialidade definida"}
-                  </span>
-                </span>
-                <span className="hidden flex-1 text-[12px] text-ink-secondary sm:block">
-                  {professional.weekdays.length > 0
+          <Card className="mt-2.5">
+            {/* Cabeçalho de colunas: "3" e "30%" nunca aparecem sem nome. */}
+            <div className="hidden items-center gap-3 border-b border-line px-4 py-2 sm:flex">
+              <span aria-hidden className="size-8 shrink-0" />
+              <span className="flex-[2] text-section">Profissional</span>
+              <span className="flex-1 text-section">Dias</span>
+              <span className="w-20 shrink-0 text-right text-section">Serviços</span>
+              <span className="w-20 shrink-0 text-right text-section">Comissão</span>
+            </div>
+
+            <CardList>
+              {professionalRows.map((professional) => {
+                const days =
+                  professional.weekdays.length > 0
                     ? professional.weekdays
                         .slice()
                         .sort((a, b) => a - b)
                         .map((d) => WEEKDAYS[d])
                         .join(", ")
-                    : "Sem grade definida"}
-                </span>
-                <span className="w-24 shrink-0 text-right text-[12px] text-ink-secondary">
-                  {professional.serviceCount}{" "}
-                  {professional.serviceCount === 1 ? "serviço" : "serviços"}
-                </span>
-                <span className="w-16 shrink-0 text-right text-[13px] tabular text-ink">
-                  {professional.commissionBps / 100}%
-                </span>
-              </li>
-            ))}
-          </ul>
+                    : "Sem grade definida";
+                const serviceCount = `${professional.serviceCount} ${
+                  professional.serviceCount === 1 ? "serviço" : "serviços"
+                }`;
+
+                return (
+                  <li
+                    key={professional.id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3"
+                  >
+                    <Avatar name={professional.name} size="md" color={professional.color} />
+                    <span className="min-w-0 flex-[2]">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-label text-ink">{professional.name}</span>
+                        {!professional.active ? <Badge tone="neutral">Inativo</Badge> : null}
+                      </span>
+                      <span className="mt-0.5 block truncate text-caption text-ink-secondary">
+                        {professional.specialty ?? "Sem especialidade definida"}
+                      </span>
+                    </span>
+
+                    {/* Desktop: uma coluna por dado. Celular: uma linha só, com
+                        cada número acompanhado do que ele significa. */}
+                    <span className="hidden flex-1 text-caption text-ink-secondary sm:block">
+                      {days}
+                    </span>
+                    <span className="hidden w-20 shrink-0 text-right text-caption tabular text-ink-secondary sm:block">
+                      {professional.serviceCount}
+                    </span>
+                    <span className="hidden w-20 shrink-0 text-right text-label tabular text-ink sm:block">
+                      {formatCommission(professional.commissionBps)}
+                    </span>
+                    <span className="basis-full text-caption text-ink-secondary sm:hidden">
+                      {days} · {serviceCount} · comissão de{" "}
+                      {formatCommission(professional.commissionBps)}
+                    </span>
+                  </li>
+                );
+              })}
+            </CardList>
+          </Card>
         </section>
 
         <div className="grid gap-8 lg:grid-cols-2">
@@ -151,24 +206,49 @@ export default async function ManagementPage() {
             <SectionLabel>
               <span id="unidades">Unidades</span>
             </SectionLabel>
-            <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-              {branchRows.map((branch) => (
-                <li key={branch.id} className="px-4 py-3">
-                  <p className="text-[13px] font-medium text-ink">{branch.name}</p>
-                  {branch.address ? (
-                    <p className="mt-0.5 text-[12px] text-ink-tertiary">{branch.address}</p>
-                  ) : null}
-                  <p className="mt-1.5 text-[12px] text-ink-secondary">
-                    {resourceRows.filter((r) => r.branchId === branch.id).length > 0
-                      ? resourceRows
-                          .filter((r) => r.branchId === branch.id)
-                          .map((r) => `${RESOURCE_LABEL[r.type]}: ${r.name}`)
-                          .join(" · ")
-                      : "Nenhuma sala ou equipamento cadastrado"}
-                  </p>
-                </li>
-              ))}
-            </ul>
+            <Card className="mt-2.5">
+              <CardList>
+                {branchRows.map((branch) => {
+                  const groups = RESOURCE_KINDS.map((kind) => {
+                    const names = resourceRows
+                      .filter((r) => r.branchId === branch.id && r.type === kind.type)
+                      .map((r) => withoutKindPrefix(r.name, kind.one));
+                    return { kind, names };
+                  }).filter((group) => group.names.length > 0);
+
+                  return (
+                    <li key={branch.id} className="px-4 py-3">
+                      <p className="text-label text-ink">{branch.name}</p>
+                      {branch.address || branch.phone ? (
+                        <p className="mt-0.5 text-caption text-ink-secondary">
+                          {[branch.address, branch.phone ? formatPhone(branch.phone) : null]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      ) : null}
+
+                      {/* Um rótulo por tipo, não um rótulo por recurso. */}
+                      {groups.length > 0 ? (
+                        <dl className="mt-2 space-y-1">
+                          {groups.map((group) => (
+                            <div key={group.kind.type} className="flex gap-1.5 text-caption">
+                              <dt className="shrink-0 text-ink-secondary">
+                                {group.names.length === 1 ? group.kind.one : group.kind.many}:
+                              </dt>
+                              <dd className="min-w-0 text-ink">{group.names.join(", ")}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      ) : (
+                        <p className="mt-2 text-caption text-ink-secondary">
+                          Nenhuma sala ou equipamento cadastrado
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </CardList>
+            </Card>
           </section>
 
           {/* Acessos */}
@@ -176,27 +256,28 @@ export default async function ManagementPage() {
             <SectionLabel>
               <span id="acessos">Quem tem acesso</span>
             </SectionLabel>
-            <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
-              {memberRows.map((member) => (
-                <li key={member.email} className="flex items-center gap-3 px-4 py-2.5">
-                  <Avatar name={member.name} size="sm" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] text-ink">{member.name}</span>
-                    <span className="block truncate text-[12px] text-ink-tertiary">{member.email}</span>
-                  </span>
-                  <Badge tone={member.role === "owner" ? "accent" : "neutral"}>
-                    {ROLE_LABEL[member.role] ?? member.role}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 flex items-center gap-1.5 text-[12px] text-ink-tertiary">
-              <Copy className="size-3" />
+            <Card className="mt-2.5">
+              <CardList>
+                {memberRows.map((member) => (
+                  <li key={member.email} className="flex items-center gap-3 px-4 py-3">
+                    <Avatar name={member.name} size="md" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-label text-ink">{member.name}</span>
+                      <span className="block truncate text-caption text-ink-secondary">
+                        {member.email}
+                      </span>
+                    </span>
+                    <Badge tone="neutral">{ROLE_LABEL[member.role] ?? member.role}</Badge>
+                  </li>
+                ))}
+              </CardList>
+            </Card>
+            <p className="mt-2 text-caption text-ink-secondary">
               Profissional e usuário são cadastros separados: nem todo profissional precisa de login.
             </p>
           </section>
         </div>
-      </div>
+      </PageBody>
     </div>
   );
 }

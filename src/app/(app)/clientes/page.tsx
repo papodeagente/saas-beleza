@@ -1,6 +1,6 @@
 import { Users } from "lucide-react";
 import Link from "next/link";
-import { PageHeader } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,16 @@ import { formatPhone } from "@/lib/phone";
 import { formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import { requireSession } from "@/server/auth";
-import { type CustomerFilter, countCustomers, listCustomers } from "@/server/services/customer-service";
+import {
+  type CustomerFilter,
+  countCustomers,
+  getCustomerFormOptions,
+  listCustomers,
+} from "@/server/services/customer-service";
 import { CustomerSearch } from "./customer-search";
+import { NewCustomerButton } from "./new-customer-button";
 
-export const metadata = { title: "Clientes — Lumina" };
+export const metadata = { title: "Clientes" };
 export const dynamic = "force-dynamic";
 
 const FILTERS: Array<{ value: CustomerFilter; label: string }> = [
@@ -42,9 +48,10 @@ export default async function CustomersPage({
   const filter = (FILTERS.find((f) => f.value === params.filtro)?.value ?? "todos") as CustomerFilter;
   const query = params.busca ?? "";
 
-  const [rows, total] = await Promise.all([
+  const [rows, total, formOptions] = await Promise.all([
     listCustomers(ctx, { query, filter }),
     countCustomers(ctx),
+    getCustomerFormOptions(ctx),
   ]);
 
   return (
@@ -52,18 +59,20 @@ export default async function CustomersPage({
       <PageHeader
         title="Clientes"
         description={`${total} ${total === 1 ? "cliente cadastrado" : "clientes cadastrados"}`}
+        actions={<NewCustomerButton options={formOptions} />}
       />
 
-      <div className="mx-auto max-w-[1120px] px-5 py-5 md:px-8">
+      <PageBody>
         <CustomerSearch initialQuery={query} filter={filter} filters={FILTERS} />
 
         {rows.length === 0 ? (
-          <div className="mt-4 rounded-[var(--radius)] border border-line bg-surface-raised">
+          <div className="mt-4 rounded-card border border-line bg-surface-raised">
             {query ? (
               <EmptyState
                 icon={Users}
                 title="Nenhum cliente com esse nome"
                 description={`Não encontramos ninguém para "${query}". Tente parte do nome ou o telefone.`}
+                action={<NewCustomerButton options={formOptions} label="Cadastrar cliente" />}
               />
             ) : filter === "retorno" ? (
               <EmptyState
@@ -75,24 +84,20 @@ export default async function CustomersPage({
               <EmptyState
                 icon={Users}
                 title="Sua base de clientes começa aqui"
-                description="Cada atendimento agendado cria ou atualiza um cliente. Comece marcando o primeiro."
-                action={
-                  <Button variant="primary" size="md" asChild>
-                    <Link href="/agenda">Ir para a agenda</Link>
-                  </Button>
-                }
+                description="Cadastre quem já é cliente da casa, ou deixe que o agendamento online e a agenda criem as fichas conforme os atendimentos acontecem."
+                action={<NewCustomerButton options={formOptions} label="Cadastrar primeiro cliente" />}
               />
             )}
           </div>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-[var(--radius)] border border-line bg-surface-raised">
+          <div className="mt-4 overflow-hidden rounded-card border border-line bg-surface-raised">
             {/* Um cabeçalho, não um rótulo repetido em cada linha */}
-            <div className="hidden items-center gap-3 border-b border-line px-4 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-ink-tertiary sm:flex">
+            <div className="hidden items-center gap-3 border-b border-line px-4 py-2 sm:flex">
               <span className="w-8 shrink-0" />
-              <span className="flex-[2]">Cliente</span>
-              <span className="flex-1">Última visita</span>
-              <span className="flex-1">Próximo</span>
-              <span className="w-20 shrink-0 text-right">Total gasto</span>
+              <span className="flex-[2] text-section">Cliente</span>
+              <span className="flex-1 text-section">Última visita</span>
+              <span className="flex-1 text-section">Próximo</span>
+              <span className="w-20 shrink-0 text-right text-section">Total</span>
             </div>
 
             <ul className="divide-y divide-line">
@@ -100,32 +105,35 @@ export default async function CustomersPage({
                 <li key={customer.id}>
                   <Link
                     href={`/clientes/${customer.id}`}
-                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-sunken"
+                    className="flex min-h-[52px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-sunken"
                   >
                     <Avatar name={customer.name} size="md" />
                     <span className="min-w-0 flex-[2]">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium text-ink">{customer.name}</span>
+                        <span className="truncate text-label text-ink">{customer.name}</span>
                         {customer.tags.map((tag) => (
                           <Badge key={tag} tone={tag === "VIP" ? "accent" : "neutral"}>
                             {tag}
                           </Badge>
                         ))}
                       </span>
-                      {customer.phone ? (
-                        <span className="mt-0.5 block text-[12px] text-ink-tertiary">
-                          {formatPhone(customer.phone)}
+                      <span className="mt-0.5 block text-caption text-ink-secondary">
+                        {customer.phone ? formatPhone(customer.phone) : "Sem telefone"}
+                        {/* No celular as colunas somem: o que importa vem para cá */}
+                        <span className="sm:hidden">
+                          {" · "}
+                          {relativeVisit(customer.lastVisitAt, ctx.timezone)}
                         </span>
-                      ) : null}
+                      </span>
                     </span>
 
-                    <span className="hidden flex-1 text-[12px] text-ink-secondary sm:block">
+                    <span className="hidden flex-1 text-caption text-ink-secondary sm:block">
                       {relativeVisit(customer.lastVisitAt, ctx.timezone)}
                     </span>
 
                     <span
                       className={cn(
-                        "hidden flex-1 text-[12px] sm:block",
+                        "hidden flex-1 text-caption sm:block",
                         customer.nextAppointmentAt ? "text-positive" : "text-ink-tertiary",
                       )}
                     >
@@ -136,8 +144,8 @@ export default async function CustomersPage({
 
                     <span
                       className={cn(
-                        "w-20 shrink-0 text-right text-[13px] tabular",
-                        customer.totalSpentCents > 0 ? "font-medium text-ink" : "text-ink-tertiary",
+                        "w-20 shrink-0 text-right tabular text-label",
+                        customer.totalSpentCents > 0 ? "text-ink" : "text-ink-tertiary",
                       )}
                     >
                       {customer.totalSpentCents > 0 ? formatBRLCompact(customer.totalSpentCents) : "—"}
@@ -148,7 +156,7 @@ export default async function CustomersPage({
             </ul>
           </div>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

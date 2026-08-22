@@ -33,11 +33,18 @@ export default async function AgendaPage({
 
   const { start: dayStartUtc } = dayRangeInTz(day, ctx.timezone);
 
+  const dateISO = dateISOInTz(dayStartUtc, ctx.timezone);
+  const openAppointmentId = params.atendimento ? Number(params.atendimento) : null;
+
   return (
     <AgendaView
-      dateISO={dateISOInTz(dayStartUtc, ctx.timezone)}
+      // Dia e atendimento aberto vêm da URL: a chave remonta a view em vez de
+      // sincronizar estado com prop dentro de um efeito.
+      key={`${dateISO}:${openAppointmentId ?? ""}`}
+      dateISO={dateISO}
       dayStartUtcISO={dayStartUtc.toISOString()}
-      isToday={dateISOInTz(dayStartUtc, ctx.timezone) === dateISOInTz(new Date(), ctx.timezone)}
+      timezone={ctx.timezone}
+      isToday={dateISO === dateISOInTz(new Date(), ctx.timezone)}
       agenda={{
         ...agenda,
         appointments: agenda.appointments.map((a) => ({
@@ -48,7 +55,7 @@ export default async function AgendaPage({
       }}
       formData={formData}
       selectedBranchId={branchId ?? null}
-      openAppointmentId={params.atendimento ? Number(params.atendimento) : null}
+      openAppointmentId={openAppointmentId}
     />
   );
 }

@@ -6,20 +6,89 @@ import { z } from "zod";
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema";
 import { requireSession } from "@/server/auth";
+import { type ConversationDetail, getConversation } from "@/server/services/inbox-service";
 
 export type InboxResult = { ok: true } | { ok: false; error: string };
 
+/** Conversa serializada para o cliente — datas em ISO, nada de Date cru. */
+export type InboxDetail = {
+  conversationId: number;
+  controlledBy: "ai" | "human" | "waiting";
+  customerName: string;
+  channel: string;
+  messages: Array<{
+    id: number;
+    direction: "inbound" | "outbound";
+    sender: "customer" | "user" | "ai" | "system";
+    body: string;
+    createdAt: string;
+  }>;
+  context: {
+    customerId: number;
+    name: string;
+    phone: string | null;
+    visitsCount: number;
+    totalSpentCents: number;
+    lastVisitAt: string | null;
+    nextAppointment: { startsAt: string; serviceName: string; professionalName: string } | null;
+  } | null;
+};
+
+function serialize(detail: ConversationDetail): InboxDetail {
+  return {
+    conversationId: detail.conversation.id,
+    controlledBy: detail.conversation.controlledBy,
+    customerName: detail.conversation.customerName,
+    channel: detail.conversation.channel,
+    messages: detail.messages.map((message) => ({
+      ...message,
+      createdAt: message.createdAt.toISOString(),
+    })),
+    context: detail.context
+      ? {
+          ...detail.context,
+          lastVisitAt: detail.context.lastVisitAt?.toISOString() ?? null,
+          nextAppointment: detail.context.nextAppointment
+            ? {
+                ...detail.context.nextAppointment,
+                startsAt: detail.context.nextAppointment.startsAt.toISOString(),
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
+const idSchema = z.number().int().positive();
+
+/**
+ * Carrega uma conversa isolada.
+ *
+ * É o que permite trocar de conversa sem recarregar a rota: a lista já está na
+ * tela, só as mensagens e o contexto viajam.
+ */
+export async function loadConversationAction(input: unknown): Promise<InboxDetail | null> {
+  try {
+    const ctx = await requireSession();
+    const conversationId = idSchema.parse(input);
+    const detail = await getConversation(ctx, conversationId);
+    return detail ? serialize(detail) : null;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
 const sendSchema = z.object({
-  conversationId: z.number().int().positive(),
+  conversationId: idSchema,
   body: z.string().trim().min(1, "Escreva a mensagem antes de enviar.").max(4000),
 });
 
 /**
- * Envia uma mensagem do atendente.
+ * Registra uma mensagem do atendente na conversa.
  *
- * Nesta fase a mensagem é registrada na conversa mas ainda não sai para o
- * WhatsApp — o MessagingProvider entra na fase 4. O status refletido na tela
- * diz exatamente isso, para não prometer entrega que não aconteceu.
+ * Não existe canal conectado: a mensagem fica registrada aqui e a tela diz
+ * exatamente isso, para não prometer entrega que não acontece.
  */
 export async function sendMessageAction(input: unknown): Promise<InboxResult> {
   try {
@@ -48,7 +117,7 @@ export async function sendMessageAction(input: unknown): Promise<InboxResult> {
         body: data.body,
         createdAt: now,
       });
-      // Assumir a conversa silencia a IA: quem responde agora é uma pessoa
+      // Responder assume a conversa: quem fala agora é uma pessoa
       await tx
         .update(conversations)
         .set({ lastMessageAt: now, controlledBy: "human", assignedUserId: ctx.userId })
@@ -64,7 +133,7 @@ export async function sendMessageAction(input: unknown): Promise<InboxResult> {
 }
 
 const controlSchema = z.object({
-  conversationId: z.number().int().positive(),
+  conversationId: idSchema,
   controlledBy: z.enum(["ai", "human", "waiting"]),
 });
 

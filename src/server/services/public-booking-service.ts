@@ -150,6 +150,8 @@ export type PublicBookingInput = {
   name: string;
   phone: string;
   email?: string | null;
+  /** Opt-in explícito de marketing. Ausente ou falso nunca revoga um consentimento já dado. */
+  consentMarketing?: boolean;
 };
 
 export type PublicBookingResult = {
@@ -157,6 +159,7 @@ export type PublicBookingResult = {
   serviceName: string;
   professionalName: string;
   branchName: string;
+  branchAddress: string | null;
   startsAt: Date;
 };
 
@@ -181,12 +184,13 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
   let customerId: number;
   if (existing) {
     customerId = existing.id;
-    // Não sobrescreve o nome de um cliente já cadastrado: quem manda é a ficha
-    if (input.email) {
-      await db
-        .update(customers)
-        .set({ email: sql`coalesce(${customers.email}, ${input.email})` })
-        .where(eq(customers.id, existing.id));
+    // Não sobrescreve o nome de um cliente já cadastrado: quem manda é a ficha.
+    // O consentimento só sobe (opt-in); desmarcar aqui não revoga o que já foi dado.
+    const patch: { email?: ReturnType<typeof sql>; consentMarketing?: boolean } = {};
+    if (input.email) patch.email = sql`coalesce(${customers.email}, ${input.email})`;
+    if (input.consentMarketing) patch.consentMarketing = true;
+    if (Object.keys(patch).length > 0) {
+      await db.update(customers).set(patch).where(eq(customers.id, existing.id));
     }
   } else {
     const [created] = await db
@@ -198,6 +202,7 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
         email: input.email?.trim() || null,
         source: "public_booking",
         preferredBranchId: input.branchId,
+        consentMarketing: input.consentMarketing === true,
       })
       .returning({ id: customers.id });
     customerId = created.id;
@@ -219,7 +224,7 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
     .where(eq(professionals.id, input.professionalId))
     .limit(1);
   const [branch] = await db
-    .select({ name: branches.name })
+    .select({ name: branches.name, address: branches.address })
     .from(branches)
     .where(eq(branches.id, input.branchId))
     .limit(1);
@@ -229,6 +234,7 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
     serviceName: service.name,
     professionalName: professional?.name ?? "",
     branchName: branch?.name ?? "",
+    branchAddress: branch?.address ?? null,
     startsAt: appointment.startsAt,
   };
 }
