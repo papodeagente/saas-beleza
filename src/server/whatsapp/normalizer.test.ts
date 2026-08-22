@@ -80,13 +80,45 @@ describe("normalizeUazapiWebhook", () => {
     expect(event.message.body).toBe("ficou assim");
   });
 
-  it("traduz atualização de status para o vocabulário interno", () => {
+  it("lê a confirmação de entrega no formato que a uazapi realmente envia", () => {
+    // Campos observados em produção: os ids vêm em `MessageIDs` e o estado em
+    // `Type`. Ler os nomes documentados descartava toda confirmação.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      instanceName: "Bruno Barbosa - Teste",
+      event: {
+        Chat: "559285621979@s.whatsapp.net",
+        Type: "Delivered",
+        MessageIDs: ["3EB0F33525ACA86A54E3AA"],
+        IsFromMe: false,
+        Timestamp: 1787435684,
+      },
+    });
+    expect(event).toMatchObject({
+      kind: "status",
+      externalIds: ["3EB0F33525ACA86A54E3AA"],
+      status: "delivered",
+    });
+  });
+
+  it("aceita uma atualização que cobre várias mensagens", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      instanceName: "c",
+      event: { Type: "Read", MessageIDs: ["A1", "A2", "A3"] },
+    });
+    if (event.kind !== "status") throw new Error("esperava status");
+    expect(event.externalIds).toEqual(["A1", "A2", "A3"]);
+    expect(event.status).toBe("read");
+  });
+
+  it("continua entendendo o formato antigo, com id único", () => {
     const event = normalizeUazapiWebhook({
       EventType: "messages_update",
       instance: { name: "c" },
       event: { messageid: "ABC", status: "DELIVERY_ACK" },
     });
-    expect(event).toMatchObject({ kind: "status", externalId: "ABC", status: "delivered" });
+    expect(event).toMatchObject({ kind: "status", externalIds: ["ABC"], status: "delivered" });
   });
 
 it("reconhece o QR de pareamento e o entrega pronto para exibir", () => {

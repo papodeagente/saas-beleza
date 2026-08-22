@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, customers } from "@/db/schema";
 import { canonicalBrPhone, formatBrPhone } from "@/server/whatsapp/phone";
@@ -98,6 +98,39 @@ export async function resolveConversation(input: ResolveInput): Promise<Resolved
       await db.update(conversations).set(patch).where(eq(conversations.id, existing.id));
     }
     return { conversationId: existing.id, customerId, created: false };
+  }
+
+  /**
+   * Mesmo telefone, JID diferente.
+   *
+   * O WhatsApp identifica um número brasileiro ora com o nono dígito, ora sem —
+   * quem escolhe é ele, e a escolha muda conforme como o contato foi salvo. Sem
+   * esta busca, a resposta do cliente abre uma segunda conversa e o histórico
+   * se parte em duas: uma com o que enviamos, outra com o que ele respondeu.
+   */
+  if (!isGroup && phone) {
+    const [byPhone] = await db
+      .select({ id: conversations.id, customerId: conversations.customerId, remoteJid: conversations.remoteJid })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.organizationId, organizationId),
+          eq(conversations.phone, phone),
+          eq(conversations.isGroup, false),
+        ),
+      )
+      .orderBy(asc(conversations.id))
+      .limit(1);
+
+    if (byPhone) {
+      // Passa a usar o JID que o WhatsApp está usando agora: é para ele que o
+      // envio precisa ir.
+      await db
+        .update(conversations)
+        .set({ remoteJid, connectionId, ...(contactName ? { contactName } : {}) })
+        .where(eq(conversations.id, byPhone.id));
+      return { conversationId: byPhone.id, customerId: byPhone.customerId, created: false };
+    }
   }
 
   const customerId = isGroup ? null : await resolveCustomer(organizationId, phone, contactName);

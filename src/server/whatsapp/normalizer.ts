@@ -46,7 +46,8 @@ export type WaEvent =
   | {
       kind: "status";
       instance: string;
-      externalId: string;
+      /** Uma atualização pode cobrir várias mensagens de uma vez. */
+      externalIds: string[];
       status: "sent" | "delivered" | "read" | "failed";
     }
   | { kind: "connection"; instance: string; status: string; connected: boolean }
@@ -146,14 +147,26 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
   }
 
   if (eventName === "messages_update" || eventName === "message_update" || eventName === "messages.update") {
-    const externalId = firstString(
-      body?.messageid,
-      body?.messageId,
-      body?.id,
-      raw.messageid,
-      raw.id,
-    );
-    const rawStatus = firstString(body?.status, body?.update, raw.status).toLowerCase();
+    /**
+     * O formato real entrega os ids em `MessageIDs` (lista) e o estado em
+     * `Type` — nomes diferentes dos que a documentação sugere. Ler só os nomes
+     * documentados fazia toda confirmação de entrega ser descartada, e a
+     * mensagem ficava eternamente como "enviada" na tela.
+     */
+    const idSources = [body?.MessageIDs, body?.messageids, body?.messageIds, body?.ids];
+    let externalIds: string[] = [];
+    for (const source of idSources) {
+      if (Array.isArray(source) && source.length > 0) {
+        externalIds = source.map((id: unknown) => str(id)).filter(Boolean);
+        break;
+      }
+    }
+    if (externalIds.length === 0) {
+      const single = firstString(body?.messageid, body?.messageId, body?.id, raw.messageid, raw.id);
+      if (single) externalIds = [single];
+    }
+
+    const rawStatus = firstString(body?.Type, body?.status, body?.update, raw.status).toLowerCase();
     const status =
       rawStatus.includes("read") || rawStatus.includes("played")
         ? "read"
@@ -162,8 +175,8 @@ export function normalizeUazapiWebhook(raw: any): WaEvent {
           : rawStatus.includes("error") || rawStatus.includes("fail")
             ? "failed"
             : "sent";
-    if (!externalId) return { kind: "ignored", reason: "status_sem_id" };
-    return { kind: "status", instance, externalId, status };
+    if (externalIds.length === 0) return { kind: "ignored", reason: "status_sem_id" };
+    return { kind: "status", instance, externalIds, status };
   }
 
   const isMessageEvent =

@@ -139,6 +139,44 @@ describe("ingestão de mensagem recebida", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("mantém uma conversa só quando o WhatsApp muda o nono dígito do JID", async () => {
+    // Caso real: enviamos para 5592985621979 e a resposta chegou de
+    // 559285621979. Sem deduplicar por telefone, o histórico se parte em dois.
+    const enviado = await ingestMessage(
+      connection,
+      message({
+        remoteJid: "5592985621979@s.whatsapp.net",
+        phone: "5592985621979",
+        fromMe: true,
+        body: "oi, tudo bem?",
+      }),
+    );
+
+    const respondido = await ingestMessage(
+      connection,
+      message({
+        remoteJid: "559285621979@s.whatsapp.net",
+        phone: "559285621979",
+        body: "tudo bem?",
+      }),
+    );
+
+    expect(respondido.conversationId).toBe(enviado.conversationId);
+
+    const [conversation] = await db
+      .select()
+      .from(s.conversations)
+      .where(eq(s.conversations.id, enviado.conversationId));
+    // Passa a valer o JID que o WhatsApp está usando: é para ele que o envio vai.
+    expect(conversation.remoteJid).toBe("559285621979@s.whatsapp.net");
+
+    const both = await db
+      .select()
+      .from(s.messages)
+      .where(eq(s.messages.conversationId, enviado.conversationId));
+    expect(both.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("devolve para a fila a conversa já resolvida, guardando quem atendeu antes", async () => {
     const first = await ingestMessage(
       connection,

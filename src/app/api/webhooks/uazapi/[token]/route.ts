@@ -41,7 +41,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     event.kind === "message"
       ? `msg:${event.message.externalId}`
       : event.kind === "status"
-        ? `status:${event.externalId}:${event.status}`
+        ? `status:${event.externalIds.join(",")}:${event.status}`
         : null;
 
   const [logged] = await db
@@ -81,7 +81,9 @@ export async function POST(request: Request, context: { params: Promise<{ token:
         });
       }
     } else if (event.kind === "status") {
-      await applyStatusUpdate(connection, event.externalId, event.status);
+      for (const externalId of event.externalIds) {
+        await applyStatusUpdate(connection, externalId, event.status);
+      }
     } else if (event.kind === "qrcode") {
       await db
         .update(whatsappConnections)
