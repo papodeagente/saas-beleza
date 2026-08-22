@@ -40,17 +40,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs ./scripts/mig
 USER nextjs
 EXPOSE 3000
 
-# Sem HEALTHCHECK na imagem, de propósito.
+# O Coolify roda `docker inspect --format '{{json .State.Health.Status}}'` no
+# contêiner. Sem a instrução abaixo essa chave não existe, o inspect quebra com
+# "map has no entry for key Health" e o deploy inteiro é dado como falho — foi
+# a causa do status vermelho.
 #
-# O Coolify deste servidor não lê a saúde real do contêiner: com um healthcheck
-# que não pode falhar (`CMD exit 0`) ele continuou marcando a aplicação como
-# "unhealthy", enquanto o log do próprio deploy dizia "New container is healthy"
-# e a aplicação respondia 200 sem parar. Com healthcheck declarado ele chegou a
-# reverter um deploy bom por engano.
-#
-# As rotas continuam existindo para monitoramento de verdade:
-#   /api/live   — processo de pé, sem I/O (liveness)
-#   /api/health — processo de pé E banco respondendo (readiness)
+# Aponta para /api/live, que não toca no banco: liveness não é readiness, e uma
+# oscilação do Postgres não pode fazer o orquestrador derrubar o contêiner.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=6 \
+  CMD curl -fsS http://127.0.0.1:3000/api/live >/dev/null || exit 1
 
 # `exec` faz o node virar PID 1: sem isso o shell fica no lugar dele e o
 # SIGTERM do `docker stop` nunca chega na aplicação.
