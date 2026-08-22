@@ -117,7 +117,7 @@ export function CustomerTabs({
               description="Os pagamentos lançados nos atendimentos desta cliente aparecem aqui."
             />
           ) : (
-            <div className="overflow-hidden rounded-card border border-line bg-surface-raised">
+            <div className="overflow-hidden rounded-card bg-surface-raised shadow-card">
               <ul className="divide-y divide-line">
                 {paymentsList.map((payment) => (
                   <li key={payment.id} className="flex items-center gap-3 px-4 py-2.5">
@@ -154,7 +154,7 @@ export function CustomerTabs({
 
 function AppointmentList({ items }: { items: TabAppointment[] }) {
   return (
-    <div className="overflow-hidden rounded-card border border-line bg-surface-raised">
+    <div className="overflow-hidden rounded-card bg-surface-raised shadow-card">
       <ul className="divide-y divide-line">
         {items.map((item) => {
           const open = item.priceCents - item.paidCents;

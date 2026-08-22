@@ -19,7 +19,7 @@ export function Metric({
   size?: "md" | "sm";
 }) {
   return (
-    <div className="bg-surface-raised px-4 py-3.5">
+    <div className="rounded-card bg-surface-raised px-5 py-4 shadow-card">
       <p className="text-caption text-ink-secondary">{label}</p>
       <p
         className={cn(
@@ -38,17 +38,11 @@ export function Metric({
   );
 }
 
-/**
- * Faixa de métricas: células separadas por hairline, sem virar caixa dentro de
- * caixa. O `bg-line` com `gap-px` desenha as divisórias.
- */
+/** Grade de métricas: um card por número, com respiro entre eles. */
 export function MetricRow({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn(
-        "grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4",
-        className,
-      )}
+      className={cn("grid grid-cols-2 gap-3 sm:grid-cols-4", className)}
       {...props}
     />
   );

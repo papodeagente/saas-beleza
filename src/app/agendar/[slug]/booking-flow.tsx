@@ -158,7 +158,7 @@ export function BookingFlow({
         <div className="flex size-11 items-center justify-center rounded-full bg-positive-soft">
           <Check className="size-5 text-positive" aria-hidden />
         </div>
-        <h1 className="mt-5 font-display text-display text-ink">Agendamento confirmado</h1>
+        <h1 className="mt-5 text-display text-ink">Agendamento confirmado</h1>
         <p className="mt-2 text-body text-ink-secondary">
           Guarde os dados abaixo — não enviamos mensagem de confirmação. Se precisar remarcar ou
           cancelar, fale com a recepção da {organizationName}.
@@ -210,7 +210,7 @@ export function BookingFlow({
         ) : null}
 
         <p className="text-section">{organizationName}</p>
-        <h1 className="mt-1.5 font-display text-display text-ink">
+        <h1 className="mt-1.5 text-display text-ink">
           {step === "service"
             ? "O que você quer fazer?"
             : step === "branch"

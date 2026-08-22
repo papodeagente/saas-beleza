@@ -65,7 +65,7 @@ export default async function CustomersPage({
         <CustomerSearch initialQuery={query} filter={filter} filters={FILTERS} />
 
         {rows.length === 0 ? (
-          <div className="mt-4 rounded-card border border-line bg-surface-raised">
+          <div className="mt-4 rounded-card bg-surface-raised shadow-card">
             {query ? (
               <EmptyState
                 icon={Users}
@@ -89,7 +89,7 @@ export default async function CustomersPage({
             )}
           </div>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-card border border-line bg-surface-raised">
+          <div className="mt-4 overflow-hidden rounded-card bg-surface-raised shadow-card">
             {/* Um cabeçalho, não um rótulo repetido em cada linha */}
             <div className="hidden items-center gap-3 border-b border-line px-4 py-2 sm:flex">
               <span className="w-8 shrink-0" />

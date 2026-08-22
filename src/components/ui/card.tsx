@@ -18,8 +18,8 @@ export function Card({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-card border border-line",
-        inset ? "bg-surface" : "bg-surface-raised",
+        "overflow-hidden rounded-card",
+        inset ? "bg-surface" : "bg-surface-raised shadow-card",
         className,
       )}
       {...props}

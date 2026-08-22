@@ -23,7 +23,7 @@ export default function ModuleError({
   return (
     <div className="flex min-h-dvh items-center justify-center px-6">
       <div className="max-w-[42ch] text-center">
-        <h1 className="font-display text-[22px] leading-8 text-ink">
+        <h1 className="text-entity text-ink">
           Esta tela não conseguiu carregar
         </h1>
         <p className="mt-2 text-body text-ink-secondary">

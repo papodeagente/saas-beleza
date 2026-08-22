@@ -5,12 +5,12 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const button = cva(
-  "relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control font-medium transition-[background-color,color,border-color,opacity,transform] duration-[120ms] ease-[var(--ease-out-quint)] active:scale-[0.985] disabled:pointer-events-none disabled:opacity-45 [&_svg]:shrink-0",
+  "relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-pill font-semibold transition-[background-color,color,border-color,opacity,transform] duration-[120ms] ease-[var(--ease-out-quint)] active:scale-[0.985] disabled:pointer-events-none disabled:opacity-45 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        primary: "bg-accent text-white hover:bg-accent-hover",
-        secondary: "border border-line-strong bg-surface-raised text-ink hover:bg-surface-sunken",
+        primary: "bg-accent text-white shadow-[0_2px_8px_rgb(37_96_214/0.28)] hover:bg-accent-hover",
+        secondary: "border border-accent/35 bg-surface-raised text-accent hover:bg-accent-soft",
         ghost: "text-ink-secondary hover:bg-surface-sunken hover:text-ink",
         danger: "bg-danger text-white hover:brightness-95",
         link: "h-auto p-0 text-accent underline-offset-4 hover:underline",
@@ -20,10 +20,10 @@ const button = cva(
         // toque mínimo do mobile (44) no tamanho lg.
         // `pointer-coarse` eleva o alvo para 44px só onde se toca com o dedo;
         // no mouse a densidade compacta é preservada.
-        sm: "h-8 px-3 text-label pointer-coarse:min-h-11 [&_svg]:size-3.5",
-        md: "h-9 px-3.5 text-label pointer-coarse:min-h-11 [&_svg]:size-4",
-        lg: "h-11 px-5 text-body font-medium [&_svg]:size-4",
-        icon: "size-9 pointer-coarse:min-h-11 pointer-coarse:min-w-11 [&_svg]:size-4",
+        sm: "h-9 px-4 text-label pointer-coarse:min-h-11 [&_svg]:size-3.5",
+        md: "h-10 px-5 text-label pointer-coarse:min-h-11 [&_svg]:size-4",
+        lg: "h-12 px-6 text-body font-semibold [&_svg]:size-4",
+        icon: "size-10 pointer-coarse:min-h-11 pointer-coarse:min-w-11 [&_svg]:size-4",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },

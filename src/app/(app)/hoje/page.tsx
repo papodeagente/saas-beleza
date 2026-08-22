@@ -61,7 +61,7 @@ export default async function TodayPage() {
         <p className="text-caption text-ink-secondary">
           {formatTzCapitalized(now, ctx.timezone, "EEEE, d 'de' MMMM")}
         </p>
-        <h1 className="mt-1 font-display text-display text-ink">
+        <h1 className="mt-1 text-display text-ink">
           {greeting(hour)}, {firstName}
         </h1>
       </header>

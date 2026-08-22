@@ -50,11 +50,16 @@ const css = ({ r, g, b }: RGB) => `rgb(${r}, ${g}, ${b})`;
  * Par fundo/texto para um marcador de identidade: fundo é a cor a 12% sobre
  * branco, texto é a cor escurecida o suficiente para ler sobre ele.
  */
-export function identityTint(color: string): { background: string; foreground: string } {
+export function identityTint(
+  color: string,
+  /** Quanto branco entra no fundo. Superfície grande pede tinta mais leve para
+      o texto de apoio continuar legível em cima dela. */
+  whiteness = 0.88,
+): { background: string; foreground: string } {
   const base = parseHex(color);
   if (!base) return { background: "var(--color-accent-soft)", foreground: "var(--color-accent)" };
 
-  const background = mix(base, WHITE, 0.88);
+  const background = mix(base, WHITE, whiteness);
   let foreground = base;
   for (let t = 0; t <= 1 && contrastRatio(foreground, background) < 4.5; t += 0.05) {
     foreground = mix(base, INK, t);

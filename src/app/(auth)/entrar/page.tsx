@@ -19,9 +19,9 @@ export default async function LoginPage() {
             >
               L
             </span>
-            <span className="font-display text-title text-ink">Lumina</span>
+            <span className="text-title font-extrabold tracking-[0.08em] text-ink">Lumina</span>
           </p>
-          <h1 className="mt-6 font-display text-display text-ink">Bom te ver de novo</h1>
+          <h1 className="mt-6 text-display text-ink">Bom te ver de novo</h1>
           <p className="mt-1.5 text-body text-ink-secondary">
             Entre para acompanhar a operação da sua clínica.
           </p>

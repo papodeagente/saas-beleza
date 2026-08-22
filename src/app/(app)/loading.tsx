@@ -17,9 +17,9 @@ export default function Loading() {
         </div>
       </div>
       <div className="w-full max-w-[1180px] px-5 py-6 md:px-8 md:py-8">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="space-y-2 bg-surface-raised px-4 py-3.5">
+            <div key={i} className="space-y-2 rounded-card bg-surface-raised px-5 py-4 shadow-card">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="h-6 w-24" />
             </div>
@@ -27,7 +27,7 @@ export default function Loading() {
         </div>
         <div className="mt-8 space-y-2">
           <Skeleton className="h-3 w-32" />
-          <div className="divide-y divide-line overflow-hidden rounded-card border border-line bg-surface-raised">
+          <div className="divide-y divide-line overflow-hidden rounded-card bg-surface-raised shadow-card">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 px-4 py-3">
                 <Skeleton className="size-8 rounded-full" />

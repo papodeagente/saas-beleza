@@ -13,6 +13,7 @@ import { ProfessionalDot, stripeColor } from "@/components/ui/status-stripe";
 import { STATUS_LABEL, STATUS_TONE, type AppointmentStatus } from "@/domain/appointment-status";
 import { formatTz, formatTzCapitalized } from "@/lib/tz";
 import { useCurrentMinute } from "@/lib/use-current-minute";
+import { identityTint } from "@/lib/color";
 import { cn } from "@/lib/utils";
 import { AppointmentSheet } from "./appointment-sheet";
 import { NewAppointmentSheet } from "./new-appointment-sheet";
@@ -496,7 +497,9 @@ function AppointmentBlock({
         top,
         height,
         borderLeftColor: stripeColor(appointment.status),
-        backgroundColor: off ? "var(--color-surface-sunken)" : `${appointment.professionalColor}14`,
+        backgroundColor: off
+          ? "var(--color-surface-sunken)"
+          : identityTint(appointment.professionalColor, 0.94).background,
       }}
     >
       <span className="flex items-center gap-1.5">

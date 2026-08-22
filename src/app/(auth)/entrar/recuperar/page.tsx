@@ -20,10 +20,10 @@ export default function RecoverPasswordPage() {
           >
             L
           </span>
-          <span className="font-display text-title text-ink">Lumina</span>
+          <span className="text-title font-extrabold tracking-[0.08em] text-ink">Lumina</span>
         </p>
 
-        <h1 className="mt-6 font-display text-display text-ink">Recuperar senha</h1>
+        <h1 className="mt-6 text-display text-ink">Recuperar senha</h1>
         <p className="mt-1.5 text-body text-ink-secondary">
           A redefinição de senha por e-mail ainda não existe na Lumina. Não há nada para esperar na
           sua caixa de entrada.

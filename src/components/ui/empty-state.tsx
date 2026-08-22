@@ -41,7 +41,7 @@ export function EmptyState({
           <Icon className={size === "md" ? "size-[18px]" : "size-4"} />
         </span>
       ) : null}
-      <h3 className={cn("font-display text-ink", size === "md" ? "text-entity" : "text-card")}>
+      <h3 className={cn("text-ink", size === "md" ? "text-entity" : "text-card")}>
         {title}
       </h3>
       <p className="mt-1.5 max-w-[42ch] text-body text-ink-secondary">{description}</p>
