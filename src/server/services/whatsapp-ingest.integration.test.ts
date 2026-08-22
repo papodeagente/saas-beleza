@@ -1,0 +1,180 @@
+import { randomBytes } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { db, pool } from "@/db";
+import * as s from "@/db/schema";
+import type { NormalizedMessage } from "@/server/whatsapp/normalizer";
+import { ingestMessage } from "./whatsapp-message-service";
+
+/**
+ * Ingestão de mensagem contra o Postgres real.
+ *
+ * O que está sendo protegido aqui são as três regras que, quando quebram,
+ * quebram calado: reentrega do webhook virando mensagem duplicada, conversa
+ * resolvida que não volta para a fila quando o cliente escreve de novo, e
+ * cliente novo cadastrado duas vezes porque o telefone chegou em formato
+ * diferente.
+ */
+
+const SUFFIX = `vitest-ingest-${randomBytes(4).toString("hex")}`;
+
+let organizationId: number;
+let connection: typeof s.whatsappConnections.$inferSelect;
+let userId: number;
+
+function message(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage {
+  return {
+    externalId: `MSG_${randomBytes(6).toString("hex")}`,
+    remoteJid: "5511955550001@s.whatsapp.net",
+    fromMe: false,
+    isGroup: false,
+    phone: "5511955550001",
+    senderName: "Cliente Teste",
+    kind: "text",
+    body: "oi",
+    mediaUrl: null,
+    mediaMimeType: null,
+    mediaFileName: null,
+    quotedExternalId: null,
+    sentAt: new Date(),
+    ...overrides,
+  };
+}
+
+beforeAll(async () => {
+  const [org] = await db
+    .insert(s.organizations)
+    .values({ name: "Ingest", slug: SUFFIX, timezone: "America/Sao_Paulo" })
+    .returning();
+  organizationId = org.id;
+
+  const [user] = await db
+    .insert(s.users)
+    .values({ name: "Atendente", email: `${SUFFIX}@example.test`, passwordHash: "x" })
+    .returning();
+  userId = user.id;
+  await db.insert(s.organizationMembers).values({ organizationId, userId, role: "owner" });
+
+  const [conn] = await db
+    .insert(s.whatsappConnections)
+    .values({
+      organizationId,
+      baseUrl: "https://invalido.test",
+      instanceToken: "x",
+      webhookToken: SUFFIX,
+    })
+    .returning();
+  connection = conn;
+});
+
+afterAll(async () => {
+  const convs = await db
+    .select({ id: s.conversations.id })
+    .from(s.conversations)
+    .where(eq(s.conversations.organizationId, organizationId));
+  for (const conv of convs) {
+    await db.delete(s.messages).where(eq(s.messages.conversationId, conv.id));
+  }
+  await db.delete(s.conversations).where(eq(s.conversations.organizationId, organizationId));
+  await db.delete(s.customers).where(eq(s.customers.organizationId, organizationId));
+  await db.delete(s.whatsappConnections).where(eq(s.whatsappConnections.organizationId, organizationId));
+  await db.delete(s.organizationMembers).where(eq(s.organizationMembers.organizationId, organizationId));
+  await db.delete(s.users).where(eq(s.users.id, userId));
+  await db.delete(s.organizations).where(eq(s.organizations.id, organizationId));
+  await pool.end();
+});
+
+describe("ingestão de mensagem recebida", () => {
+  it("cria conversa e cliente na primeira mensagem, e deixa a conversa na fila", async () => {
+    const result = await ingestMessage(connection, message({ body: "oi, queria marcar" }));
+
+    expect(result.isNew).toBe(true);
+    expect(result.isInbound).toBe(true);
+    expect(result.customerId).not.toBeNull();
+
+    const [conversation] = await db
+      .select()
+      .from(s.conversations)
+      .where(eq(s.conversations.id, result.conversationId));
+    expect(conversation.assignedUserId).toBeNull();
+    expect(conversation.unreadCount).toBe(1);
+
+    const [customer] = await db
+      .select()
+      .from(s.customers)
+      .where(eq(s.customers.id, result.customerId!));
+    expect(customer.name).toBe("Cliente Teste");
+    expect(customer.source).toBe("whatsapp");
+  });
+
+  it("ignora a reentrega do mesmo evento em vez de duplicar a mensagem", async () => {
+    const msg = message({ body: "mesma mensagem" });
+    const first = await ingestMessage(connection, msg);
+    const second = await ingestMessage(connection, msg);
+
+    expect(first.isNew).toBe(true);
+    expect(second.isNew).toBe(false);
+
+    const saved = await db
+      .select()
+      .from(s.messages)
+      .where(and(eq(s.messages.organizationId, organizationId), eq(s.messages.externalId, msg.externalId)));
+    expect(saved).toHaveLength(1);
+  });
+
+  it("não cadastra o mesmo cliente duas vezes quando o telefone chega sem o nono dígito", async () => {
+    await ingestMessage(
+      connection,
+      message({ remoteJid: "5521988887777@s.whatsapp.net", phone: "5521988887777", senderName: "Rita" }),
+    );
+    await ingestMessage(
+      connection,
+      message({ remoteJid: "552188887777@s.whatsapp.net", phone: "552188887777", senderName: "Rita" }),
+    );
+
+    const rows = await db
+      .select()
+      .from(s.customers)
+      .where(and(eq(s.customers.organizationId, organizationId), eq(s.customers.phone, "5521988887777")));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("devolve para a fila a conversa já resolvida, guardando quem atendeu antes", async () => {
+    const first = await ingestMessage(
+      connection,
+      message({ remoteJid: "5511944443333@s.whatsapp.net", phone: "5511944443333" }),
+    );
+
+    // Uma atendente assume e resolve.
+    await db
+      .update(s.conversations)
+      .set({ assignedUserId: userId, status: "closed", resolvedAt: new Date(), resolvedByUserId: userId })
+      .where(eq(s.conversations.id, first.conversationId));
+
+    await ingestMessage(
+      connection,
+      message({ remoteJid: "5511944443333@s.whatsapp.net", phone: "5511944443333", body: "voltei" }),
+    );
+
+    const [conversation] = await db
+      .select()
+      .from(s.conversations)
+      .where(eq(s.conversations.id, first.conversationId));
+
+    expect(conversation.status).toBe("open");
+    expect(conversation.assignedUserId).toBeNull();
+    expect(conversation.lastAssignedUserId).toBe(userId);
+  });
+
+  it("registra mensagem enviada do celular como humana, sem dono", async () => {
+    const result = await ingestMessage(
+      connection,
+      message({ remoteJid: "5511933332222@s.whatsapp.net", phone: "5511933332222", fromMe: true, body: "já respondi por aqui" }),
+    );
+
+    const [saved] = await db.select().from(s.messages).where(eq(s.messages.id, result.messageId!));
+    expect(saved.direction).toBe("outbound");
+    expect(saved.sender).toBe("user");
+    expect(saved.senderUserId).toBeNull();
+  });
+});

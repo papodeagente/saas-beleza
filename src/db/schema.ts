@@ -578,9 +578,10 @@ export const whatsappWebhookEvents = pgTable(
   },
   (t) => [
     index("wa_webhook_events_conn_idx").on(t.connectionId, t.createdAt),
-    uniqueIndex("wa_webhook_events_dedupe_unique")
-      .on(t.connectionId, t.dedupeKey)
-      .where(sql`dedupe_key is not null`),
+    // Sem cláusula parcial de propósito: o Postgres já trata NULL como valor
+    // distinto, então eventos sem chave de deduplicação convivem, e um índice
+    // completo é o que o ON CONFLICT consegue usar.
+    uniqueIndex("wa_webhook_events_dedupe_unique").on(t.connectionId, t.dedupeKey),
   ],
 );
 
@@ -634,9 +635,7 @@ export const conversations = pgTable(
   (t) => [
     index("conversations_org_idx").on(t.organizationId, t.lastMessageAt),
     index("conversations_org_assigned_idx").on(t.organizationId, t.assignedUserId, t.lastMessageAt),
-    uniqueIndex("conversations_org_jid_unique")
-      .on(t.organizationId, t.remoteJid)
-      .where(sql`remote_jid is not null`),
+    uniqueIndex("conversations_org_jid_unique").on(t.organizationId, t.remoteJid),
   ],
 );
 
@@ -676,9 +675,10 @@ export const messages = pgTable(
   },
   (t) => [
     index("messages_conversation_idx").on(t.conversationId, t.createdAt),
-    uniqueIndex("messages_org_external_unique")
-      .on(t.organizationId, t.externalId)
-      .where(sql`external_id is not null`),
+    // Índice completo (ver comentário em whatsapp_webhook_events): mensagem
+    // interna sem id de provedor continua permitida, e a deduplicação do
+    // webhook passa a funcionar.
+    uniqueIndex("messages_org_external_unique").on(t.organizationId, t.externalId),
   ],
 );
 

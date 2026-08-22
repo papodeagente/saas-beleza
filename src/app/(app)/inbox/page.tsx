@@ -1,23 +1,35 @@
 import { requireSession } from "@/server/auth";
-import { listConversations } from "@/server/services/inbox-service";
+import { countByTab, type InboxTab, listConversations } from "@/server/services/inbox-service";
+import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { loadConversationAction } from "./actions";
 import { InboxView } from "./inbox-view";
 
 export const metadata = { title: "Inbox — Lumina" };
 export const dynamic = "force-dynamic";
 
+const TABS: InboxTab[] = ["meus", "fila", "todos", "resolvidas"];
+
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ conversa?: string }>;
+  searchParams: Promise<{ conversa?: string; aba?: string }>;
 }) {
   const ctx = await requireSession();
   const params = await searchParams;
-  const conversations = await listConversations(ctx);
+
+  const requestedTab = TABS.find((t) => t === params.aba);
+  const counts = await countByTab(ctx);
+  // Abrir direto na fila quando não há nada atribuído a mim evita a primeira
+  // impressão de inbox vazio enquanto há gente esperando.
+  const tab: InboxTab = requestedTab ?? (counts.meus === 0 && counts.fila > 0 ? "fila" : "meus");
+
+  const [conversations, connection] = await Promise.all([
+    listConversations(ctx, { tab }),
+    getConnection(ctx),
+  ]);
 
   const requested = params.conversa ? Number(params.conversa) : null;
-  const selectedId =
-    requested && conversations.some((c) => c.id === requested) ? requested : null;
+  const selectedId = requested && Number.isFinite(requested) ? requested : null;
 
   // O detalhe padrão existe para o desktop, onde os dois painéis convivem. No
   // celular a seleção começa vazia: a lista é a tela, e abrir uma conversa é
@@ -31,8 +43,12 @@ export default async function InboxPage({
         ...c,
         lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
       }))}
+      counts={counts}
       initialDetail={initialDetail}
       initialSelectedId={selectedId}
+      initialTab={tab}
+      currentUserId={ctx.userId}
+      whatsappConnected={connection?.status === "connected"}
     />
   );
 }
