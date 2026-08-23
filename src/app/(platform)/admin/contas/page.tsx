@@ -1,7 +1,8 @@
-import { Ban, Building2 } from "lucide-react";
+import { Ban, Building2, Plus } from "lucide-react";
 import Link from "next/link";
 import { PlatformBody, PlatformHeader } from "@/components/platform-shell";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatBRL } from "@/lib/money";
@@ -87,6 +88,14 @@ export default async function AccountsPage({
       <PlatformHeader
         title="Contas"
         description="Todas as clínicas da plataforma, com assinatura e uso lado a lado"
+        actions={
+          <Button asChild variant="primary" size="sm">
+            <Link href="/admin/contas/nova">
+              <Plus />
+              Nova conta
+            </Link>
+          </Button>
+        }
       />
 
       <PlatformBody className="space-y-4">
@@ -121,6 +130,20 @@ export default async function AccountsPage({
                 icon={Building2}
                 title="Nenhuma conta com esse nome"
                 description={`Não encontramos nada para "${query}". A busca cobre o nome e o endereço (slug) da clínica.`}
+              />
+            ) : filter === "todas" ? (
+              <EmptyState
+                icon={Building2}
+                title="Nenhuma clínica cadastrada"
+                description="Cadastre a primeira e ela aparece aqui com plano, situação da assinatura e uso lado a lado."
+                action={
+                  <Button asChild variant="primary" size="md">
+                    <Link href="/admin/contas/nova">
+                      <Plus />
+                      Cadastrar a primeira conta
+                    </Link>
+                  </Button>
+                }
               />
             ) : (
               <EmptyState

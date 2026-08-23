@@ -192,6 +192,18 @@ async function main() {
     .onConflictDoNothing();
 
   // ---- Contas de demonstração --------------------------------------------
+  //
+  // NÃO rodam por padrão. Estas clínicas não existem, e um painel de negócio
+  // com receita inventada leva a decisão errada — o vazio pelo menos é honesto
+  // e se corrige sozinho no primeiro cliente. Só entram com `--demo`, para
+  // avaliar o painel cheio antes de ter base real.
+  if (!process.argv.includes("--demo")) {
+    console.log("Planos, acesso de plataforma e provedor de pagamento prontos.");
+    console.log("Contas de demonstração não foram criadas (use --demo se quiser vê-las).");
+    return;
+  }
+  console.warn("--demo: criando contas FICTÍCIAS. Use scripts/remover-dados-ficticios.ts para apagar.");
+
   // Limpa apenas o que este script cria, para poder rodar de novo.
   const existing = await db
     .select({ id: s.organizations.id })

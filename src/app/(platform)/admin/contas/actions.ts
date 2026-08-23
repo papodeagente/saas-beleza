@@ -7,6 +7,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { organizations, plans, subscriptionEvents, subscriptions } from "@/db/schema";
 import { requirePlatformAdmin } from "@/server/platform-auth";
+import { CreateAccountError, createAccount } from "@/server/services/platform-account-create";
 
 /**
  * Mutações de assinatura feitas à mão pelo painel da plataforma.
@@ -424,5 +425,61 @@ export async function resumeAccountAction(input: unknown): Promise<ActionResult>
     });
   } catch (error) {
     return fail(error, "Não foi possível devolver o acesso. Tente de novo.");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cadastrar uma conta nova
+// ---------------------------------------------------------------------------
+
+/**
+ * O formulário mostra o erro embaixo do campo que o causou. Uma action que só
+ * devolvesse uma frase geral obrigaria a pessoa a caçar qual dos sete campos
+ * está errado.
+ */
+export type CreateAccountActionResult =
+  | { ok: true; message: string; organizationId: number }
+  | { ok: false; error: string; fields?: Record<string, string> };
+
+const createAccountSchema = z.object({
+  clinicName: z.string().trim().min(2, "Escreva o nome da clínica.").max(120),
+  timezone: z.string().trim().min(3),
+  ownerName: z.string().trim().min(2, "Escreva o nome de quem responde pela conta."),
+  ownerEmail: z.string().trim().toLowerCase().email("Informe um e-mail válido."),
+  ownerPassword: z.string().min(8, "A senha precisa de pelo menos 8 caracteres."),
+  planId: z.coerce.number().int().positive("Escolha um plano."),
+  cycle: z.enum(["monthly", "yearly"]),
+  start: z.enum(["trial", "active"]),
+});
+
+export async function createAccountAction(input: unknown): Promise<CreateAccountActionResult> {
+  const parsed = createAccountSchema.safeParse(input);
+  if (!parsed.success) {
+    const fields: Record<string, string> = {};
+    for (const issue of parsed.error.issues) {
+      const campo = String(issue.path[0] ?? "");
+      if (campo && !fields[campo]) fields[campo] = issue.message;
+    }
+    return { ok: false, error: "Revise os campos destacados.", fields };
+  }
+
+  try {
+    const ctx = await requirePlatformAdmin();
+    const resultado = await createAccount(ctx, parsed.data);
+
+    revalidatePath("/admin");
+    revalidatePath("/admin/contas");
+
+    return {
+      ok: true,
+      organizationId: resultado.organizationId,
+      message: resultado.ownerReused
+        ? `${parsed.data.clinicName} cadastrada. ${parsed.data.ownerName} já tinha login e foi vinculada como responsável — a senha dela não mudou.`
+        : `${parsed.data.clinicName} cadastrada.`,
+    };
+  } catch (error) {
+    if (error instanceof CreateAccountError) return { ok: false, error: error.message };
+    const resultado = fail(error, "Não foi possível cadastrar a conta. Tente de novo.");
+    return resultado as CreateAccountActionResult;
   }
 }

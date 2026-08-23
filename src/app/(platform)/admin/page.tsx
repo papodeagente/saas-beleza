@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import {
   getHealthRatios,
+  getLaunchReadiness,
   getMovement,
   getMrrHistory,
   getPlanBreakdown,
@@ -19,6 +20,7 @@ import {
   getTrialFunnel,
   getUsage,
 } from "@/server/services/platform-metrics";
+import { PreLaunch } from "./pre-launch";
 
 export const metadata = { title: "Visão do negócio" };
 export const dynamic = "force-dynamic";
@@ -32,6 +34,25 @@ export default async function PlatformDashboard() {
   const now = new Date();
   const from = startOfMonth(now);
   const to = startOfMonth(subMonths(now, -1));
+  const mesAtualLabel = format(from, "MMMM 'de' yyyy", { locale: ptBR });
+
+  // Antes da primeira assinatura não há o que medir. O painel cheio de zeros
+  // seria indistinguível de um painel com defeito, então dá lugar ao primeiro
+  // passo — e volta sozinho quando existir receita para reportar.
+  const readiness = await getLaunchReadiness();
+  if (readiness.preLaunch) {
+    return (
+      <div>
+        <PlatformHeader
+          title="Visão do negócio"
+          description="Nenhuma assinatura ainda — o painel começa a medir na primeira"
+        />
+        <PlatformBody>
+          <PreLaunch readiness={readiness} />
+        </PlatformBody>
+      </div>
+    );
+  }
 
   const [snapshot, movement, history, planBreakdown, trials, usage] = await Promise.all([
     getSnapshot(),
@@ -44,7 +65,7 @@ export default async function PlatformDashboard() {
 
   const health = await getHealthRatios(from, to, movement, snapshot.arpaCents);
 
-  const mesAtual = format(from, "MMMM 'de' yyyy", { locale: ptBR });
+  const mesAtual = mesAtualLabel;
   const serie = history.map((p) => p.mrrCents);
   const mrrMesPassado = history.length >= 2 ? history[history.length - 2].mrrCents : 0;
   const crescimento = mrrMesPassado > 0 ? (snapshot.mrrCents - mrrMesPassado) / mrrMesPassado : null;

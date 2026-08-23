@@ -355,3 +355,53 @@ export async function getUsage(from: Date, to: Date): Promise<UsageMetrics> {
     gmvCents: gmv?.total ?? 0,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Estado inicial
+// ---------------------------------------------------------------------------
+
+export type LaunchReadiness = {
+  /** Zero assinaturas EM QUALQUER MOMENTO — não é um mês fraco, é o começo. */
+  preLaunch: boolean;
+  organizations: number;
+  activePlans: number;
+  /** Provedor com credencial gravada e ligado — só isso cobra de verdade. */
+  liveProviders: number;
+  configuredProviders: number;
+  platformAdmins: number;
+};
+
+/**
+ * Um painel de negócio recém-nascido mostra a mesma coisa que um painel
+ * quebrado: tudo zerado. A diferença é o contexto, e é isso que esta consulta
+ * traz — quantas peças já estão de pé e qual falta.
+ */
+export async function getLaunchReadiness(): Promise<LaunchReadiness> {
+  const { rows } = await db.execute<{
+    orgs: number;
+    subs: number;
+    active_plans: number;
+    live_providers: number;
+    configured_providers: number;
+    admins: number;
+  }>(sql`
+    select
+      (select count(*) from organizations)::int as orgs,
+      (select count(*) from subscriptions)::int as subs,
+      (select count(*) from plans where active)::int as active_plans,
+      (select count(*) from payment_providers
+        where enabled and credentials is not null)::int as live_providers,
+      (select count(*) from payment_providers)::int as configured_providers,
+      (select count(*) from platform_admins)::int as admins
+  `);
+  const r = (rows as Array<Record<string, number>>)[0];
+
+  return {
+    preLaunch: r.subs === 0,
+    organizations: r.orgs,
+    activePlans: r.active_plans,
+    liveProviders: r.live_providers,
+    configuredProviders: r.configured_providers,
+    platformAdmins: r.admins,
+  };
+}
