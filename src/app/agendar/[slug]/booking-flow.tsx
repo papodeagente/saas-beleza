@@ -532,7 +532,7 @@ function BookingAside({
       <div aria-hidden className="absolute -right-20 -top-20 size-64 rounded-pill border border-white/10" />
       <div aria-hidden className="absolute -bottom-24 -left-20 size-72 rounded-pill bg-white/5" />
       <div className="relative">
-        <BrandLogo compact className="text-white" iconClassName="size-9" />
+        <BrandLogo compact variant="white" />
         <div className="mt-4 min-w-0 lg:mt-6">
           <p className="truncate text-label font-semibold text-white">{organizationName}</p>
           <p className="mt-0.5 text-caption text-white/70">Cuidado no seu tempo</p>

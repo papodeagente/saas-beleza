@@ -48,7 +48,7 @@ export function PlatformShell({
         className="flex w-full shrink-0 flex-col bg-[#141B34] px-3.5 py-5 md:w-[240px]"
       >
         <div className="px-2 pb-6">
-          <BrandLogo compact className="text-white" iconClassName="size-7" />
+          <BrandLogo compact variant="white" />
           <span className="mt-0.5 block text-[19px] font-bold leading-6 tracking-[-0.01em] text-white">
             Plataforma
           </span>

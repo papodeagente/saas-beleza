@@ -550,7 +550,7 @@ export default async function LandingPage() {
           <div className={cn(CONTAINER, "border-t border-night-line pt-10")}>
             <div className="flex flex-wrap items-start justify-between gap-8">
               <div className="max-w-[34ch]">
-                <BrandLogo className="text-night-ink" />
+                <BrandLogo />
                 <p className="mt-2 text-body text-night-ink-secondary">
                   Gestão inteligente para manicures.
                 </p>

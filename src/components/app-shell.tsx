@@ -117,7 +117,7 @@ export function AppShell({
         className="bg-brand sticky top-0 z-40 hidden h-[56px] shrink-0 items-center gap-4 px-4 md:flex"
       >
         <Link href="/hoje" className="flex shrink-0 items-center">
-          <BrandLogo compact className="text-white" iconClassName="size-7" />
+          <BrandLogo compact variant="white" />
         </Link>
 
         <ul className="flex min-w-0 flex-1 items-center gap-0.5">

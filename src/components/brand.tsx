@@ -23,25 +23,24 @@ export function BrandIcon({ className }: { className?: string }) {
 
 export function BrandLogo({
   className,
-  iconClassName,
   compact = false,
+  variant = "color",
 }: {
   className?: string;
-  iconClassName?: string;
   compact?: boolean;
+  variant?: "color" | "white";
 }) {
   return (
-    <span className={cn("inline-flex items-center gap-3 text-accent", className)} aria-label="Agenda de Unha">
-      <BrandIcon className={cn(compact ? "size-8" : "size-12", iconClassName)} />
-      <span className="min-w-0">
-        <span className={cn("block whitespace-nowrap font-brand leading-none tracking-[-0.025em]", compact ? "text-[21px]" : "text-[30px]")}>Agenda de Unha</span>
-        {!compact ? (
-          <span className="mt-1.5 block whitespace-nowrap text-[7px] font-semibold uppercase leading-none tracking-[0.23em]">
-            Gestão inteligente para manicures
-          </span>
-        ) : null}
-      </span>
+    <span className={cn("inline-flex shrink-0 items-center", className)} aria-label="Agenda de Unha">
+      {/* Arquivo oficial fornecido pela marca. Mantido sem recorte ou tratamento. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={variant === "white" ? "/brand/agenda-de-unha-white.png" : "/brand/agenda-de-unha-color.png"}
+        alt="Agenda de Unha — Gestão inteligente para manicures"
+        width={2172}
+        height={724}
+        className={cn("block w-auto object-contain", compact ? "h-12" : "h-20")}
+      />
     </span>
   );
 }
-
