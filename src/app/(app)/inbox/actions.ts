@@ -21,6 +21,7 @@ import {
   fetchMediaUrl,
   reactFromInbox,
   sendFromInbox,
+  syncConversationHistory,
   transcribeAudio,
 } from "@/server/services/whatsapp-message-service";
 
@@ -147,6 +148,19 @@ function serialize(detail: ConversationDetail): InboxDetail {
 }
 
 const idSchema = z.number().int().positive();
+
+export async function syncConversationHistoryAction(input: unknown): Promise<{ ok: boolean; imported: number }> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const conversationId = idSchema.parse(input);
+    const imported = await syncConversationHistory(ctx.organizationId, conversationId);
+    return { ok: true, imported };
+  } catch (error) {
+    console.warn("[inbox] reconciliação de histórico falhou:", error instanceof Error ? error.message : error);
+    return { ok: false, imported: 0 };
+  }
+}
 
 /**
  * Carrega uma conversa isolada e zera o não lido.

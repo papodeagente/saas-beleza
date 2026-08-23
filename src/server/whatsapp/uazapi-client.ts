@@ -404,11 +404,12 @@ export async function markChatRead(creds: UazapiCredentials, chatId: string): Pr
 
 export async function findMessages(
   creds: UazapiCredentials,
-  params: { chatid?: string; limit?: number },
+  params: { chatid?: string; limit?: number; offset?: number },
 ): Promise<Json[]> {
   const resp = await request(creds, "POST", "/message/find", {
     chatid: params.chatid,
     limit: params.limit ?? 50,
+    offset: params.offset ?? 0,
   });
   return Array.isArray(resp) ? resp : asArray(get(resp, "messages") ?? get(resp, "data"));
 }

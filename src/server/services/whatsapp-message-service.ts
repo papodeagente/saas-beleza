@@ -3,13 +3,14 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
-import type { NormalizedMessage, WaMessageKind } from "@/server/whatsapp/normalizer";
+import { normalizeUazapiWebhook, type NormalizedMessage, type WaMessageKind } from "@/server/whatsapp/normalizer";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { resolveConversation } from "@/server/services/conversation-resolver";
 import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
   deleteMessage,
   downloadMessageMedia,
+  findMessages,
   markChatRead,
   reactToMessage,
   sendMedia,
@@ -137,6 +138,42 @@ export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMe
   }
 
   return { conversationId, messageId: inserted[0].id, customerId, isNew: true, isInbound: !msg.fromMe };
+}
+
+/** Reconcilia o banco com o histórico já conhecido pela instância. */
+export async function syncConversationHistory(
+  organizationId: number,
+  conversationId: number,
+  maxMessages = 200,
+): Promise<number> {
+  const [conversation] = await db
+    .select({ remoteJid: conversations.remoteJid })
+    .from(conversations)
+    .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)))
+    .limit(1);
+  if (!conversation?.remoteJid) return 0;
+
+  const connection = await getConnectionRow(organizationId);
+  if (!connection || connection.status !== "connected") return 0;
+
+  let imported = 0;
+  for (let offset = 0; offset < maxMessages; offset += 100) {
+    const rows = await findMessages(credentialsOf(connection), {
+      chatid: conversation.remoteJid,
+      limit: Math.min(100, maxMessages - offset),
+      offset,
+    });
+    for (const raw of [...rows].reverse()) {
+      const normalized = normalizeUazapiWebhook({ EventType: "messages", event: raw });
+      if (normalized.kind !== "message" || normalized.message.isGroup) continue;
+      const result = await ingestMessage(connection, normalized.message);
+      if (result.isNew) imported += 1;
+    }
+    if (rows.length < 100) break;
+  }
+
+  if (imported > 0) await publishInboxEvent(organizationId, { type: "message", conversationId });
+  return imported;
 }
 
 export async function applyStatusUpdate(

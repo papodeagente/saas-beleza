@@ -63,6 +63,7 @@ import {
   loadConversationAction,
   sendMessageAction,
   setAiPauseAction,
+  syncConversationHistoryAction,
   updateAssignmentAction,
 } from "./actions";
 
@@ -384,6 +385,8 @@ export function InboxView({
     [],
   );
 
+  const lastProviderSyncRef = useRef<{ conversationId: number; at: number } | null>(null);
+
   // O webhook publica no Redis e este canal autenticado avisa a tela assim que
   // o banco terminou de gravar. EventSource se reconecta sozinho se a internet
   // oscilar; o intervalo abaixo é apenas a rede de segurança.
@@ -402,6 +405,11 @@ export function InboxView({
         queued = false;
         await refreshList(tab, search);
         if (activeId) {
+          const last = lastProviderSyncRef.current;
+          if (!last || last.conversationId !== activeId || Date.now() - last.at >= FALLBACK_POLL_MS) {
+            lastProviderSyncRef.current = { conversationId: activeId, at: Date.now() };
+            await syncConversationHistoryAction(activeId);
+          }
           const loaded = await loadConversationAction(activeId, { markRead: false });
           if (loaded) guardarConversa(activeId, loaded);
         }

@@ -231,90 +231,38 @@ export function AgendaView({
   return (
     <div className="flex flex-col md:h-[calc(100dvh_-_var(--topbar-h,56px))]">
       <PageHeader
-        title={title}
+        title="Agenda"
         description={description}
         actions={
-          <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
-            <div className="flex items-center gap-1">
-              <Button
-                variant="secondary"
-                size="icon"
-                className="size-11 md:size-9"
-                onClick={() => goToPeriod(-1)}
-                aria-label={viewMode === "mes" ? "Mês anterior" : viewMode === "semana" ? "Semana anterior" : "Dia anterior"}
-              >
-                <ChevronLeft />
-              </Button>
-              <Button
-                variant="secondary"
-                size="icon"
-                className="size-11 md:size-9"
-                onClick={() => goToPeriod(1)}
-                aria-label={viewMode === "mes" ? "Próximo mês" : viewMode === "semana" ? "Próxima semana" : "Próximo dia"}
-              >
-                <ChevronRight />
-              </Button>
-            </div>
-
-            <div className="flex rounded-control border border-line bg-surface-sunken p-0.5" role="group" aria-label="Visualização da agenda">
-              {(["dia", "semana", "mes"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setViewMode(mode)}
-                  aria-pressed={viewMode === mode}
-                  className={cn("h-8 rounded-[calc(var(--radius-control)-2px)] px-3 text-label capitalize text-ink-secondary transition-colors", viewMode === mode && "bg-surface-raised text-accent shadow-card")}
-                >
-                  {mode === "mes" ? "Mês" : mode.charAt(0).toUpperCase() + mode.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            {!isToday ? (
-              <Button variant="secondary" className="h-11 md:h-9" onClick={goToToday}>
-                Ir para hoje
-              </Button>
-            ) : null}
-
-            {formData.branches.length > 1 ? (
-              <Select
-                value={selectedBranchId ?? ""}
-                onChange={(e) => setBranch(e.target.value)}
-                aria-label="Filtrar por unidade"
-                className="h-11 w-[168px] md:h-9"
-              >
-                <option value="">Todas as unidades</option>
-                {formData.branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </Select>
-            ) : null}
-
-            {canManageSchedule ? (
-              <Button
-                variant="secondary"
-                className="h-11 md:h-9"
-                onClick={() => setScheduleEditor({ professionalId: null })}
-                title="Definir os horários em que cada profissional atende"
-              >
-                <CalendarCog />
-                <span className="hidden sm:inline">Disponibilidade</span>
-              </Button>
-            ) : null}
-
-            <Button
-              variant="primary"
-              className="h-11 flex-1 md:h-9 sm:flex-none"
-              onClick={() => setCreating({})}
-            >
-              <Plus />
-              Novo atendimento
-            </Button>
-          </div>
+          <Button variant="primary" className="h-10" onClick={() => setCreating({})}>
+            <Plus />
+            Novo
+          </Button>
         }
       />
+
+      <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2 md:px-6">
+        <Button variant="secondary" size="sm" onClick={goToToday} disabled={isToday}>Hoje</Button>
+        <div className="flex items-center">
+          <Button variant="ghost" size="icon" className="size-9" onClick={() => goToPeriod(-1)} aria-label={viewMode === "mes" ? "Mês anterior" : viewMode === "semana" ? "Semana anterior" : "Dia anterior"}><ChevronLeft /></Button>
+          <Button variant="ghost" size="icon" className="size-9" onClick={() => goToPeriod(1)} aria-label={viewMode === "mes" ? "Próximo mês" : viewMode === "semana" ? "Próxima semana" : "Próximo dia"}><ChevronRight /></Button>
+        </div>
+        <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-ink md:text-card">{title}</h2>
+        {formData.branches.length > 1 ? (
+          <Select value={selectedBranchId ?? ""} onChange={(e) => setBranch(e.target.value)} aria-label="Filtrar por unidade" className="hidden h-9 w-[150px] sm:block">
+            <option value="">Todas as unidades</option>
+            {formData.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </Select>
+        ) : null}
+        {canManageSchedule ? (
+          <Button variant="ghost" size="icon" className="size-9" onClick={() => setScheduleEditor({ professionalId: null })} title="Disponibilidade" aria-label="Configurar disponibilidade"><CalendarCog /></Button>
+        ) : null}
+        <Select value={viewMode} onChange={(event) => setViewMode(event.target.value as ViewMode)} aria-label="Visualização da agenda" className="h-9 w-[112px]">
+          <option value="dia">Dia</option>
+          <option value="semana">Semana</option>
+          <option value="mes">Mês</option>
+        </Select>
+      </div>
 
       {viewMode !== "dia" ? (
         <RangeAgenda
@@ -604,20 +552,20 @@ function RangeAgenda({
 
   if (mode === "semana") {
     return (
-      <div className={cn("grid flex-1 grid-cols-1 gap-px bg-line md:grid-cols-7", navigating && "pointer-events-none opacity-60")}>
-        {days.map((day) => {
+      <div className={cn("grid min-w-0 flex-1 grid-cols-7 gap-px bg-line", navigating && "pointer-events-none opacity-60")}>
+        {days.slice(0, 7).map((day) => {
           const date = formatTz(day, "UTC", "yyyy-MM-dd");
           const items = byDay.get(date) ?? [];
           return (
-            <section key={date} className="min-h-36 bg-surface md:min-h-0">
-              <button type="button" onClick={() => onOpenDay(date)} className="flex w-full items-center justify-between border-b border-line px-3 py-2 text-left hover:bg-surface-sunken">
-                <span className="text-label font-semibold text-ink">{formatTzCapitalized(day, "UTC", "EEE")}</span>
-                <span className="text-caption tabular text-ink-secondary">{formatTz(day, "UTC", "dd/MM")}</span>
+            <section key={date} className="min-w-0 bg-surface">
+              <button type="button" onClick={() => onOpenDay(date)} className="flex w-full flex-col items-center border-b border-line px-1 py-2 text-center hover:bg-surface-sunken sm:flex-row sm:justify-between sm:px-2 sm:text-left">
+                <span className="truncate text-meta font-semibold text-ink sm:text-label">{formatTzCapitalized(day, "UTC", "EEE")}</span>
+                <span className="text-meta tabular text-ink-secondary">{formatTz(day, "UTC", "dd")}</span>
               </button>
-              <div className="space-y-1.5 p-2">
+              <div className="space-y-1 p-1 sm:p-1.5">
                 {items.length ? items.map((appointment) => (
-                  <RangeAppointment key={appointment.id} appointment={appointment} timezone={timezone} onSelect={() => onSelect(appointment.id)} />
-                )) : <p className="px-1 py-3 text-caption text-ink-tertiary">Livre</p>}
+                  <RangeAppointment key={appointment.id} appointment={appointment} timezone={timezone} compact onSelect={() => onSelect(appointment.id)} />
+                )) : <span className="block py-3 text-center text-meta text-ink-tertiary">—</span>}
               </div>
             </section>
           );
