@@ -18,11 +18,10 @@ const DESCRICAO =
   "Agenda, WhatsApp com atendimento por IA, ficha da cliente e financeiro no mesmo lugar. Um plano só, R$ 97 por mês, com 14 dias de teste.";
 
 /**
- * Na aba, o layout raiz já aplica o gabarito `%s · Lumina`. Repetir a marca
- * aqui renderizaria "Lumina — … · Lumina". `absolute` é o que dispensa o
+ * Na aba, o layout raiz já aplica o gabarito da Agenda de Unha. `absolute` dispensa o
  * gabarito: a home é a única página cujo título deve ser só o da marca.
  */
-const TITULO = "Lumina — sistema para clínicas de estética";
+const TITULO = "Agenda de Unha — gestão inteligente para manicures";
 
 export const metadata: Metadata = {
   title: { absolute: TITULO },
@@ -32,7 +31,7 @@ export const metadata: Metadata = {
     description: DESCRICAO,
     type: "website",
     locale: "pt_BR",
-    siteName: "Lumina",
+    siteName: "Agenda de Unha",
   },
   twitter: { card: "summary_large_image", title: TITULO, description: DESCRICAO },
 };

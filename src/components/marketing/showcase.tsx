@@ -129,7 +129,7 @@ export function ProductShowcase() {
               falharia no contêiner, não aqui. */}
           <img
             src={`/landing/${tela.id}.webp`}
-            alt={`Tela ${tela.aba} da Lumina`}
+            alt={`Tela ${tela.aba} da Agenda de Unha`}
             width={1600}
             height={1000}
             loading="lazy"

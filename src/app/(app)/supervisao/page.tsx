@@ -3,7 +3,7 @@ import { requireSession } from "@/server/auth";
 import { getSupervisionSnapshot } from "@/server/services/supervision-service";
 import { SupervisaoView } from "./supervisao-view";
 
-export const metadata = { title: "Supervisão — Lumina" };
+export const metadata = { title: "Supervisão" };
 export const dynamic = "force-dynamic";
 
 export default async function SupervisaoPage() {

@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AuthShell } from "../../auth-shell";
 
-// O template "%s · Lumina" do layout raiz já põe a marca; ver /entrar.
+// O template do layout raiz já põe a marca; ver /entrar.
 export const metadata = { title: "Recuperar senha" };
 
 /**
- * Tela honesta: a Lumina ainda não tem redefinição por e-mail. Em vez de
+ * Tela honesta: o produto ainda não tem redefinição por e-mail. Em vez de
  * simular um fluxo de token que não existe, explica o caminho real — pedir
  * uma nova senha a quem administra a conta da clínica.
  */
@@ -16,7 +16,7 @@ export default function RecoverPasswordPage() {
     <AuthShell>
       <h1 className="text-display text-ink">Recuperar senha</h1>
       <p className="mt-1.5 text-body text-ink-secondary">
-        A redefinição de senha por e-mail ainda não existe na Lumina. Não há nada para esperar na
+        A redefinição de senha por e-mail ainda não existe na Agenda de Unha. Não há nada para esperar na
         sua caixa de entrada.
       </p>
 

@@ -86,6 +86,7 @@
   --text-meta--font-weight: 400;
 
   --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-brand: var(--font-playfair), Georgia, serif;
 
   --ease-out-quint: cubic-bezier(0.32, 0.72, 0, 1);
 

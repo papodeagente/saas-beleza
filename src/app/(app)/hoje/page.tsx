@@ -25,7 +25,7 @@ import {
   summarize,
 } from "@/server/services/today-service";
 
-export const metadata = { title: "Hoje — Lumina" };
+export const metadata = { title: "Hoje" };
 export const dynamic = "force-dynamic";
 
 function greeting(hour: number): string {

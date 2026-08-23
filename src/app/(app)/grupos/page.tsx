@@ -3,7 +3,7 @@ import { requireSession } from "@/server/auth";
 import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { GruposView } from "./grupos-view";
 
-export const metadata = { title: "Grupos — Lumina" };
+export const metadata = { title: "Grupos" };
 export const dynamic = "force-dynamic";
 
 export default async function GruposPage() {

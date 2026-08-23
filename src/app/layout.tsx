@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
+import { Playfair_Display, Plus_Jakarta_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -9,18 +9,23 @@ const sans = Plus_Jakarta_Sans({
   subsets: ["latin"],
   display: "swap",
 });
+const brand = Playfair_Display({
+  variable: "--font-playfair",
+  subsets: ["latin"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: {
-    default: "Lumina",
-    template: "%s · Lumina",
+    default: "Agenda de Unha",
+    template: "%s · Agenda de Unha",
   },
-  description: "O sistema operacional do seu negócio de estética.",
+  description: "Gestão inteligente para manicures.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={`${sans.variable} h-full`}>
+    <html lang="pt-BR" className={`${sans.variable} ${brand.variable} h-full`}>
       <body className="min-h-full">
         {children}
         <Toaster

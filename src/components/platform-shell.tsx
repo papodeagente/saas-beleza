@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { BrandLogo } from "@/components/brand";
 
 /**
  * Chrome do painel da plataforma.
@@ -47,9 +48,7 @@ export function PlatformShell({
         className="flex w-full shrink-0 flex-col bg-[#141B34] px-3.5 py-5 md:w-[240px]"
       >
         <div className="px-2 pb-6">
-          <span className="block text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">
-            Lumina
-          </span>
+          <BrandLogo compact className="text-white" iconClassName="size-7" />
           <span className="mt-0.5 block text-[19px] font-bold leading-6 tracking-[-0.01em] text-white">
             Plataforma
           </span>

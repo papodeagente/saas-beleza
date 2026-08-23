@@ -28,6 +28,7 @@ import { useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/server/auth";
+import { BrandLogo } from "@/components/brand";
 
 export type Signal = {
   id: string;
@@ -118,8 +119,8 @@ export function AppShell({
         className="bg-brand sticky top-0 z-40 hidden h-[56px] shrink-0 items-center gap-4 px-4 md:flex"
       >
         {/* Marca do produto — separada da clínica atendida */}
-        <Link href="/hoje" className="flex shrink-0 items-baseline gap-2">
-          <span className="text-[18px] font-extrabold leading-none tracking-[0.08em] text-white">LUMINA</span>
+        <Link href="/hoje" className="flex shrink-0 items-center gap-3">
+          <BrandLogo compact className="text-white" iconClassName="size-7" />
           <span className="hidden max-w-[160px] truncate text-caption text-white/70 lg:block">
             {organization.name}
           </span>

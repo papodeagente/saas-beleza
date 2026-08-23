@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { BrandLogo } from "@/components/brand";
 import { CtaButton } from "./primitives";
 
 const LINKS = [
@@ -48,8 +49,8 @@ export function MarketingNav({ ctaHref, ctaLabel }: { ctaHref: string; ctaLabel:
         aria-label="Principal"
         className="mx-auto flex h-[72px] w-full max-w-[1200px] items-center gap-6 px-[clamp(20px,4vw,32px)]"
       >
-        <Link href="/" className="shrink-0 text-title font-extrabold tracking-[0.1em] text-night-ink">
-          LUMINA
+        <Link href="/" className="shrink-0">
+          <BrandLogo compact className="text-night-ink" iconClassName="size-8" />
         </Link>
 
         <ul className="ml-4 hidden flex-1 items-center gap-7 lg:flex">

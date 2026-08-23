@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { PlatformShell } from "@/components/platform-shell";
 import { getPlatformSession } from "@/server/platform-auth";
 
-export const metadata = { title: { default: "Plataforma", template: "%s · Plataforma Lumina" } };
+export const metadata = { title: { default: "Plataforma", template: "%s · Plataforma Agenda de Unha" } };
 
 export default async function PlatformLayout({ children }: { children: React.ReactNode }) {
   const ctx = await getPlatformSession();

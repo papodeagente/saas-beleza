@@ -7,7 +7,7 @@ import { requireSession } from "@/server/auth";
 import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { AgentView } from "./agente-view";
 
-export const metadata = { title: "Agente de IA — Lumina" };
+export const metadata = { title: "Agente de IA" };
 export const dynamic = "force-dynamic";
 
 export default async function AgentePage() {

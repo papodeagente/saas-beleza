@@ -21,7 +21,7 @@ import { formatPhone } from "@/lib/phone";
 import { requireRole, requireSession } from "@/server/auth";
 import { CopyLink } from "./copy-link";
 
-export const metadata = { title: "Gestão — Lumina" };
+export const metadata = { title: "Gestão" };
 export const dynamic = "force-dynamic";
 
 const ROLE_LABEL: Record<string, string> = {

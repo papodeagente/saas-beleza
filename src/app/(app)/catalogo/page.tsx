@@ -9,7 +9,7 @@ import { professionalServices, professionals, serviceCategories, services } from
 import { formatBRL } from "@/lib/money";
 import { requireSession } from "@/server/auth";
 
-export const metadata = { title: "Catálogo — Lumina" };
+export const metadata = { title: "Catálogo" };
 export const dynamic = "force-dynamic";
 
 const RESOURCE_NEED: Record<string, string> = {

@@ -20,7 +20,7 @@ import {
   listTransactions,
 } from "@/server/services/finance-service";
 
-export const metadata = { title: "Financeiro — Lumina" };
+export const metadata = { title: "Financeiro" };
 export const dynamic = "force-dynamic";
 
 const STATUS: Record<string, { label: string; tone: "positive" | "attention" | "danger" | "neutral" }> = {

@@ -14,6 +14,7 @@ import {
 } from "@/components/marketing/primitives";
 import { Reveal } from "@/components/marketing/reveal";
 import { ProductShowcase } from "@/components/marketing/showcase";
+import { BrandLogo } from "@/components/brand";
 import { cn } from "@/lib/utils";
 import { listPublicPlans, planCta } from "@/server/services/public-plans";
 
@@ -115,7 +116,7 @@ const PERGUNTAS: Pergunta[] = [
     pergunta: "Preciso de um número de WhatsApp novo?",
     resposta: (
       <>
-        Não. A Lumina conecta o número que sua clínica já usa, com as conversas que já existem lá. A
+        Não. A Agenda de Unha conecta o número que seu espaço já usa, com as conversas que já existem lá. A
         conexão é feita lendo um QR Code, como no WhatsApp Web.
       </>
     ),
@@ -239,7 +240,7 @@ export default async function LandingPage() {
               </h1>
 
               <p className="animate-rise-in mt-6 max-w-[54ch] text-pretty text-lede text-night-ink-secondary [animation-delay:180ms]">
-                A Lumina responde a cliente, consulta a agenda de verdade e marca o horário sozinha.
+                A Agenda de Unha responde a cliente, consulta a agenda de verdade e marca o horário sozinha.
                 Do primeiro oi até o caixa do mês, tudo acontece no mesmo sistema.
               </p>
 
@@ -291,7 +292,7 @@ export default async function LandingPage() {
               falharia no contêiner, não aqui. */}
                 <img
                   src="/landing/hoje.webp"
-                  alt="A tela Hoje da Lumina, com os atendimentos do dia e o que precisa de atenção"
+                  alt="A tela Hoje da Agenda de Unha, com os atendimentos do dia e o que precisa de atenção"
                   width={1600}
                   height={1000}
                   fetchPriority="high"
@@ -364,7 +365,7 @@ export default async function LandingPage() {
             <SectionHead
               eyebrow="Agente de IA"
               title="Uma atendente que não dorme e não inventa"
-              description="A maioria dos robôs de WhatsApp chuta preço e promete horário que não existe. O agente da Lumina não consegue fazer isso, e o motivo é como ele foi construído: ele não sabe nada de cor, consulta o sistema a cada resposta."
+              description="A maioria dos robôs de WhatsApp chuta preço e promete horário que não existe. O agente da Agenda de Unha não consegue fazer isso: ele consulta o sistema a cada resposta."
             />
 
             <div className="mt-12 grid gap-5 lg:grid-cols-2">
@@ -433,7 +434,7 @@ export default async function LandingPage() {
             <div className="mx-auto mt-12 max-w-[980px]">
               <div className="hidden grid-cols-2 gap-6 pb-3 md:grid">
                 <span className="text-eyebrow text-night-ink-tertiary">Como é hoje</span>
-                <span className="text-eyebrow text-accent-lift">Com a Lumina</span>
+                <span className="text-eyebrow text-accent-lift">Com a Agenda de Unha</span>
               </div>
 
               <ul className="divide-y divide-night-line border-t border-night-line">
@@ -446,7 +447,7 @@ export default async function LandingPage() {
                       {linha.antes}
                     </p>
                     <p className="text-body text-night-ink md:pl-6">
-                      <span className="mr-2 text-eyebrow text-accent-lift md:hidden">Lumina</span>
+                      <span className="mr-2 text-eyebrow text-accent-lift md:hidden">Agenda de Unha</span>
                       {linha.depois}
                     </p>
                   </Reveal>
@@ -549,9 +550,9 @@ export default async function LandingPage() {
           <div className={cn(CONTAINER, "border-t border-night-line pt-10")}>
             <div className="flex flex-wrap items-start justify-between gap-8">
               <div className="max-w-[34ch]">
-                <p className="text-title font-extrabold tracking-[0.1em] text-night-ink">LUMINA</p>
+                <BrandLogo className="text-night-ink" />
                 <p className="mt-2 text-body text-night-ink-secondary">
-                  O sistema operacional do seu negócio de estética.
+                  Gestão inteligente para manicures.
                 </p>
               </div>
 
@@ -603,7 +604,7 @@ export default async function LandingPage() {
             </div>
 
             <p className="mt-10 text-caption text-night-ink-tertiary">
-              Lumina · Sistema de gestão para clínicas de estética · Feito no Brasil
+              Agenda de Unha · Gestão inteligente para manicures · Feito no Brasil
             </p>
           </div>
         </footer>

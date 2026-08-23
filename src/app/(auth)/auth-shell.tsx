@@ -22,16 +22,14 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
       */}
       <aside className="bg-brand flex shrink-0 flex-col justify-between gap-10 px-6 py-5 lg:px-10 lg:py-10">
         {/* Mesmo lockup da barra do painel, letra por letra. */}
-        <p className="text-[18px] font-extrabold leading-none tracking-[0.08em] text-white">
-          LUMINA
-        </p>
+        <BrandLogo compact className="text-white" />
 
         <div className="hidden lg:block">
           <p className="max-w-[20ch] text-display text-white">
-            Agenda, WhatsApp e caixa da clínica no mesmo lugar.
+            Agenda, WhatsApp e caixa do seu espaço no mesmo lugar.
           </p>
           <p className="mt-3 max-w-[34ch] text-body text-white">
-            Feito para clínicas de estética que vivem de horário cheio.
+            Gestão inteligente para manicures que vivem de agenda cheia.
           </p>
         </div>
       </aside>
@@ -45,3 +43,4 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+import { BrandLogo } from "@/components/brand";

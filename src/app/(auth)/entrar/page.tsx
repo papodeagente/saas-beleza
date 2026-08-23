@@ -4,8 +4,8 @@ import { getSession } from "@/server/auth";
 import { AuthShell } from "../auth-shell";
 import { LoginForm } from "./login-form";
 
-// Só o nome da tela: o layout raiz já aplica o template "%s · Lumina". Repetir
-// a marca aqui rendia a aba "Entrar — Lumina · Lumina" — e a aba é a primeira
+// Só o nome da tela: o layout raiz já aplica o template da marca. Repetir
+// a marca aqui duplicaria o nome na aba — e a aba é a primeira
 // coisa que a pessoa vê ao atravessar do site para o login.
 export const metadata = { title: "Entrar" };
 

@@ -5,7 +5,7 @@ import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { loadConversationAction } from "./actions";
 import { InboxView } from "./inbox-view";
 
-export const metadata = { title: "Inbox — Lumina" };
+export const metadata = { title: "Inbox" };
 export const dynamic = "force-dynamic";
 
 const TABS: InboxTab[] = ["meus", "fila", "todos", "resolvidas"];

@@ -8,7 +8,7 @@ import { listAutomationRules, type AutomationTrigger } from "@/server/services/a
 import { AutomationForm } from "./automation-form";
 import { deleteAutomationAction, toggleAutomationAction } from "./actions";
 
-export const metadata = { title: "Automações — Lumina" };
+export const metadata = { title: "Automações" };
 export const dynamic = "force-dynamic";
 
 const TRIGGER_LABEL: Record<AutomationTrigger, (days: number) => string> = {

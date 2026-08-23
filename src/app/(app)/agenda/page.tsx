@@ -8,7 +8,7 @@ import { getScheduleSettings } from "@/server/services/schedule-settings-service
 import { dateISOInTz, dayRangeInTz } from "@/lib/tz";
 import { AgendaView } from "./agenda-view";
 
-export const metadata = { title: "Agenda — Lumina" };
+export const metadata = { title: "Agenda" };
 export const dynamic = "force-dynamic";
 
 function resolveDay(param: string | undefined): Date {

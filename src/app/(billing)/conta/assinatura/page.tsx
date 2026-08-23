@@ -2,6 +2,7 @@ import { Check } from "lucide-react";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { BrandLogo } from "@/components/brand";
 import { formatBRL } from "@/lib/money";
 import { formatMonths } from "@/lib/pricing";
 import { formatTz } from "@/lib/tz";
@@ -122,15 +123,7 @@ export default async function SubscriptionGatePage() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col justify-center px-6 py-12">
       <div className="mb-6">
-        <p className="flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className="flex size-8 items-center justify-center rounded-control bg-accent text-label font-semibold text-white"
-          >
-            L
-          </span>
-          <span className="text-title font-extrabold tracking-[0.08em] text-ink">Lumina</span>
-        </p>
+        <BrandLogo compact />
       </div>
 
       <Card className="px-5 py-5">

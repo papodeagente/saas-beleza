@@ -2,7 +2,7 @@
 
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowLeft, CalendarCheck, Check, ChevronRight, Clock, MapPin, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Check, ChevronRight, Clock, MapPin, ShieldCheck } from "lucide-react";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { Field, Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBRL } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { BrandLogo } from "@/components/brand";
 import {
   type BookingConfirmation,
   publicBookingAction,
@@ -530,12 +531,10 @@ function BookingAside({
     <aside className="relative overflow-hidden bg-brand px-5 py-6 text-white sm:px-10 lg:px-9 lg:py-10">
       <div aria-hidden className="absolute -right-20 -top-20 size-64 rounded-pill border border-white/10" />
       <div aria-hidden className="absolute -bottom-24 -left-20 size-72 rounded-pill bg-white/5" />
-      <div className="relative flex items-center gap-3 lg:block">
-        <span className="flex size-10 items-center justify-center rounded-pill bg-white/14 ring-1 ring-white/20">
-          <Sparkles className="size-5" aria-hidden />
-        </span>
-        <div className="min-w-0 lg:mt-6">
-          <p className="truncate text-title text-white">{organizationName}</p>
+      <div className="relative">
+        <BrandLogo compact className="text-white" iconClassName="size-9" />
+        <div className="mt-4 min-w-0 lg:mt-6">
+          <p className="truncate text-label font-semibold text-white">{organizationName}</p>
           <p className="mt-0.5 text-caption text-white/70">Cuidado no seu tempo</p>
         </div>
       </div>
@@ -633,7 +632,7 @@ function Detail({ label, value, hint }: { label: string; value: string; hint?: s
 }
 
 function Footer() {
-  return <p className="mt-10 text-meta text-ink-secondary">agendamento por Lumina</p>;
+  return <p className="mt-10 text-meta text-ink-secondary">agendamento por Agenda de Unha</p>;
 }
 
 /**
