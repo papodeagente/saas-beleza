@@ -1,0 +1,2 @@
+ALTER TABLE "conversations" ADD COLUMN "started_by_user_id" bigint;--> statement-breakpoint
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_started_by_user_id_users_id_fk" FOREIGN KEY ("started_by_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;

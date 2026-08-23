@@ -57,6 +57,11 @@ export default async function InboxPage({
       currentUserId={ctx.userId}
       whatsappConnected={connection?.status === "connected"}
       canSupervise={ctx.role === "owner" || ctx.role === "admin"}
+      // Sempre verdadeiro aqui porque a própria página já devolve
+      // 'professional' para /hoje. A prop existe para a tela não ter que
+      // conhecer a regra de papel, e para o dia em que ela deixar de ser
+      // a mesma do acesso à página.
+      canStartConversation
     />
   );
 }

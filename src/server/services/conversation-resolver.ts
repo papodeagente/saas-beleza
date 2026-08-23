@@ -20,6 +20,22 @@ export type ResolveInput = {
   phone: string | null;
   contactName: string | null;
   isGroup: boolean;
+  /**
+   * Cliente já decidida por quem chamou. Quando vem preenchida, a busca por
+   * telefone é PULADA.
+   *
+   * Existe porque as duas metades do produto guardam telefone de formas
+   * diferentes: o cadastro grava o que a recepção digitou (11 dígitos, sem o
+   * 55) e o WhatsApp grava o canônico (13 dígitos). A busca daqui compara com o
+   * canônico, então metade da base não é encontrada e um cadastro NOVO nasce em
+   * cima de um que já existia. Quem já sabe de quem é a conversa — a tela que
+   * inicia o contato, onde uma pessoa escolheu a cliente na lista — não deve
+   * apostar nessa comparação.
+   *
+   * Campo opcional de propósito: o webhook não o envia e continua exatamente
+   * com o comportamento de antes.
+   */
+  customerId?: number | null;
 };
 
 export type ResolvedConversation = {
@@ -37,7 +53,20 @@ function isPlaceholderName(name: string, phone: string | null): boolean {
   if (!name.trim()) return true;
   if (!phone) return false;
   const digits = name.replace(/\D/g, "");
-  return digits.length >= 8 && digits === phone.replace(/\D/g, "");
+  // Menos de 8 dígitos não é telefone: "Studio 2024" continua sendo um nome.
+  if (digits.length < 8) return false;
+  /**
+   * A comparação é entre formas CANÔNICAS, e não entre os dígitos crus.
+   *
+   * O nome provisório é escrito por `formatBrPhone`, que esconde o 55:
+   * "(27) 98102-7211" tem 11 dígitos. O telefone guardado é canônico:
+   * 5527981027211, 13 dígitos. Comparados crus eles nunca coincidem, então o
+   * nome provisório NUNCA era substituído pelo nome real do WhatsApp — a
+   * cliente ficava para sempre chamada pelo próprio telefone (verificado no
+   * banco: clientes 63 e 64 da organização 1).
+   */
+  const doNome = canonicalBrPhone(digits);
+  return doNome !== null && doNome === canonicalBrPhone(phone);
 }
 
 async function resolveCustomer(
@@ -91,7 +120,7 @@ export async function resolveConversation(input: ResolveInput): Promise<Resolved
     // que o cadastro aparece.
     let customerId = existing.customerId;
     if (!customerId && !isGroup) {
-      customerId = await resolveCustomer(organizationId, phone, contactName);
+      customerId = input.customerId ?? (await resolveCustomer(organizationId, phone, contactName));
       if (customerId) patch.customerId = customerId;
     }
     if (Object.keys(patch).length > 0) {
@@ -123,17 +152,27 @@ export async function resolveConversation(input: ResolveInput): Promise<Resolved
       .limit(1);
 
     if (byPhone) {
+      // Só preenche o vínculo quando ele está faltando: a cliente que já está
+      // na conversa vale mais do que a que quem chamou supôs.
+      const vinculado = byPhone.customerId ?? input.customerId ?? null;
       // Passa a usar o JID que o WhatsApp está usando agora: é para ele que o
       // envio precisa ir.
       await db
         .update(conversations)
-        .set({ remoteJid, connectionId, ...(contactName ? { contactName } : {}) })
+        .set({
+          remoteJid,
+          connectionId,
+          ...(contactName ? { contactName } : {}),
+          ...(byPhone.customerId ? {} : { customerId: vinculado }),
+        })
         .where(eq(conversations.id, byPhone.id));
-      return { conversationId: byPhone.id, customerId: byPhone.customerId, created: false };
+      return { conversationId: byPhone.id, customerId: vinculado, created: false };
     }
   }
 
-  const customerId = isGroup ? null : await resolveCustomer(organizationId, phone, contactName);
+  const customerId = isGroup
+    ? null
+    : (input.customerId ?? (await resolveCustomer(organizationId, phone, contactName)));
 
   // Uma conversa criada por outro caminho (importação, cadastro manual) ainda
   // não tem JID. Adotá-la evita a segunda conversa para o mesmo cliente.

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { presenceAction, sendMediaAction, sendMessageAction } from "./actions";
+import { presenceAction, sendMediaAction } from "./actions";
 
 /**
  * Compositor do inbox.
@@ -63,12 +63,19 @@ export function Composer({
   disabled,
   reply,
   onClearReply,
+  onEnviar,
   onSent,
 }: {
   conversationId: number;
   disabled?: boolean;
   reply: ReplyTarget;
   onClearReply: () => void;
+  /**
+   * Registra o texto na conversa ANTES de falar com o servidor e devolve se
+   * conseguiu. O envio em si é do inbox: é lá que a bolha otimista existe e é
+   * ela que passa a guardar o que foi digitado.
+   */
+  onEnviar: (entrada: { body: string; replyToExternalId?: string }) => boolean;
   onSent: () => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -119,24 +126,26 @@ export function Composer({
     void presenceAction({ conversationId, presence: "composing" });
   }
 
+  /**
+   * A caixa só é esvaziada depois que o texto está guardado em outro lugar.
+   *
+   * Antes, `setDraft("")` rodava antes do `await` e a restauração só existia no
+   * ramo `!result.ok`: quando a chamada REJEITAVA — rede caindo, 500 do
+   * servidor — o texto sumia para sempre e ninguém era avisado. Agora quem
+   * segura a frase é a bolha otimista, que ainda oferece "tentar de novo".
+   */
   function enviarTexto() {
     const body = draft.trim();
     if (!body) return;
-    setDraft("");
-    startEnviando(async () => {
-      const result = await sendMessageAction({
-        conversationId,
-        body,
-        replyToExternalId: reply?.externalId ?? undefined,
-      });
-      if (!result.ok) {
-        toast.error(result.error);
-        setDraft(body);
-        return;
-      }
+    try {
+      const registrou = onEnviar({ body, replyToExternalId: reply?.externalId ?? undefined });
+      if (!registrou) return;
+      setDraft("");
       onClearReply();
-      onSent();
-    });
+    } catch (erro) {
+      console.error(erro);
+      toast.error("Não foi possível enviar a mensagem. O texto continua aqui.");
+    }
   }
 
   async function enviarArquivo(file: File) {
@@ -144,23 +153,36 @@ export function Composer({
       toast.error("Arquivo muito grande. O limite é 10 MB.");
       return;
     }
-    const dataUrl = await lerArquivo(file);
+    let dataUrl: string;
+    try {
+      dataUrl = await lerArquivo(file);
+    } catch {
+      toast.error("Não consegui ler o arquivo. Tente de novo.");
+      return;
+    }
     startEnviando(async () => {
-      const result = await sendMediaAction({
-        conversationId,
-        dataUrl,
-        kind: tipoDoArquivo(file),
-        fileName: file.name,
-        caption: draft.trim() || undefined,
-        replyToExternalId: reply?.externalId ?? undefined,
-      });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
+      try {
+        const result = await sendMediaAction({
+          conversationId,
+          dataUrl,
+          kind: tipoDoArquivo(file),
+          fileName: file.name,
+          caption: draft.trim() || undefined,
+          replyToExternalId: reply?.externalId ?? undefined,
+        });
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
+        // A legenda só sai da caixa depois da confirmação: ela viaja junto com
+        // o anexo e não tem bolha otimista para segurá-la.
+        setDraft("");
+        onClearReply();
+        onSent();
+      } catch (erro) {
+        console.error(erro);
+        toast.error("Não foi possível enviar o anexo. A legenda continua na caixa.");
       }
-      setDraft("");
-      onClearReply();
-      onSent();
     });
   }
 
@@ -205,27 +227,39 @@ export function Composer({
         toast.error("Gravação curta demais.");
         return;
       }
-      const dataUrl = await new Promise<string>((resolve) => {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Não consegui ler a gravação."));
         reader.readAsDataURL(blob);
-      });
+      }).catch(() => null);
+      if (!dataUrl) {
+        toast.error("Não consegui ler a gravação. Grave de novo.");
+        return;
+      }
 
       startEnviando(async () => {
-        const result = await sendMediaAction({
-          conversationId,
-          dataUrl,
-          // `ptt` é a mensagem de voz que toca direto na conversa.
-          kind: "ptt",
-          fileName: "audio.ogg",
-          replyToExternalId: reply?.externalId ?? undefined,
-        });
-        if (!result.ok) {
-          toast.error(result.error);
-          return;
+        try {
+          const result = await sendMediaAction({
+            conversationId,
+            dataUrl,
+            // `ptt` é a mensagem de voz que toca direto na conversa.
+            kind: "ptt",
+            fileName: "audio.ogg",
+            replyToExternalId: reply?.externalId ?? undefined,
+          });
+          if (!result.ok) {
+            toast.error(result.error);
+            return;
+          }
+          onClearReply();
+          onSent();
+        } catch (erro) {
+          // Sem isto, uma rejeição aqui vira erro não tratado dentro do
+          // callback do MediaRecorder: a gravação some e nada é dito.
+          console.error(erro);
+          toast.error("Não foi possível enviar a mensagem de voz. Grave de novo.");
         }
-        onClearReply();
-        onSent();
       });
     };
     rec.stop();

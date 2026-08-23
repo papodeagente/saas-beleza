@@ -1,24 +1,21 @@
 "use client";
 
-import { format } from "date-fns";
+import { differenceInCalendarDays, format, isToday, isYesterday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   Bot,
   CalendarCheck,
   Check,
-  CheckCheck,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   Clock,
-  FileText,
   Headphones,
-  Image as ImageIcon,
   Inbox as InboxIcon,
   LayoutGrid,
   ListOrdered,
   Mail,
   MessageSquare,
-  Mic,
   PanelRightClose,
   PanelRightOpen,
   Pause,
@@ -36,21 +33,29 @@ import {
   Wallet,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, DataRow } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { formatBRL } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import { listGroupsAction } from "../grupos/actions";
-import { loadMediaAction } from "./actions";
 import { Composer, type ReplyTarget } from "./composer";
-import { MessageActions } from "./message-actions";
+import { NewConversationButton } from "./new-conversation-dialog";
+import {
+  DeliveryTick,
+  MEDIA_ICON,
+  MEDIA_LABEL,
+  MessageBubble,
+  SeparadorDeData,
+  mesmoDia,
+  mesmoGrupo,
+  textoVisivel,
+} from "./message-bubble";
 import {
   type InboxDetail,
   listConversationsAction,
@@ -74,6 +79,9 @@ type ConversationItem = {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   lastMessageInbound: boolean;
+  lastMessageType: string | null;
+  lastMessageStatus: string | null;
+  lastMessageTranscription: string | null;
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
@@ -82,8 +90,24 @@ type ConversationItem = {
 
 type Tab = "meus" | "fila" | "todos" | "resolvidas";
 
-/** Mensagem que já está na tela mas ainda não foi confirmada pelo servidor. */
-type Draft = { tempId: string; conversationId: number; body: string; failed: boolean };
+/**
+ * Mensagem que já está na tela mas ainda não foi confirmada pelo servidor.
+ *
+ * `criadoEm` existe para casar o rascunho com a mensagem de verdade quando ela
+ * chega pela leitura periódica: sem a janela de tempo, duas mensagens iguais
+ * enviadas em momentos diferentes se confundiriam e uma sumiria da tela.
+ */
+type Draft = {
+  tempId: string;
+  conversationId: number;
+  body: string;
+  replyToExternalId?: string;
+  failed: boolean;
+  criadoEm: number;
+};
+
+/** Quanto tempo depois do rascunho a mensagem confirmada ainda conta como ele. */
+const JANELA_DO_ECO_MS = 120_000;
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof InboxIcon }> = [
   { id: "meus", label: "Meus", icon: InboxIcon },
@@ -99,26 +123,44 @@ const CHANNEL_LABEL: Record<string, string> = {
   site: "Site",
 };
 
-const MEDIA_ICON: Partial<Record<string, typeof ImageIcon>> = {
-  image: ImageIcon,
-  video: ImageIcon,
-  audio: Mic,
-  document: FileText,
-};
-
 /** Atualização em segundo plano: sem isso a atendente precisa recarregar a página. */
 const POLL_MS = 10_000;
 
-function relativeTime(iso: string): string {
-  const date = new Date(iso);
-  const minutes = Math.round((Date.now() - date.getTime()) / 60000);
-  if (minutes < 1) return "agora";
-  if (minutes < 60) return `há ${minutes} min`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `há ${hours} h`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `há ${days} d`;
-  return format(date, "d MMM", { locale: ptBR });
+/**
+ * Quando a conversa falou pela última vez.
+ *
+ * "há 13 h" obriga a fazer conta para saber se foi antes ou depois do almoço —
+ * e a atendente precisa exatamente disso para decidir o que responder primeiro.
+ * Hora absoluta hoje, dia da semana na semana corrente, data depois: é a régua
+ * de todo aplicativo de mensagem porque é a que dispensa a conta.
+ */
+function horaDaLista(iso: string): string {
+  const data = new Date(iso);
+  if (isToday(data)) return format(data, "HH:mm", { locale: ptBR });
+  if (isYesterday(data)) return "Ontem";
+  if (differenceInCalendarDays(new Date(), data) < 7) return format(data, "EEEEEE", { locale: ptBR });
+  return format(data, "dd/MM", { locale: ptBR });
+}
+
+/**
+ * A frase da prévia na lista.
+ *
+ * Antes, mensagem sem corpo — foto, áudio, documento — deixava a linha vazia ou
+ * mostrava o marcador interno `[áudio]`. Quem varre a fila fica sem saber se a
+ * cliente mandou uma foto do resultado ou uma dúvida.
+ */
+function previaDaConversa(conversation: ConversationItem): { texto: string; rotulo: string | null } {
+  const tipo = conversation.lastMessageType ?? "text";
+  const rotulo = MEDIA_LABEL[tipo] ?? null;
+  const corpo = textoVisivel(conversation.lastMessagePreview);
+
+  if (tipo === "audio" || tipo === "ptt") {
+    // A transcrição é mais útil que o rótulo: diz o que foi pedido sem ouvir.
+    return { texto: conversation.lastMessageTranscription?.trim() || "Mensagem de voz", rotulo: "Mensagem de voz" };
+  }
+  if (corpo) return { texto: corpo, rotulo };
+  if (rotulo) return { texto: rotulo, rotulo };
+  return { texto: conversation.lastMessageAt ? "Mensagem" : "Sem mensagens", rotulo: null };
 }
 
 export function InboxView({
@@ -130,6 +172,7 @@ export function InboxView({
   currentUserId,
   whatsappConnected,
   canSupervise,
+  canStartConversation,
 }: {
   conversations: ConversationItem[];
   counts: { meus: number; fila: number; todos: number };
@@ -139,8 +182,13 @@ export function InboxView({
   currentUserId: number;
   whatsappConnected: boolean;
   canSupervise: boolean;
+  /** Iniciar conversa é ação de staff; profissional não vê o botão. */
+  canStartConversation: boolean;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  /** O que está digitado na busca. */
+  const [termo, setTermo] = useState("");
+  /** O que já virou consulta — atrasado em 300 ms para não pedir por tecla. */
   const [search, setSearch] = useState("");
   const [list, setList] = useState<ConversationItem[]>(conversations);
   const [tabCounts, setTabCounts] = useState(counts);
@@ -173,16 +221,52 @@ export function InboxView({
   );
   const [fichaAberta, setFichaAberta] = useState<boolean | null>(null);
   const mostrarFicha = fichaAberta ?? fichaCabe;
+  /**
+   * Só no desktop a lista e a conversa convivem. No celular a lista É a tela, e
+   * escolher uma conversa sozinho tiraria a atendente de onde ela está.
+   */
+  const doisPaineis = useSyncExternalStore(
+    (aoMudar) => {
+      const consulta = window.matchMedia("(min-width: 768px)");
+      consulta.addEventListener("change", aoMudar);
+      return () => consulta.removeEventListener("change", aoMudar);
+    },
+    () => window.matchMedia("(min-width: 768px)").matches,
+    () => true,
+  );
   const [, startSending] = useTransition();
   const [, startSwitching] = useTransition();
   const [acting, startActing] = useTransition();
   const threadRef = useRef<HTMLDivElement>(null);
   const listReqRef = useRef(0);
   const requestRef = useRef<number | null>(null);
+  /** Botão de descer + contador do que chegou enquanto se lia o histórico. */
+  const [longeDoFim, setLongeDoFim] = useState(false);
+  const [naoVistas, setNaoVistas] = useState(0);
+  const pertoDoFimRef = useRef(true);
+  const conversaRolada = useRef<number | null>(null);
+  const totalRenderizado = useRef(0);
 
   const activeId = selectedId ?? initialDetail?.conversationId ?? null;
   const detail = activeId == null ? null : (cache[activeId] ?? null);
-  const conversationDrafts = drafts.filter((d) => d.conversationId === activeId);
+  /**
+   * O rascunho some assim que a mensagem de verdade aparece no fio.
+   *
+   * Sem este casamento a bolha aparecia DUAS vezes: a leitura periódica traz a
+   * mensagem confirmada em até dez segundos, e o rascunho só saía quando o
+   * `sendMessageAction` respondia. Corpo igual e criada depois que o envio
+   * começou é o que identifica o par — o par (corpo, janela) evita que uma
+   * mensagem idêntica de antes engula um rascunho que ainda precisa de "tentar
+   * de novo".
+   */
+  const conversationDrafts = drafts.filter((d) => {
+    if (d.conversationId !== activeId) return false;
+    return !(detail?.messages ?? []).some((m) => {
+      if (m.direction !== "outbound" || m.body !== d.body) return false;
+      const quando = new Date(m.createdAt).getTime();
+      return quando > d.criadoEm - 5_000 && quando < d.criadoEm + JANELA_DO_ECO_MS;
+    });
+  });
   const loading = activeId != null && !detail;
 
   useEffect(() => {
@@ -196,9 +280,81 @@ export function InboxView({
     };
   }, [whatsappConnected]);
 
+  /**
+   * Rolagem automática só quando ela é bem-vinda.
+   *
+   * Antes o efeito rolava à força a cada leitura periódica: quem estava lendo o
+   * histórico de dez dias atrás era arrancado para o rodapé de dez em dez
+   * segundos, sem ter feito nada. Agora só desce se a conversa MUDOU (aí o
+   * rodapé é o começo natural) ou se já se estava colado no fim — e o que chegou
+   * enquanto se lia vira contador no botão de descer, em vez de um empurrão.
+   */
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [detail?.conversationId, detail?.messages.length, conversationDrafts.length]);
+    const alvo = threadRef.current;
+    if (!alvo || detail == null) return;
+    const total = detail.messages.length + conversationDrafts.length;
+
+    if (conversaRolada.current !== detail.conversationId) {
+      conversaRolada.current = detail.conversationId;
+      totalRenderizado.current = total;
+      pertoDoFimRef.current = true;
+      setNaoVistas(0);
+      setLongeDoFim(false);
+      alvo.scrollTo({ top: alvo.scrollHeight });
+      return;
+    }
+
+    const chegaram = total - totalRenderizado.current;
+    totalRenderizado.current = total;
+    if (pertoDoFimRef.current) {
+      alvo.scrollTo({ top: alvo.scrollHeight });
+      return;
+    }
+    if (chegaram > 0) setNaoVistas((atual) => atual + chegaram);
+  }, [detail, conversationDrafts.length]);
+
+  /**
+   * Guarda a conversa recém-lida e aposenta os rascunhos que ela já contém.
+   *
+   * A limpeza mora aqui, e não num efeito sobre `detail`, porque é consequência
+   * direta de uma leitura: sem ela o rascunho ficaria invisível mas eterno no
+   * estado, e um "tentar de novo" tardio reenviaria algo que já saiu.
+   */
+  const guardarConversa = useCallback((conversationId: number, loaded: InboxDetail) => {
+    setCache((prev) => ({ ...prev, [conversationId]: loaded }));
+    setDrafts((atuais) => {
+      const restantes = atuais.filter((d) => {
+        if (d.conversationId !== conversationId) return true;
+        return !loaded.messages.some((m) => {
+          if (m.direction !== "outbound" || m.body !== d.body) return false;
+          const quando = new Date(m.createdAt).getTime();
+          return quando > d.criadoEm - 5_000 && quando < d.criadoEm + JANELA_DO_ECO_MS;
+        });
+      });
+      return restantes.length === atuais.length ? atuais : restantes;
+    });
+  }, []);
+
+  function aoRolar() {
+    const alvo = threadRef.current;
+    if (!alvo) return;
+    const distancia = alvo.scrollHeight - alvo.scrollTop - alvo.clientHeight;
+    // Duas fronteiras de propósito: 80px é "ainda estou no fim, pode descer
+    // sozinho"; 200px é "já subi de verdade, me ofereça o botão". Uma fronteira
+    // só faria o botão piscar exatamente onde a rolagem automática age.
+    pertoDoFimRef.current = distancia < 80;
+    setLongeDoFim(distancia > 200);
+    if (distancia < 80) setNaoVistas((atual) => (atual === 0 ? atual : 0));
+  }
+
+  function descerAoFim() {
+    const alvo = threadRef.current;
+    if (!alvo) return;
+    pertoDoFimRef.current = true;
+    setNaoVistas(0);
+    setLongeDoFim(false);
+    alvo.scrollTo({ top: alvo.scrollHeight, behavior: "smooth" });
+  }
 
   /**
    * Recarrega a lista.
@@ -210,18 +366,20 @@ export function InboxView({
    * clicar numa delas abria conversa que não pertencia ao filtro.
    */
   const refreshList = useCallback(
-    async (nextTab: Tab, term: string) => {
+    async (nextTab: Tab, term: string): Promise<ConversationItem[] | null> => {
       const meu = (listReqRef.current += 1);
       const resultado = await listConversationsAction({ tab: nextTab, search: term || undefined });
-      if (listReqRef.current !== meu) return;
+      if (listReqRef.current !== meu) return null;
       if (!resultado.ok) {
         toast.error(resultado.error);
-        return;
+        return null;
       }
-      setList(resultado.rows as ConversationItem[]);
+      const linhas = resultado.rows as ConversationItem[];
+      setList(linhas);
       // Os contadores viajam junto: antes eles vinham só no carregamento da
       // página e "Fila 3" continuava 3 enquanto chegavam mais dez.
       setTabCounts(resultado.counts);
+      return linhas;
     },
     [],
   );
@@ -234,23 +392,58 @@ export function InboxView({
       await refreshList(tab, search);
       if (activeId) {
         const loaded = await loadConversationAction(activeId, { markRead: false });
-        if (loaded) setCache((prev) => ({ ...prev, [activeId]: loaded }));
+        if (loaded) guardarConversa(activeId, loaded);
       }
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [tab, search, activeId, refreshList]);
+  }, [tab, search, activeId, refreshList, guardarConversa]);
+
+  /**
+   * Busca com respiro de 300 ms.
+   *
+   * "mariana" disparava sete consultas ao servidor, uma por tecla, e as seis
+   * primeiras eram jogadas fora pela guarda de sequência — trabalho puro de
+   * banco por letra digitada.
+   */
+  const montou = useRef(false);
+  useEffect(() => {
+    if (!montou.current) {
+      // A primeira lista já veio renderizada pelo servidor; repetir a consulta
+      // no mount seria uma ida à toa em toda abertura do inbox.
+      montou.current = true;
+      return;
+    }
+    const timer = setTimeout(() => setSearch(termo), 300);
+    return () => clearTimeout(timer);
+  }, [termo]);
+
+  // A comparação com o termo já aplicado é o que impede a troca de aba de
+  // consultar duas vezes: `changeTab` já recarrega, e este efeito só reage a
+  // uma busca de fato nova.
+  const buscaAplicada = useRef(search);
+  useEffect(() => {
+    if (buscaAplicada.current === search) return;
+    buscaAplicada.current = search;
+    void refreshList(tab, search);
+  }, [search, tab, refreshList]);
 
   function changeTab(next: Tab) {
     setTab(next);
     startSwitching(async () => {
-      await refreshList(next, search);
-    });
-  }
-
-  function onSearch(value: string) {
-    setSearch(value);
-    startSwitching(async () => {
-      await refreshList(tab, value);
+      const linhas = await refreshList(next, search);
+      if (!linhas || !doisPaineis) return;
+      // No desktop os dois painéis convivem: sem isto, trocar de aba deixava
+      // metade da tela em "Escolha uma conversa" mesmo com a lista cheia.
+      if (linhas.length === 0) {
+        setSelectedId(null);
+        syncUrl(null);
+        return;
+      }
+      // `marcarLida: false` porque ninguém escolheu esta conversa — a aba
+      // escolheu por ela. Marcar lida aqui apagava o não lido da primeira da
+      // Fila só porque alguém clicou na aba, e o número da Fila é justamente
+      // como a clínica sabe o que ainda está esperando resposta.
+      if (!linhas.some((c) => c.id === activeId)) open(linhas[0].id, { marcarLida: false });
     });
   }
 
@@ -258,7 +451,7 @@ export function InboxView({
     window.history.replaceState(null, "", id ? `/inbox?conversa=${id}` : "/inbox");
   }
 
-  function open(id: number) {
+  function open(id: number, { marcarLida = true }: { marcarLida?: boolean } = {}) {
     setSelectedId(id);
     syncUrl(id);
     // Pelo mesmo motivo da `key` do Composer: o alvo de resposta é estado desta
@@ -266,34 +459,67 @@ export function InboxView({
     // outra cliente.
     setReply(null);
     // Abrir zera o não lido; refletir na hora evita o contador fantasma.
-    setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
+    if (marcarLida) setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
     requestRef.current = id;
     startSwitching(async () => {
-      const loaded = await loadConversationAction(id);
+      const loaded = await loadConversationAction(id, { markRead: marcarLida });
       if (requestRef.current !== id) return;
-      if (loaded) setCache((prev) => ({ ...prev, [id]: loaded }));
+      if (loaded) guardarConversa(id, loaded);
       else toast.error("Não foi possível abrir a conversa.");
     });
   }
 
   async function reload(conversationId: number) {
     const loaded = await loadConversationAction(conversationId);
-    if (loaded) setCache((prev) => ({ ...prev, [conversationId]: loaded }));
+    if (loaded) guardarConversa(conversationId, loaded);
     await refreshList(tab, search);
   }
 
-  function deliver(conversationId: number, body: string, tempId: string) {
+  function deliver(rascunho: Draft) {
+    const { conversationId, body, tempId, replyToExternalId } = rascunho;
     startSending(async () => {
-      const result = await sendMessageAction({ conversationId, body });
-      if (!result.ok) {
+      try {
+        const result = await sendMessageAction({ conversationId, body, replyToExternalId });
+        if (!result.ok) {
+          setDrafts((prev) => prev.map((d) => (d.tempId === tempId ? { ...d, failed: true } : d)));
+          toast.error(result.error);
+          return;
+        }
+        await reload(conversationId);
+        // Sem toast de sucesso: a bolha na conversa já é a confirmação.
+        setDrafts((prev) => prev.filter((d) => d.tempId !== tempId));
+      } catch (erro) {
+        // Rejeição (rede caiu, 500) não pode evaporar a frase: ela continua na
+        // bolha, com "tentar de novo" e "descartar".
+        console.error(erro);
         setDrafts((prev) => prev.map((d) => (d.tempId === tempId ? { ...d, failed: true } : d)));
-        toast.error(result.error);
-        return;
+        toast.error("Não foi possível enviar. O texto continua aqui na conversa.");
       }
-      await reload(conversationId);
-      // Sem toast de sucesso: a bolha na conversa já é a confirmação.
-      setDrafts((prev) => prev.filter((d) => d.tempId !== tempId));
     });
+  }
+
+  /**
+   * Eco otimista: a bolha aparece ANTES da ida ao servidor.
+   *
+   * Medido: sem isto a mensagem sumia da tela por 4 a 7 segundos entre apertar
+   * Enter e a leitura periódica trazê-la de volta — tempo em que a atendente
+   * não sabe se enviou, e reenvia.
+   */
+  function registrarEnvio({ body, replyToExternalId }: { body: string; replyToExternalId?: string }): boolean {
+    if (activeId == null) return false;
+    const rascunho: Draft = {
+      tempId: crypto.randomUUID(),
+      conversationId: activeId,
+      body,
+      replyToExternalId,
+      failed: false,
+      criadoEm: Date.now(),
+    };
+    setDrafts((prev) => [...prev, rascunho]);
+    // A bolha nova é o fim da conversa: quem envia sempre quer ver o que enviou.
+    pertoDoFimRef.current = true;
+    deliver(rascunho);
+    return true;
   }
 
 
@@ -388,6 +614,23 @@ export function InboxView({
             </Link>
           ) : null}
 
+          {/* Iniciar conversa fica acima da busca e não ao lado dela: é a ação
+              da caixa inteira, não um filtro da lista. Escondido para quem não
+              pode iniciar, e desativado enquanto não há WhatsApp conectado —
+              um botão que abre um diálogo para dar erro no fim é pior que
+              nenhum botão. */}
+          {canStartConversation ? (
+            <NewConversationButton
+              className="w-full justify-center"
+              disabled={!whatsappConnected}
+              onStarted={(conversationId: number) => {
+                setTab("meus");
+                open(conversationId);
+                void refreshList("meus", "");
+              }}
+            />
+          ) : null}
+
           <div className="flex items-center gap-2">
             <div className="relative min-w-0 flex-1">
               <Search
@@ -395,8 +638,8 @@ export function InboxView({
                 aria-hidden
               />
               <Input
-                value={search}
-                onChange={(event) => onSearch(event.target.value)}
+                value={termo}
+                onChange={(event) => setTermo(event.target.value)}
                 placeholder="Pesquisar conversa"
                 className="pl-9"
               />
@@ -428,7 +671,12 @@ export function InboxView({
                   className={cn(
                     "flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-control px-1 py-1.5 text-meta font-medium transition-colors",
                     active
-                      ? "bg-surface-raised text-accent shadow-[var(--shadow-raised)]"
+                      // `shadow-sticky` e não `shadow-[var(--shadow-raised)]`:
+                      // esse token nunca existiu. Uma propriedade que aponta
+                      // para uma custom property indefinida é inválida em tempo
+                      // de computação — medido como `none`. A aba ativa ficava
+                      // sem relevo nenhum, sem erro de build, tipo ou lint.
+                      ? "bg-surface-raised text-accent shadow-sticky"
                       : "text-ink-secondary hover:text-ink",
                   )}
                 >
@@ -591,76 +839,126 @@ export function InboxView({
               </p>
             ) : null}
 
-            <div ref={threadRef} className="flex flex-1 flex-col overflow-y-auto px-3 py-4 md:px-6">
-              {/* O contexto do cliente vive no trilho lateral; abaixo de lg ele
-                  abre a conversa, para não sumir justamente no aparelho onde
-                  trocar de tela custa mais. */}
-              <div className="mx-auto mb-3 w-full max-w-[680px] shrink-0 lg:hidden">
-                <ContactPanel context={detail.context} photoUrl={detail.photoUrl} compact />
-              </div>
-              {/* A conversa cresce de baixo para cima: a última mensagem encosta
-                  no composer, como em qualquer thread. */}
-              <div className="mx-auto mt-auto flex w-full max-w-[680px] flex-col gap-2">
-                {detail.messages.map((message) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    conversationId={detail.conversationId}
-                    quoted={
-                      message.quotedExternalId
-                        ? (detail.messages.find((m) => m.externalId === message.quotedExternalId) ?? null)
-                        : null
-                    }
-                    onReply={() =>
-                      setReply({
-                        messageId: message.id,
-                        externalId: message.externalId,
-                        preview: (message.audioTranscription || message.body || "Mídia").slice(0, 80),
-                        fromMe: message.direction === "outbound",
-                      })
-                    }
-                    onChanged={() => void reload(detail.conversationId)}
-                  />
-                ))}
-                {conversationDrafts.map((item) => (
-                  <div key={item.tempId} className="flex flex-col items-end">
-                    <div
-                      className={cn(
-                        "max-w-[80%] rounded-card border px-3 py-2 text-body",
-                        item.failed
-                          ? "border-danger/30 bg-danger-soft text-danger"
-                          : "border-line-strong bg-surface-sunken text-ink opacity-60",
-                      )}
-                    >
-                      {item.body}
-                    </div>
-                    {item.failed ? (
-                      <div className="mt-1 flex justify-end gap-2 text-caption">
-                        <button type="button" className="text-accent" onClick={() => deliver(item.conversationId, item.body, item.tempId)}>
-                          Tentar de novo
-                        </button>
-                        <button
-                          type="button"
-                          className="text-ink-secondary"
-                          onClick={() => setDrafts((prev) => prev.filter((d) => d.tempId !== item.tempId))}
-                        >
-                          Descartar
-                        </button>
-                      </div>
-                    ) : (
-                      /* O estado da bolha é o feedback do envio — por isso não
-                         existe toast de sucesso. */
-                      <span
-                        aria-live="polite"
-                        className="mt-0.5 flex items-center gap-1 px-1 text-meta text-ink-secondary"
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <div
+                data-fio
+                ref={threadRef}
+                onScroll={aoRolar}
+                className="flex flex-1 flex-col overflow-y-auto px-3 py-4 md:px-6"
+              >
+                {/* O contexto do cliente vive no trilho lateral; abaixo de lg ele
+                    abre a conversa, para não sumir justamente no aparelho onde
+                    trocar de tela custa mais. */}
+                <div className="mx-auto mb-3 w-full max-w-[680px] shrink-0 lg:hidden">
+                  <ContactPanel context={detail.context} photoUrl={detail.photoUrl} compact />
+                </div>
+                {/* A conversa cresce de baixo para cima: a última mensagem encosta
+                    no composer, como em qualquer thread. O espaço entre bolhas é
+                    de cada uma, não do contêiner: bolhas do mesmo bloco se
+                    aproximam e só o intervalo entre blocos continua largo. */}
+                <div className="mx-auto mt-auto flex w-full max-w-[680px] flex-col">
+                  {detail.messages.map((message, indice) => {
+                    const anterior = detail.messages[indice - 1];
+                    const seguinte = detail.messages[indice + 1];
+                    const trocouODia = !anterior || !mesmoDia(anterior.createdAt, message.createdAt);
+                    return (
+                      <Fragment key={message.id}>
+                        {trocouODia ? <SeparadorDeData iso={message.createdAt} /> : null}
+                        <MessageBubble
+                          message={message}
+                          conversationId={detail.conversationId}
+                          agrupada={!trocouODia && mesmoGrupo(anterior, message)}
+                          ultimaDoGrupo={!seguinte || !mesmoGrupo(message, seguinte)}
+                          quoted={
+                            message.quotedExternalId
+                              ? (detail.messages.find((m) => m.externalId === message.quotedExternalId) ?? null)
+                              : null
+                          }
+                          onReply={() =>
+                            setReply({
+                              messageId: message.id,
+                              externalId: message.externalId,
+                              preview: (
+                                message.audioTranscription ||
+                                textoVisivel(message.body) ||
+                                MEDIA_LABEL[message.messageType] ||
+                                "Mídia"
+                              ).slice(0, 80),
+                              fromMe: message.direction === "outbound",
+                            })
+                          }
+                          onChanged={() => void reload(detail.conversationId)}
+                        />
+                      </Fragment>
+                    );
+                  })}
+                  {conversationDrafts.map((item) => (
+                    <div key={item.tempId} className="mt-2.5 flex flex-col items-end">
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-card px-3 py-2 text-body shadow-card",
+                          // A palidez é do FUNDO, não do texto. Com `opacity-70`
+                          // na bolha inteira o "Enviando…" de 11px caía para
+                          // 2,75:1 contra ela — medido — bem abaixo dos 4,5:1,
+                          // logo no único elemento cujo trabalho é dizer em que
+                          // pé está o envio. O fundo translúcido mantém a mesma
+                          // leitura de "ainda não confirmada" e devolve o texto.
+                          item.failed ? "bg-danger-soft text-danger" : "bg-accent-soft/60 text-ink",
+                        )}
                       >
-                        <Clock className="size-3" aria-hidden />
-                        Enviando…
-                      </span>
-                    )}
-                  </div>
-                ))}
+                        {item.body}
+                        {item.failed ? null : (
+                          /* O estado da bolha é o feedback do envio — por isso
+                             não existe toast de sucesso. */
+                          <span
+                            aria-live="polite"
+                            className="float-right mt-1 ml-2 flex items-center gap-1 text-meta whitespace-nowrap text-ink-secondary"
+                          >
+                            <Clock className="size-3 shrink-0" aria-hidden />
+                            Enviando…
+                          </span>
+                        )}
+                      </div>
+                      {item.failed ? (
+                        <div className="mt-1 flex justify-end gap-2 text-caption">
+                          <button type="button" className="text-accent" onClick={() => deliver(item)}>
+                            Tentar de novo
+                          </button>
+                          <button
+                            type="button"
+                            className="text-ink-secondary"
+                            onClick={() => setDrafts((prev) => prev.filter((d) => d.tempId !== item.tempId))}
+                          >
+                            Descartar
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               </div>
+
+              {/* Volta ao fim sem rolar a mão. O contador diz o que chegou
+                  enquanto se lia o histórico — que é exatamente o que a rolagem
+                  forçada escondia ao arrastar todo mundo para baixo. */}
+              {longeDoFim ? (
+                <button
+                  data-descer
+                  type="button"
+                  onClick={descerAoFim}
+                  aria-label={
+                    naoVistas > 0
+                      ? `Descer para a última mensagem (${naoVistas} nova${naoVistas > 1 ? "s" : ""})`
+                      : "Descer para a última mensagem"
+                  }
+                  className="absolute right-4 bottom-4 z-10 flex h-10 items-center gap-1.5 rounded-pill border border-line bg-surface-raised px-3 text-label text-ink shadow-[var(--shadow-overlay)] transition-colors hover:bg-surface-sunken"
+                >
+                  <ChevronDown className="size-4 shrink-0" aria-hidden />
+                  {naoVistas > 0 ? (
+                    <span className="tabular">{naoVistas > 99 ? "99+" : naoVistas}</span>
+                  ) : null}
+                </button>
+              ) : null}
             </div>
 
             <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-2 shadow-sticky md:px-6 md:py-3">
@@ -674,10 +972,13 @@ export function InboxView({
                 disabled={!detail.hasWhatsapp}
                 reply={reply}
                 onClearReply={() => setReply(null)}
+                onEnviar={registrarEnvio}
                 onSent={() => void reload(detail.conversationId)}
               />
               {detail.hasWhatsapp ? (
-                <p className="mx-auto mt-1.5 max-w-[680px] text-meta text-ink-secondary">
+                /* Só onde Enter de fato envia: no teclado virtual ele quebra a
+                   linha, e a frase virava uma linha inútil na tela menor. */
+                <p className="mx-auto mt-1.5 hidden max-w-[680px] text-meta text-ink-secondary md:block">
                   Enter envia, Shift+Enter quebra a linha.
                 </p>
               ) : null}
@@ -948,6 +1249,9 @@ function ConversationRow({
   onOpen: () => void;
 }) {
   const naoLidas = conversation.unreadCount;
+  const previa = previaDaConversa(conversation);
+  const daCasa = !conversation.lastMessageInbound;
+  const PreviaIcon = MEDIA_ICON[conversation.lastMessageType ?? "text"];
 
   return (
     <button
@@ -979,22 +1283,31 @@ function ConversationRow({
           </span>
           {conversation.lastMessageAt ? (
             <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-              {relativeTime(conversation.lastMessageAt)}
+              {horaDaLista(conversation.lastMessageAt)}
             </span>
           ) : null}
         </span>
 
         <span className="mt-0.5 flex items-center gap-1.5">
-          {!conversation.lastMessageInbound ? (
-            <Check className="size-3 shrink-0 text-ink-tertiary" aria-hidden />
+          {/* O tique é o de verdade, com o status da última mensagem. Antes era
+              um <Check> cinza fixo: uma mensagem que FALHOU ficava idêntica a
+              uma entregue, e ninguém reenviava porque nada dizia que precisava. */}
+          {daCasa && conversation.lastMessageAt ? (
+            <span className="flex shrink-0 items-center text-ink-tertiary">
+              <DeliveryTick status={conversation.lastMessageStatus ?? "sent"} />
+            </span>
           ) : null}
+          {PreviaIcon ? <PreviaIcon className="size-3 shrink-0 text-ink-tertiary" aria-hidden /> : null}
           <span
             className={cn(
               "min-w-0 flex-1 truncate text-caption",
               naoLidas > 0 ? "text-ink" : "text-ink-secondary",
             )}
           >
-            {conversation.lastMessagePreview ?? "Sem mensagens"}
+            {/* "Você:" separa num relance o que a clínica respondeu do que a
+                cliente ainda está esperando resposta. */}
+            {daCasa && conversation.lastMessageAt ? <span className="text-ink-tertiary">Você: </span> : null}
+            {previa.texto}
           </span>
           {naoLidas > 0 ? (
             <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
@@ -1036,218 +1349,4 @@ function WhatsAppGlyph() {
       <path d="M227.9 177c-.6-.3-23-11.3-26.7-12.6-3.6-1.3-6.3-1.9-8.9 1.9-2.6 3.9-10.2 12.6-12.5 15.2-2.3 2.6-4.6 2.9-8.6.9-3.9-2-16.7-6.1-31.8-19.5-11.7-10.4-19.7-23.3-22-27.3-2.3-3.9-.2-6.1 1.7-8.1 1.8-1.8 4-4.6 5.9-6.9 2-2.3 2.6-4 4-6.6 1.3-2.6.6-4.9-.3-6.9-1-2-8.9-21.4-12.2-29.3-3.2-7.7-6.5-6.7-8.9-6.8-2.3-.1-5-.1-7.6-.1s-6.9 1-10.6 4.9c-3.6 3.9-13.9 13.5-13.9 32.9s14.2 38.2 16.2 40.8c2 2.6 27.9 42.5 67.6 59.6 9.4 4.1 16.8 6.5 22.6 8.3 9.5 3 18.1 2.6 24.9 1.6 7.6-1.1 23.1-9.4 26.3-18.5 3.3-9.1 3.3-16.9 2.3-18.5-1-1.6-3.6-2.6-7.6-4.6zM156.7 0C73.3 0 5.5 67.4 5.5 150.1c0 26.8 7.2 53 20.7 75.9L0 308l84-25.7c21.9 11.7 46.6 17.8 71.6 17.8h.1c83.3 0 151.2-67.4 151.2-150.1C307 67.4 240.1 0 156.7 0zm0 275.6h-.1c-22.6 0-44.8-6.1-64.1-17.6l-4.6-2.7-47.7 12.5 12.7-46.3-3-4.8c-12.6-20-19.2-42.6-19.2-66 0-69.6 56.9-125.9 127.1-125.9 34 0 66 13.2 90 37.2 24 24 37.3 55.9 37.3 89.7-.1 69.6-57 125.5-127.4 125.5z" />
     </svg>
   );
-}
-
-type Message = InboxDetail["messages"][number];
-
-function MessageBubble({
-  message,
-  conversationId,
-  quoted,
-  onReply,
-  onChanged,
-}: {
-  message: Message;
-  conversationId: number;
-  quoted: Message | null;
-  onReply: () => void;
-  onChanged: () => void;
-}) {
-  const outbound = message.direction === "outbound";
-  const MediaIcon = MEDIA_ICON[message.messageType];
-
-  if (message.sender === "system") {
-    return (
-      <p className="my-1 self-center rounded-control bg-surface-sunken px-2.5 py-1 text-center text-caption text-ink-secondary">
-        {message.body}
-      </p>
-    );
-  }
-
-  if (message.deleted) {
-    return (
-      <div className={cn("flex flex-col", outbound ? "items-end" : "items-start")}>
-        <div className="max-w-[80%] rounded-card border border-dashed border-line px-3 py-2 text-body text-ink-tertiary italic">
-          Mensagem apagada
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={cn("group flex flex-col", outbound ? "items-end" : "items-start")}>
-      <div className={cn("flex items-center gap-1", outbound ? "flex-row" : "flex-row-reverse")}>
-        {/* As ações só aparecem no hover: a conversa fica limpa para ler. */}
-        <MessageActions
-          conversationId={conversationId}
-          message={message}
-          onReply={onReply}
-          onChanged={onChanged}
-        />
-        <div
-          className={cn(
-            // O bordeaux é reservado para ação e seleção: uma conversa inteira de
-            // bolhas em accent-soft gasta o acento e some com a hierarquia.
-            // `break-words` não basta: um token colado sem espaço só quebra com
-            // `anywhere`, e sem isso ele vaza da bolha e atravessa a coluna vizinha.
-            "max-w-[80%] rounded-card border px-3 py-2 text-body text-ink [overflow-wrap:anywhere]",
-            outbound ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
-          )}
-        >
-          {quoted ? (
-            <span className="mb-1.5 block border-l-2 border-accent pl-2 text-caption text-ink-secondary [overflow-wrap:anywhere]">
-              <span className="block font-medium text-accent">
-                {quoted.direction === "outbound" ? "Você" : "Cliente"}
-              </span>
-              <span className="block truncate">
-                {(quoted.audioTranscription || quoted.body || "Mídia").slice(0, 90)}
-              </span>
-            </span>
-          ) : null}
-
-          {message.messageType === "image" ? (
-            message.mediaUrl ? (
-              <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mb-1.5 block">
-                <img
-                  src={message.mediaUrl}
-                  alt={message.body || "Imagem recebida"}
-                  className="max-h-[280px] w-auto rounded-control"
-                />
-              </a>
-            ) : (
-              <MediaPlaceholder
-                conversationId={conversationId}
-                messageId={message.id}
-                outbound={outbound}
-                label="Imagem"
-                onLoaded={onChanged}
-              />
-            )
-          ) : null}
-
-          {message.messageType === "audio" ? (
-            message.mediaUrl ? (
-              // Player nativo: toca sem sair da conversa e sem baixar nada.
-              <audio controls src={message.mediaUrl} className="mb-1.5 h-9 w-[240px] max-w-full" />
-            ) : (
-              <MediaPlaceholder
-                conversationId={conversationId}
-                messageId={message.id}
-                outbound={outbound}
-                label="Mensagem de voz"
-                onLoaded={onChanged}
-              />
-            )
-          ) : null}
-
-          {message.messageType === "video" && message.mediaUrl ? (
-            <video controls src={message.mediaUrl} className="mb-1.5 max-h-[280px] w-auto rounded-control" />
-          ) : null}
-
-          {MediaIcon && message.messageType !== "text" && !["image", "audio", "video"].includes(message.messageType) ? (
-            <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
-              <MediaIcon className="size-3.5 shrink-0" aria-hidden />
-              <span className="truncate">{message.mediaFileName || "Arquivo"}</span>
-              {message.mediaUrl ? (
-                <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">
-                  abrir
-                </a>
-              ) : null}
-            </span>
-          ) : null}
-
-          {/* Áudio transcrito aparece como texto: é o que a atendente precisa ler
-              para responder sem ouvir tudo de novo. */}
-          {message.audioTranscription ? (
-            <span className="block whitespace-pre-wrap italic">{message.audioTranscription}</span>
-          ) : message.body ? (
-            <span className="block whitespace-pre-wrap">{message.body}</span>
-          ) : null}
-        </div>
-      </div>
-
-      {message.reactions && message.reactions.length > 0 ? (
-        <span className="-mt-1 flex gap-0.5 rounded-full border border-line bg-surface-raised px-1.5 py-0.5 text-[13px] leading-none shadow-sm">
-          {message.reactions.map((r, i) => (
-            <span key={`${r.emoji}-${i}`}>{r.emoji}</span>
-          ))}
-        </span>
-      ) : null}
-
-      <span className="mt-0.5 flex items-center gap-1 px-1 text-meta text-ink-secondary">
-        {message.sender === "ai" ? (
-          <>
-            <Bot className="size-3" aria-hidden />
-            IA
-          </>
-        ) : message.senderName ? (
-          message.senderName
-        ) : null}
-        <span suppressHydrationWarning>{format(new Date(message.createdAt), "HH:mm", { locale: ptBR })}</span>
-        {outbound ? <DeliveryTick status={message.status} /> : null}
-      </span>
-    </div>
-  );
-}
-
-/**
- * Mídia sem link.
- *
- * Acontece nos dois sentidos: o que enviamos vai em base64 e não deixa URL, e o
- * que chega nem sempre traz o link no webhook. Em vez de bolha vazia, mostra o
- * que é e — quando faz sentido buscar — oferece carregar.
- */
-function MediaPlaceholder({
-  conversationId,
-  messageId,
-  outbound,
-  label,
-  onLoaded,
-}: {
-  conversationId: number;
-  messageId: number;
-  outbound: boolean;
-  label: string;
-  onLoaded: () => void;
-}) {
-  const [carregando, startCarregando] = useTransition();
-
-  return (
-    <span className="mb-1 flex items-center gap-1.5 whitespace-nowrap text-caption text-ink-secondary">
-      <Mic className="size-3.5 shrink-0" aria-hidden />
-      {label}
-      {!outbound ? (
-        <button
-          type="button"
-          disabled={carregando}
-          className="text-accent disabled:opacity-60"
-          onClick={() =>
-            startCarregando(async () => {
-              const result = await loadMediaAction({ conversationId, messageId });
-              if (!result.ok) {
-                toast.error(result.error);
-                return;
-              }
-              if (!result.url) {
-                toast.error("A mídia não está mais disponível no WhatsApp.");
-                return;
-              }
-              onLoaded();
-            })
-          }
-        >
-          {carregando ? "carregando…" : "carregar"}
-        </button>
-      ) : null}
-    </span>
-  );
-}
-
-/** Estado de entrega no padrão que todo mundo já conhece do WhatsApp. */
-function DeliveryTick({ status }: { status: string }) {
-  if (status === "failed") return <TriangleAlert className="size-3 text-danger" aria-label="falhou" />;
-  if (status === "read") return <CheckCheck className="size-3 text-info" aria-label="lida" />;
-  if (status === "delivered") return <CheckCheck className="size-3" aria-label="entregue" />;
-  if (status === "pending") return <Clock className="size-3" aria-label="enviando" />;
-  return <Check className="size-3" aria-label="enviada" />;
 }

@@ -413,7 +413,7 @@ function Toggle({
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="mt-1 size-5 shrink-0 accent-[var(--accent)]"
+        className="mt-1 size-5 shrink-0 accent-accent"
       />
     </label>
   );

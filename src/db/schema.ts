@@ -720,6 +720,16 @@ export const conversations = pgTable(
     contactName: text("contact_name"),
     profilePicUrl: text("profile_pic_url"),
     externalId: text("external_id"),
+    /**
+     * Quem abriu a conversa pelo painel. Nulo quando ela nasceu de uma mensagem
+     * recebida, que é a origem da esmagadora maioria delas.
+     *
+     * Não é enfeite de auditoria: é o contador do limite de vazão do envio
+     * ativo. Sem uma marca de origem, "quantas conversas nós começamos na última
+     * hora" viraria "quantas conversas foram criadas na última hora", e uma
+     * clínica movimentada estouraria o limite só por RECEBER mensagem.
+     */
+    startedByUserId: bigint("started_by_user_id", { mode: "number" }).references(() => users.id),
     controlledBy: conversationControl("controlled_by").notNull().default("ai"),
     /**
      * Fila do inbox. Regra herdada do entur-os-crm: mensagem nova joga a
