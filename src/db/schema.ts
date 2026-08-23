@@ -192,6 +192,28 @@ export const organizationMembers = pgTable(
   (t) => [uniqueIndex("org_members_unique").on(t.organizationId, t.userId)],
 );
 
+/** Unidades que um usuário pode operar. Ausência de linhas mantém acesso global legado. */
+export const organizationMemberBranches = pgTable(
+  "organization_member_branches",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    userId: bigint("user_id", { mode: "number" })
+      .notNull()
+      .references(() => users.id),
+    branchId: bigint("branch_id", { mode: "number" })
+      .notNull()
+      .references(() => branches.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("org_member_branches_unique").on(t.organizationId, t.userId, t.branchId),
+    index("org_member_branches_user_idx").on(t.organizationId, t.userId),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Profissionais e grade
 // ---------------------------------------------------------------------------
@@ -297,6 +319,27 @@ export const services = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("services_org_idx").on(t.organizationId)],
+);
+
+/** Produtos de revenda/consumo exibidos no catálogo, separados dos serviços agendáveis. */
+export const products = pgTable(
+  "products",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    categoryId: bigint("category_id", { mode: "number" }).references(() => serviceCategories.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    sku: text("sku"),
+    priceCents: integer("price_cents").notNull(),
+    costCents: integer("cost_cents").notNull().default(0),
+    stockQty: integer("stock_qty").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("products_org_idx").on(t.organizationId), index("products_sku_idx").on(t.organizationId, t.sku)],
 );
 
 export const professionalServices = pgTable(

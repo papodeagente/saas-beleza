@@ -10,16 +10,19 @@ import { Card, CardList } from "@/components/ui/card";
 import { db } from "@/db";
 import {
   branches,
+  organizationMemberBranches,
   organizationMembers,
   professionalServices,
   professionalWorkingHours,
   professionals,
   resources,
+  services,
   users,
 } from "@/db/schema";
 import { formatPhone } from "@/lib/phone";
 import { requireRole, requireSession } from "@/server/auth";
 import { CopyLink } from "./copy-link";
+import { ManagementForms } from "./management-forms";
 
 export const metadata = { title: "Gestão" };
 export const dynamic = "force-dynamic";
@@ -60,7 +63,7 @@ export default async function ManagementPage() {
   // Comissão, acessos e unidades são assunto de quem administra a clínica.
   requireRole(ctx, "admin");
 
-  const [professionalRows, branchRows, resourceRows, memberRows] = await Promise.all([
+  const [professionalRows, branchRows, resourceRows, memberRows, serviceOptions] = await Promise.all([
     db
       .select({
         id: professionals.id,
@@ -89,11 +92,27 @@ export default async function ManagementPage() {
       .where(eq(resources.organizationId, ctx.organizationId))
       .orderBy(asc(resources.name)),
     db
-      .select({ name: users.name, email: users.email, role: organizationMembers.role })
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: organizationMembers.role,
+        branches: sql<string[]>`coalesce(array_agg(distinct ${branches.name}) filter (where ${branches.name} is not null), '{}')`,
+      })
       .from(organizationMembers)
       .innerJoin(users, eq(users.id, organizationMembers.userId))
+      .leftJoin(organizationMemberBranches, and(
+        eq(organizationMemberBranches.organizationId, organizationMembers.organizationId),
+        eq(organizationMemberBranches.userId, organizationMembers.userId),
+      ))
+      .leftJoin(branches, eq(branches.id, organizationMemberBranches.branchId))
       .where(eq(organizationMembers.organizationId, ctx.organizationId))
+      .groupBy(users.id, organizationMembers.role)
       .orderBy(asc(users.name)),
+    db.select({ id: services.id, name: services.name }).from(services).where(and(
+      eq(services.organizationId, ctx.organizationId),
+      eq(services.active, true),
+    )).orderBy(asc(services.name)),
   ]);
 
   // Endereço completo — é ele que a clínica cola na bio, não o caminho relativo.
@@ -108,6 +127,13 @@ export default async function ManagementPage() {
       <PageHeader title="Gestão" description={ctx.organizationName} />
 
       <PageBody className="space-y-8">
+        <section aria-labelledby="novos-cadastros">
+          <SectionLabel><span id="novos-cadastros">Cadastros</span></SectionLabel>
+          <div className="mt-2.5">
+            <ManagementForms branches={branchRows.map(({ id, name }) => ({ id, name }))} services={serviceOptions} />
+          </div>
+        </section>
+
         {/* Link público — o ativo que a clínica realmente divulga */}
         <section aria-labelledby="link-publico">
           <SectionLabel>
@@ -263,9 +289,12 @@ export default async function ManagementPage() {
                     <Avatar name={member.name} size="md" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-label text-ink">{member.name}</span>
-                      <span className="block truncate text-caption text-ink-secondary">
-                        {member.email}
-                      </span>
+                    <span className="block truncate text-caption text-ink-secondary">
+                      {member.email}
+                    </span>
+                    <span className="mt-0.5 block truncate text-caption text-ink-tertiary">
+                      {member.branches.length ? member.branches.join(", ") : "Todas as unidades"}
+                    </span>
                     </span>
                     <Badge tone="neutral">{ROLE_LABEL[member.role] ?? member.role}</Badge>
                   </li>

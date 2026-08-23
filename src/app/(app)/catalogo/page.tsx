@@ -1,13 +1,14 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { LayoutGrid } from "lucide-react";
-import { PageBody, PageHeader } from "@/components/app-shell";
+import { LayoutGrid, Package } from "lucide-react";
+import { PageBody, PageHeader, SectionLabel } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardList } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { db } from "@/db";
-import { professionalServices, professionals, serviceCategories, services } from "@/db/schema";
+import { products, professionalServices, professionals, serviceCategories, services } from "@/db/schema";
 import { formatBRL } from "@/lib/money";
 import { requireSession } from "@/server/auth";
+import { CatalogForms } from "./catalog-forms";
 
 export const metadata = { title: "Catálogo" };
 export const dynamic = "force-dynamic";
@@ -26,8 +27,9 @@ export default async function CatalogPage() {
    * atender, não da rentabilidade do serviço.
    */
   const canSeeMargin = ctx.role === "admin" || ctx.role === "owner";
+  const canManage = canSeeMargin;
 
-  const rows = await db
+  const [rows, productRows, professionalOptions] = await Promise.all([db
     .select({
       id: services.id,
       name: services.name,
@@ -53,7 +55,22 @@ export default async function CatalogPage() {
     .leftJoin(professionals, eq(professionals.id, professionalServices.professionalId))
     .where(eq(services.organizationId, ctx.organizationId))
     .groupBy(services.id, serviceCategories.name, serviceCategories.position)
-    .orderBy(asc(serviceCategories.position), asc(services.name));
+    .orderBy(asc(serviceCategories.position), asc(services.name)),
+    db.select({
+      id: products.id,
+      name: products.name,
+      sku: products.sku,
+      priceCents: products.priceCents,
+      costCents: products.costCents,
+      stockQty: products.stockQty,
+      active: products.active,
+      categoryName: serviceCategories.name,
+    }).from(products).leftJoin(serviceCategories, eq(serviceCategories.id, products.categoryId)).where(eq(products.organizationId, ctx.organizationId)).orderBy(asc(serviceCategories.position), asc(products.name)),
+    db.select({ id: professionals.id, name: professionals.name }).from(professionals).where(and(
+      eq(professionals.organizationId, ctx.organizationId),
+      eq(professionals.active, true),
+    )).orderBy(asc(professionals.name)),
+  ]);
 
   const grouped = rows.reduce((map, row) => {
     const key = row.categoryName ?? "Sem categoria";
@@ -64,18 +81,18 @@ export default async function CatalogPage() {
   }, new Map<string, typeof rows>());
 
   const description =
-    rows.length === 0
-      ? "Nenhum serviço cadastrado"
-      : `${rows.length} ${rows.length === 1 ? "serviço" : "serviços"} em ${grouped.size} ${
-          grouped.size === 1 ? "categoria" : "categorias"
-        }`;
+    rows.length === 0 && productRows.length === 0
+      ? "Nenhum item cadastrado"
+      : `${rows.length} ${rows.length === 1 ? "serviço" : "serviços"} · ${productRows.length} ${productRows.length === 1 ? "produto" : "produtos"}`;
 
   return (
     <div>
       <PageHeader title="Catálogo" description={description} />
 
-      <PageBody>
-        {rows.length === 0 ? (
+      <PageBody className="space-y-8">
+        {canManage ? <section aria-labelledby="catalogo-cadastros"><SectionLabel><span id="catalogo-cadastros">Cadastros</span></SectionLabel><div className="mt-2.5"><CatalogForms professionals={professionalOptions} /></div></section> : null}
+
+        {rows.length === 0 && productRows.length === 0 ? (
           <Card>
             <EmptyState
               icon={LayoutGrid}
@@ -84,7 +101,8 @@ export default async function CatalogPage() {
             />
           </Card>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-8">
+            {rows.length ? <section aria-labelledby="servicos-catalogo"><SectionLabel><span id="servicos-catalogo">Serviços</span></SectionLabel><div className="mt-2.5 space-y-6">
             {[...grouped.entries()].map(([category, list]) => (
               <Card key={category}>
                 {/* Categoria e cabeçalho de colunas na mesma linha: os números
@@ -163,6 +181,12 @@ export default async function CatalogPage() {
                 </CardList>
               </Card>
             ))}
+            </div></section> : null}
+
+            {productRows.length ? <section aria-labelledby="produtos-catalogo"><SectionLabel><span id="produtos-catalogo">Produtos</span></SectionLabel><Card className="mt-2.5"><CardList>{productRows.map((product) => {
+              const margin = product.priceCents > 0 ? Math.round(((product.priceCents - product.costCents) / product.priceCents) * 100) : null;
+              return <li key={product.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3"><Package className="size-4 shrink-0 text-accent" /><span className="min-w-0 flex-1"><span className="flex items-center gap-1.5"><span className="text-label text-ink">{product.name}</span>{!product.active ? <Badge tone="neutral">Inativo</Badge> : null}</span><span className="block text-caption text-ink-secondary">{[product.categoryName, product.sku ? `SKU ${product.sku}` : null, `${product.stockQty} em estoque`].filter(Boolean).join(" · ")}</span></span><span className="text-label tabular text-ink">{formatBRL(product.priceCents)}</span>{canSeeMargin ? <span className="w-14 text-right text-caption text-ink-secondary">{margin === null ? "—" : `${margin}%`}</span> : null}</li>;
+            })}</CardList></Card></section> : null}
           </div>
         )}
       </PageBody>
