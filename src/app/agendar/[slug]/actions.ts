@@ -1,8 +1,11 @@
 "use server";
 
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { bookingPageVisits, organizations } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
-import { formatTz } from "@/lib/tz";
+import { dateISOInTz, formatTz } from "@/lib/tz";
 import { DomainError } from "@/server/services/appointment-service";
 import {
   type PublicSlot,
@@ -40,6 +43,24 @@ const daysSchema = z.object({
 export async function publicAvailableDaysAction(input: unknown) {
   const data = daysSchema.parse(input);
   return getPublicAvailableDays(data.slug, data);
+}
+
+/** Registra uma visita anônima por navegador/dia; não guarda IP nem dados da cliente. */
+export async function trackBookingAccessAction(input: unknown): Promise<void> {
+  const data = z.object({
+    slug: z.string().min(1).max(120),
+    visitorToken: z.string().uuid(),
+  }).parse(input);
+  const [org] = await db.select({ id: organizations.id, timezone: organizations.timezone })
+    .from(organizations).where(eq(organizations.slug, data.slug)).limit(1);
+  if (!org) return;
+  await db.insert(bookingPageVisits).values({
+    organizationId: org.id,
+    visitorToken: data.visitorToken,
+    visitDate: dateISOInTz(new Date(), org.timezone),
+  }).onConflictDoNothing({
+    target: [bookingPageVisits.organizationId, bookingPageVisits.visitorToken, bookingPageVisits.visitDate],
+  });
 }
 
 const bookingSchema = z.object({

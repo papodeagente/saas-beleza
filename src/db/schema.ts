@@ -487,6 +487,24 @@ export const appointments = pgTable(
   ],
 );
 
+/** Acesso anônimo ao link público, deduplicado por navegador e dia. */
+export const bookingPageVisits = pgTable(
+  "booking_page_visits",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    visitorToken: text("visitor_token").notNull(),
+    visitDate: date("visit_date").notNull(),
+    visitedAt: timestamp("visited_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("booking_visits_daily_unique").on(t.organizationId, t.visitorToken, t.visitDate),
+    index("booking_visits_org_date_idx").on(t.organizationId, t.visitDate),
+  ],
+);
+
 export const appointmentHistory = pgTable(
   "appointment_history",
   {

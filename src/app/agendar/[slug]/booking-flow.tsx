@@ -3,7 +3,7 @@
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowLeft, CalendarCheck, Check, ChevronRight, Clock, MapPin, ShieldCheck } from "lucide-react";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import {
   publicAvailableDaysAction,
   publicBookingAction,
   publicSlotsAction,
+  trackBookingAccessAction,
 } from "./actions";
 import type { PublicSlot } from "@/server/services/public-booking-service";
 
@@ -63,6 +64,16 @@ export function BookingFlow({
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
   const [pending, startTransition] = useTransition();
+
+  useEffect(() => {
+    const storageKey = `agenda-visitor:${slug}`;
+    let visitorToken = window.localStorage.getItem(storageKey);
+    if (!visitorToken) {
+      visitorToken = crypto.randomUUID();
+      window.localStorage.setItem(storageKey, visitorToken);
+    }
+    void trackBookingAccessAction({ slug, visitorToken });
+  }, [slug]);
 
   // Próximos 14 dias — escolher data não deve exigir abrir um calendário
   const days = useMemo(() => Array.from({ length: 21 }, (_, i) => addDays(new Date(), i)), []);

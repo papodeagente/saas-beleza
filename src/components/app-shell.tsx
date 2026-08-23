@@ -2,6 +2,7 @@
 
 import {
   ArrowRight,
+  BarChart3,
   Workflow,
   Bell,
   Bot,
@@ -59,6 +60,7 @@ const NAV: Array<{
   { href: "/whatsapp", label: "WhatsApp", icon: Smartphone, group: "gestao", minRole: "admin" },
   { href: "/agente", label: "Agente de IA", icon: Bot, group: "gestao", minRole: "admin" },
   { href: "/automacoes", label: "Automações", icon: Workflow, group: "gestao", minRole: "admin" },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart3, group: "gestao", minRole: "admin" },
   { href: "/financeiro", label: "Financeiro", icon: Wallet, group: "gestao", minRole: "admin" },
   { href: "/catalogo", label: "Catálogo", icon: LayoutGrid, group: "gestao", minRole: "staff" },
   { href: "/gestao", label: "Gestão", icon: Settings, group: "gestao", minRole: "admin" },
