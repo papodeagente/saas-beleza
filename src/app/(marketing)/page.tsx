@@ -29,9 +29,9 @@ export const revalidate = 300;
 
 const RECURSOS = [
   {
-    titulo: "Agenda que recusa horário impossível",
+    titulo: "Lembretes que reduzem faltas",
     texto:
-      "Intervalo entre atendimentos, folga, bloqueio e sala ocupada saem da conta antes de qualquer horário ser oferecido. E o banco de dados barra o choque na hora de salvar, mesmo com dois cliques ao mesmo tempo.",
+      "Confirmações e lembretes automáticos chegam antes do horário marcado. Sua cliente lembra, confirma e você protege o tempo que reservou para ela.",
   },
   {
     titulo: "Link de agendamento que a cliente usa sozinha",
@@ -49,9 +49,9 @@ const RECURSOS = [
       "Receita por serviço, contas a pagar e comissão por profissional, calculadas a partir do atendimento que aconteceu.",
   },
   {
-    titulo: "Ficha da cliente que a recepção consulta em pé",
+    titulo: "Automação que traz a cliente de volta",
     texto:
-      "Histórico, faltas, preferências e quando é hora de chamar de volta. Sem perguntar o que a clínica já sabe.",
+      "O sistema usa o último atendimento para chamar cada cliente no momento certo de fazer a manutenção, sem você precisar lembrar uma por uma.",
   },
   {
     titulo: "Cada pessoa vê o que o cargo dela permite",
@@ -81,16 +81,16 @@ const COMPARATIVO = [
     depois: "Ela recebe resposta na hora, escolhe o horário e sai marcada.",
   },
   {
-    antes: "A agenda está no caderno, no Google e na cabeça da recepção. De vez em quando marca duas na mesma hora.",
-    depois: "Uma agenda só, e o sistema recusa o horário duplicado antes de salvar.",
+    antes: "A cliente esquece o horário e você perde uma vaga que poderia ter sido preenchida.",
+    depois: "Ela recebe lembretes automáticos, confirma o agendamento e sua agenda fica mais previsível.",
   },
   {
     antes: "Você pergunta no grupo se a Paula está livre quinta.",
     depois: "O horário livre já sai calculado, com intervalo, folga e sala considerados.",
   },
   {
-    antes: "No fim do mês você monta a comissão de cada uma na planilha.",
-    depois: "A comissão nasce do atendimento e o mês fecha sozinho.",
+    antes: "Você lembra tarde demais que já passou da hora de chamar a cliente para manutenção.",
+    depois: "A automação identifica o momento de retorno e convida a cliente a agendar novamente.",
   },
   {
     antes: "Para saber quanto entrou, você soma as maquininhas.",
@@ -232,16 +232,16 @@ export default async function LandingPage() {
           >
             <div>
               <span className="animate-rise-in inline-block [animation-delay:0ms]">
-                <Eyebrow>Sistema para clínicas de estética</Eyebrow>
+                <Eyebrow>Agenda inteligente para manicures</Eyebrow>
               </span>
 
               <h1 className="animate-rise-in mt-6 text-balance text-hero text-night-ink [animation-delay:80ms]">
-                Sua clínica atendendo no WhatsApp enquanto você atende na cadeira
+                Menos faltas. Mais clientes voltando. Sua agenda atendendo 24h.
               </h1>
 
               <p className="animate-rise-in mt-6 max-w-[54ch] text-pretty text-lede text-night-ink-secondary [animation-delay:180ms]">
-                A Agenda de Unha responde a cliente, consulta a agenda de verdade e marca o horário sozinha.
-                Do primeiro oi até o caixa do mês, tudo acontece no mesmo sistema.
+                O agente de IA responde no WhatsApp, apresenta seus serviços e agenda sozinho — até de madrugada.
+                Lembretes reduzem o no-show e automações chamam a cliente de volta no momento da manutenção.
               </p>
 
               <div className="animate-rise-in mt-8 flex flex-wrap gap-3 [animation-delay:260ms]">
@@ -311,8 +311,8 @@ export default async function LandingPage() {
           <div className={CONTAINER}>
             <SectionHead
               eyebrow="Como funciona"
-              title="Não é uma agenda com WhatsApp colado do lado"
-              description="É um circuito fechado. A mensagem entra, o horário fecha, o atendimento acontece, o dinheiro entra e a cliente volta. Cada estação alimenta a próxima porque todas leem os mesmos dados."
+              title="Da primeira mensagem ao próximo retorno"
+              description="A IA atende e agenda 24 horas. Os lembretes ajudam a cliente a comparecer. Depois do serviço, a automação chama de volta no intervalo ideal para a próxima manutenção."
             />
             <Ciclo />
           </div>
@@ -341,7 +341,7 @@ export default async function LandingPage() {
           <div className={CONTAINER}>
             <SectionHead
               eyebrow="O que vem junto"
-              title="O dia inteiro da clínica sem trocar de tela"
+              title="Tudo o que uma manicure precisa para lotar a agenda"
             />
             <ul className="mt-12 grid gap-x-8 gap-y-9 sm:grid-cols-2 lg:grid-cols-3">
               {RECURSOS.map((r, i) => (
@@ -364,8 +364,8 @@ export default async function LandingPage() {
           <div className={CONTAINER}>
             <SectionHead
               eyebrow="Agente de IA"
-              title="Uma atendente que não dorme e não inventa"
-              description="A maioria dos robôs de WhatsApp chuta preço e promete horário que não existe. O agente da Agenda de Unha não consegue fazer isso: ele consulta o sistema a cada resposta."
+              title="Atendimento e agendamento 24h, mesmo quando você está ocupada"
+              description="Enquanto você faz as unhas de uma cliente, o agente de IA responde a próxima no WhatsApp, consulta seus serviços e oferece apenas horários realmente disponíveis."
             />
 
             <div className="mt-12 grid gap-5 lg:grid-cols-2">
@@ -511,11 +511,11 @@ export default async function LandingPage() {
               />
               <div className="relative">
                 <h2 className="mx-auto max-w-[18ch] text-balance text-section-title text-white">
-                  Sua próxima cliente já está digitando
+                  Você cuida das unhas. A Agenda de Unha cuida da próxima marcação.
                 </h2>
                 <p className="mx-auto mt-4 max-w-[58ch] text-pretty text-lede text-white">
-                  Em quinze minutos de chamada a gente configura sua agenda, seu catálogo e seu link
-                  de agendamento. No mesmo dia você começa a atender pelo sistema.
+                  Atenda e agende 24h, reduza faltas com lembretes e aumente a recorrência chamando cada
+                  cliente no momento certo de voltar.
                 </p>
                 <div className="mt-8 flex flex-wrap justify-center gap-3">
                   <CtaButton
