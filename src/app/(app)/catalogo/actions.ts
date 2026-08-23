@@ -4,7 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/db";
-import { products, professionalServices, professionals, serviceCategories, services } from "@/db/schema";
+import { products, professionalServices, professionals, resources, serviceCategories, services } from "@/db/schema";
 import { requireRole, requireSession } from "@/server/auth";
 
 export type CatalogResult = { ok: true } | { ok: false; error: string; field?: string };
@@ -58,6 +58,38 @@ export async function createServiceAction(input: unknown): Promise<CatalogResult
       : [];
     if (validProfessionals.length !== new Set(parsed.data.professionalIds).size) {
       return { ok: false, error: "Um dos profissionais selecionados é inválido.", field: "professionalIds" };
+    }
+    if (parsed.data.onlineBooking && validProfessionals.length === 0) {
+      return {
+        ok: false,
+        error: "Escolha pelo menos um profissional para disponibilizar este serviço na agenda online.",
+        field: "professionalIds",
+      };
+    }
+    if (parsed.data.requiredResourceType) {
+      const [availableResource] = await db
+        .select({ id: resources.id })
+        .from(resources)
+        .where(
+          and(
+            eq(resources.organizationId, ctx.organizationId),
+            eq(resources.type, parsed.data.requiredResourceType),
+            eq(resources.active, true),
+          ),
+        )
+        .limit(1);
+      if (!availableResource) {
+        const label = {
+          room: "sala",
+          cabin: "cabine",
+          equipment: "equipamento",
+        }[parsed.data.requiredResourceType];
+        return {
+          ok: false,
+          error: `Cadastre ao menos um recurso ativo do tipo ${label} em Gestão ou selecione “Nenhum”.`,
+          field: "requiredResourceType",
+        };
+      }
     }
     await db.transaction(async (tx) => {
       const categoryId = await categoryIdFor(tx, ctx.organizationId, parsed.data.categoryName);
