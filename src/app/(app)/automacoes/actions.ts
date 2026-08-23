@@ -9,7 +9,7 @@ import {
   setAutomationRuleActive,
 } from "@/server/services/automation-service";
 
-const trigger = z.enum(["before_appointment", "appointment_day", "after_appointment", "after_purchase"]);
+const trigger = z.enum(["appointment_created", "before_appointment", "appointment_day", "after_appointment", "after_purchase"]);
 
 export type AutomationActionState = { ok: boolean; message: string };
 

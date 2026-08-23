@@ -89,6 +89,7 @@ export const scheduledMessageStatus = pgEnum("scheduled_message_status", [
   "cancelled",
 ]);
 export const automationTrigger = pgEnum("automation_trigger", [
+  "appointment_created",
   "before_appointment",
   "appointment_day",
   "after_appointment",

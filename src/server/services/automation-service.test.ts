@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { automationScheduledFor, renderAutomationTemplate } from "./automation-service";
 
 describe("automações", () => {
+  it("agenda confirmação de criação para o mesmo instante", () => {
+    const event = new Date("2026-08-23T18:35:12.000Z");
+    expect(automationScheduledFor(event, "appointment_created", 0, "00:00", "America/Sao_Paulo")).toEqual(event);
+  });
   const event = new Date("2026-09-10T18:00:00.000Z"); // 15h em São Paulo
 
   it("calcula lembrete antes no fuso da clínica", () => {

@@ -134,6 +134,13 @@
       "when": 1787529600000,
       "tag": "0018_booking_funnel_visits",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787533200000,
+      "tag": "0019_appointment_created_automation",
+      "breakpoints": true
     }
   ]
 }

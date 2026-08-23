@@ -21,6 +21,7 @@ import {
   TRANSITIONS,
 } from "@/domain/appointment-status";
 import type { TenantContext } from "@/server/auth";
+import { dispatchAppointmentCreatedAutomations } from "./automation-service";
 
 export class DomainError extends Error {
   constructor(
@@ -80,7 +81,7 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
   const endsAt = addMinutes(input.startsAt, service.durationMin);
 
   try {
-    return await db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(appointments)
         .values({
@@ -119,6 +120,14 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
 
       return created;
     });
+    // A confirmação não pode desfazer um horário já reservado se o WhatsApp
+    // estiver momentaneamente indisponível; a falha fica registrada no disparo.
+    try {
+      await dispatchAppointmentCreatedAutomations(ctx, created.id);
+    } catch (error) {
+      console.error("[automação] falha na confirmação imediata:", error);
+    }
+    return created;
   } catch (error) {
     if (isOverlapViolation(error)) throw new DomainError(SLOT_TAKEN, "SLOT_TAKEN");
     throw error;

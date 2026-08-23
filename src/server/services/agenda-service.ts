@@ -32,6 +32,60 @@ export type AgendaDay = {
   gridEnd: number;
 };
 
+/** Atendimentos de um intervalo local, usados nas visões semanal e mensal. */
+export async function getAgendaRange(
+  ctx: TenantContext,
+  rangeStart: Date,
+  rangeEnd: Date,
+  branchId?: number,
+): Promise<TodayAppointment[]> {
+  const { start } = dayRangeInTz(rangeStart, ctx.timezone);
+  const { end } = dayRangeInTz(rangeEnd, ctx.timezone);
+  const paidByAppointment = db
+    .select({
+      appointmentId: payments.appointmentId,
+      paid: sum(payments.amountCents).mapWith(Number).as("paid"),
+    })
+    .from(payments)
+    .where(eq(payments.organizationId, ctx.organizationId))
+    .groupBy(payments.appointmentId)
+    .as("range_paid_by_appointment");
+
+  return db
+    .select({
+      id: appointments.id,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt,
+      status: appointments.status,
+      priceCents: appointments.priceCents,
+      source: appointments.source,
+      customerId: customers.id,
+      customerName: customers.name,
+      customerPhone: customers.phone,
+      serviceName: services.name,
+      professionalId: professionals.id,
+      professionalName: professionals.name,
+      professionalColor: professionals.color,
+      branchName: branches.name,
+      paidCents: sql<number>`coalesce(${paidByAppointment.paid}, 0)`.mapWith(Number),
+    })
+    .from(appointments)
+    .innerJoin(customers, eq(customers.id, appointments.customerId))
+    .innerJoin(services, eq(services.id, appointments.serviceId))
+    .innerJoin(professionals, eq(professionals.id, appointments.professionalId))
+    .innerJoin(branches, eq(branches.id, appointments.branchId))
+    .leftJoin(paidByAppointment, eq(paidByAppointment.appointmentId, appointments.id))
+    .where(
+      and(
+        eq(appointments.organizationId, ctx.organizationId),
+        gte(appointments.startsAt, start),
+        lt(appointments.startsAt, end),
+        branchId ? eq(appointments.branchId, branchId) : undefined,
+      ),
+    )
+    .orderBy(asc(appointments.startsAt));
+}
+
 function minutesOf(time: string): number {
   const [h, m] = time.split(":");
   return Number(h) * 60 + Number(m);

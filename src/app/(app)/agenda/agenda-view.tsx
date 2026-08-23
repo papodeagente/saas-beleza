@@ -1,6 +1,6 @@
 "use client";
 
-import { addDays, parseISO } from "date-fns";
+import { addDays, addMonths, addWeeks, eachDayOfInterval, isSameMonth, parseISO } from "date-fns";
 import { CalendarCog, CalendarPlus, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -53,6 +53,7 @@ export type AgendaFormData = {
 
 /** Estado do painel de criação: a grade vazia entrega hora e profissional já escolhidos. */
 type Creating = { startsAt?: string; professionalId?: number };
+type ViewMode = "dia" | "semana" | "mes";
 
 /** Cliente que já chega escolhido (link do inbox ou da ficha do cliente). */
 export type PresetCustomer = { id: number; name: string; phone: string | null };
@@ -62,6 +63,10 @@ const SNAP_MIN = 15;
 
 export function AgendaView({
   dateISO,
+  viewMode,
+  rangeStartISO,
+  rangeEndISO,
+  rangeAppointments,
   dayStartUtcISO,
   timezone,
   isToday,
@@ -75,6 +80,10 @@ export function AgendaView({
   presetCustomer,
 }: {
   dateISO: string;
+  viewMode: ViewMode;
+  rangeStartISO: string;
+  rangeEndISO: string;
+  rangeAppointments: AgendaAppointment[];
   dayStartUtcISO: string;
   timezone: string;
   isToday: boolean;
@@ -98,10 +107,10 @@ export function AgendaView({
 
   // O dia mostrado no título muda no clique; o servidor confirma depois.
   // (A página remonta a view a cada dia/atendimento da URL — ver `key` em page.tsx.)
-  const [shownDateISO, setShownDateISO] = useState(dateISO);
+  const shownDateISO = dateISO;
 
   const dayStart = useMemo(() => new Date(dayStartUtcISO), [dayStartUtcISO]);
-  const selected = agenda.appointments.find((a) => a.id === selectedId) ?? null;
+  const selected = agenda.appointments.find((a) => a.id === selectedId) ?? rangeAppointments.find((a) => a.id === selectedId) ?? null;
 
   const ordered = useMemo(
     () => [...agenda.appointments].sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
@@ -114,15 +123,28 @@ export function AgendaView({
     });
   }
 
-  function goToDay(offset: number) {
-    // Parte do dia já mostrado: dois cliques seguidos avançam dois dias mesmo
-    // antes de o servidor responder ao primeiro.
-    const next = addDays(parseISO(`${shownDateISO}T12:00:00Z`), offset);
-    const nextISO = formatTz(next, "UTC", "yyyy-MM-dd");
+  function goToPeriod(offset: number) {
+    const anchor = parseISO(`${shownDateISO}T12:00:00Z`);
+    const next = viewMode === "mes" ? addMonths(anchor, offset) : viewMode === "semana" ? addWeeks(anchor, offset) : addDays(anchor, offset);
     const params = new URLSearchParams(searchParams.toString());
-    params.set("dia", nextISO);
+    params.set("dia", formatTz(next, "UTC", "yyyy-MM-dd"));
     params.delete("atendimento");
-    setShownDateISO(nextISO);
+    navigate(params);
+  }
+
+  function setViewMode(mode: ViewMode) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (mode === "semana") params.delete("visualizacao");
+    else params.set("visualizacao", mode);
+    params.delete("atendimento");
+    navigate(params);
+  }
+
+  function openDay(date: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("dia", date);
+    params.set("visualizacao", "dia");
+    params.delete("atendimento");
     navigate(params);
   }
 
@@ -165,13 +187,14 @@ export function AgendaView({
   const showNowLine =
     nowMinutes !== null && nowMinutes >= agenda.gridStart && nowMinutes <= agenda.gridEnd;
 
-  const title = formatTzCapitalized(
-    new Date(`${shownDateISO}T12:00:00Z`),
-    "UTC",
-    "EEEE, d 'de' MMMM",
-  );
+  const title = viewMode === "mes"
+    ? formatTzCapitalized(new Date(`${shownDateISO}T12:00:00Z`), "UTC", "MMMM 'de' yyyy")
+    : viewMode === "semana"
+      ? `${formatTzCapitalized(new Date(`${rangeStartISO}T12:00:00Z`), "UTC", "d MMM")} – ${formatTz(new Date(`${rangeEndISO}T12:00:00Z`), "UTC", "d MMM yyyy")}`
+      : formatTzCapitalized(new Date(`${shownDateISO}T12:00:00Z`), "UTC", "EEEE, d 'de' MMMM");
 
-  const count = agenda.appointments.length;
+  const visibleAppointments = viewMode === "dia" ? agenda.appointments : rangeAppointments;
+  const count = visibleAppointments.length;
   const branchName = formData.branches.find((b) => b.id === selectedBranchId)?.name;
   const description = navigating
     ? "Carregando atendimentos…"
@@ -217,8 +240,8 @@ export function AgendaView({
                 variant="secondary"
                 size="icon"
                 className="size-11 md:size-9"
-                onClick={() => goToDay(-1)}
-                aria-label="Dia anterior"
+                onClick={() => goToPeriod(-1)}
+                aria-label={viewMode === "mes" ? "Mês anterior" : viewMode === "semana" ? "Semana anterior" : "Dia anterior"}
               >
                 <ChevronLeft />
               </Button>
@@ -226,11 +249,25 @@ export function AgendaView({
                 variant="secondary"
                 size="icon"
                 className="size-11 md:size-9"
-                onClick={() => goToDay(1)}
-                aria-label="Próximo dia"
+                onClick={() => goToPeriod(1)}
+                aria-label={viewMode === "mes" ? "Próximo mês" : viewMode === "semana" ? "Próxima semana" : "Próximo dia"}
               >
                 <ChevronRight />
               </Button>
+            </div>
+
+            <div className="flex rounded-control border border-line bg-surface-sunken p-0.5" role="group" aria-label="Visualização da agenda">
+              {(["dia", "semana", "mes"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setViewMode(mode)}
+                  aria-pressed={viewMode === mode}
+                  className={cn("h-8 rounded-[calc(var(--radius-control)-2px)] px-3 text-label capitalize text-ink-secondary transition-colors", viewMode === mode && "bg-surface-raised text-accent shadow-card")}
+                >
+                  {mode === "mes" ? "Mês" : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              ))}
             </div>
 
             {!isToday ? (
@@ -279,7 +316,19 @@ export function AgendaView({
         }
       />
 
-      {agenda.columns.length === 0 ? (
+      {viewMode !== "dia" ? (
+        <RangeAgenda
+          mode={viewMode}
+          anchorISO={shownDateISO}
+          startISO={rangeStartISO}
+          endISO={rangeEndISO}
+          appointments={rangeAppointments}
+          timezone={timezone}
+          navigating={navigating}
+          onOpenDay={openDay}
+          onSelect={setSelectedId}
+        />
+      ) : agenda.columns.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-10">
           <EmptyState
             icon={CalendarPlus}
@@ -518,6 +567,110 @@ export function AgendaView({
         />
       ) : null}
     </div>
+  );
+}
+
+function RangeAgenda({
+  mode,
+  anchorISO,
+  startISO,
+  endISO,
+  appointments,
+  timezone,
+  navigating,
+  onOpenDay,
+  onSelect,
+}: {
+  mode: Exclude<ViewMode, "dia">;
+  anchorISO: string;
+  startISO: string;
+  endISO: string;
+  appointments: AgendaAppointment[];
+  timezone: string;
+  navigating: boolean;
+  onOpenDay: (dateISO: string) => void;
+  onSelect: (id: number) => void;
+}) {
+  const days = eachDayOfInterval({
+    start: parseISO(`${startISO}T12:00:00Z`),
+    end: parseISO(`${endISO}T12:00:00Z`),
+  });
+  const anchor = parseISO(`${anchorISO}T12:00:00Z`);
+  const byDay = new Map<string, AgendaAppointment[]>();
+  for (const appointment of appointments) {
+    const key = formatTz(new Date(appointment.startsAt), timezone, "yyyy-MM-dd");
+    byDay.set(key, [...(byDay.get(key) ?? []), appointment]);
+  }
+
+  if (mode === "semana") {
+    return (
+      <div className={cn("grid flex-1 grid-cols-1 gap-px bg-line md:grid-cols-7", navigating && "pointer-events-none opacity-60")}>
+        {days.map((day) => {
+          const date = formatTz(day, "UTC", "yyyy-MM-dd");
+          const items = byDay.get(date) ?? [];
+          return (
+            <section key={date} className="min-h-36 bg-surface md:min-h-0">
+              <button type="button" onClick={() => onOpenDay(date)} className="flex w-full items-center justify-between border-b border-line px-3 py-2 text-left hover:bg-surface-sunken">
+                <span className="text-label font-semibold text-ink">{formatTzCapitalized(day, "UTC", "EEE")}</span>
+                <span className="text-caption tabular text-ink-secondary">{formatTz(day, "UTC", "dd/MM")}</span>
+              </button>
+              <div className="space-y-1.5 p-2">
+                {items.length ? items.map((appointment) => (
+                  <RangeAppointment key={appointment.id} appointment={appointment} timezone={timezone} onSelect={() => onSelect(appointment.id)} />
+                )) : <p className="px-1 py-3 text-caption text-ink-tertiary">Livre</p>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn("min-h-0 flex-1 overflow-auto", navigating && "pointer-events-none opacity-60")}>
+      <div className="min-w-[760px]">
+        <div className="grid grid-cols-7 border-b border-line bg-surface-sunken">
+          {["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <div key={label} className="px-2 py-2 text-center text-meta font-semibold uppercase tracking-wide text-ink-secondary">{label}</div>)}
+        </div>
+        <div className="grid grid-cols-7 gap-px bg-line">
+          {days.map((day) => {
+            const date = formatTz(day, "UTC", "yyyy-MM-dd");
+            const items = byDay.get(date) ?? [];
+            const muted = !isSameMonth(day, anchor);
+            return (
+              <section key={date} className={cn("min-h-32 bg-surface p-1.5", muted && "bg-surface-sunken/70")}>
+                <button type="button" onClick={() => onOpenDay(date)} className={cn("mb-1 flex size-7 items-center justify-center rounded-full text-caption tabular hover:bg-accent-soft hover:text-accent", muted ? "text-ink-tertiary" : "text-ink")} aria-label={`Abrir ${formatTz(day, "UTC", "dd/MM/yyyy")}`}>
+                  {formatTz(day, "UTC", "d")}
+                </button>
+                <div className="space-y-1">
+                  {items.slice(0, 3).map((appointment) => <RangeAppointment key={appointment.id} appointment={appointment} timezone={timezone} compact onSelect={() => onSelect(appointment.id)} />)}
+                  {items.length > 3 ? <button type="button" onClick={() => onOpenDay(date)} className="px-1 text-meta font-semibold text-accent">+{items.length - 3} outros</button> : null}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RangeAppointment({ appointment, timezone, compact = false, onSelect }: { appointment: AgendaAppointment; timezone: string; compact?: boolean; onSelect: () => void }) {
+  const status = appointment.status as AppointmentStatus;
+  const off = status === "cancelled" || status === "no_show";
+  const tint = identityTint(appointment.professionalColor);
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full overflow-hidden rounded-control border-l-[3px] px-2 py-1.5 text-left hover:shadow-card"
+      style={{ borderLeftColor: stripeColor(appointment.status), backgroundColor: tint.background }}
+      aria-label={`${formatTz(new Date(appointment.startsAt), timezone, "HH:mm")}, ${appointment.customerName}, ${appointment.serviceName}`}
+    >
+      <span className="block text-meta font-semibold tabular text-ink">{formatTz(new Date(appointment.startsAt), timezone, "HH:mm")}</span>
+      <span className={cn("block truncate text-caption text-ink", off && "line-through")}>{appointment.customerName}</span>
+      {!compact ? <span className="block truncate text-meta text-ink-secondary">{appointment.serviceName} · {appointment.professionalName.split(" ")[0]}</span> : null}
+    </button>
   );
 }
 

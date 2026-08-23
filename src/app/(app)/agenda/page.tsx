@@ -1,9 +1,9 @@
-import { addDays } from "date-fns";
+import { addDays, endOfMonth, endOfWeek, startOfMonth, startOfWeek } from "date-fns";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { customers } from "@/db/schema";
 import { requireSession } from "@/server/auth";
-import { getAgendaDay, getAgendaFormData } from "@/server/services/agenda-service";
+import { getAgendaDay, getAgendaFormData, getAgendaRange } from "@/server/services/agenda-service";
 import { getScheduleSettings } from "@/server/services/schedule-settings-service";
 import { dateISOInTz, dayRangeInTz } from "@/lib/tz";
 import { AgendaView } from "./agenda-view";
@@ -30,17 +30,30 @@ export default async function AgendaPage({
     /** Abre o painel de novo atendimento — usado pelo inbox e pela ficha do cliente. */
     novo?: string;
     cliente?: string;
+    visualizacao?: "dia" | "semana" | "mes";
   }>;
 }) {
   const ctx = await requireSession();
   const params = await searchParams;
   const day = resolveDay(params.dia);
+  const viewMode = params.visualizacao === "dia" || params.visualizacao === "mes" ? params.visualizacao : "semana";
   const branchId = params.unidade ? Number(params.unidade) : undefined;
+  const rangeStart = viewMode === "mes"
+    ? startOfWeek(startOfMonth(day), { weekStartsOn: 1 })
+    : viewMode === "semana"
+      ? startOfWeek(day, { weekStartsOn: 1 })
+      : day;
+  const rangeEnd = viewMode === "mes"
+    ? endOfWeek(endOfMonth(day), { weekStartsOn: 1 })
+    : viewMode === "semana"
+      ? endOfWeek(day, { weekStartsOn: 1 })
+      : day;
 
   const customerId = params.cliente ? Number(params.cliente) : null;
 
-  const [agenda, formData, schedule, presetCustomer] = await Promise.all([
+  const [agenda, rangeAppointments, formData, schedule, presetCustomer] = await Promise.all([
     getAgendaDay(ctx, day, branchId),
+    viewMode === "dia" ? Promise.resolve([]) : getAgendaRange(ctx, rangeStart, rangeEnd, branchId),
     getAgendaFormData(ctx),
     getScheduleSettings(ctx),
     // Cliente vindo do inbox: já entra escolhido no painel, sem busca de novo.
@@ -65,6 +78,14 @@ export default async function AgendaPage({
       // sincronizar estado com prop dentro de um efeito.
       key={`${dateISO}:${openAppointmentId ?? ""}:${customerId ?? ""}`}
       dateISO={dateISO}
+      viewMode={viewMode}
+      rangeStartISO={dateISOInTz(dayRangeInTz(rangeStart, ctx.timezone).start, ctx.timezone)}
+      rangeEndISO={dateISOInTz(dayRangeInTz(rangeEnd, ctx.timezone).start, ctx.timezone)}
+      rangeAppointments={rangeAppointments.map((a) => ({
+        ...a,
+        startsAt: a.startsAt.toISOString(),
+        endsAt: a.endsAt.toISOString(),
+      }))}
       dayStartUtcISO={dayStartUtc.toISOString()}
       timezone={ctx.timezone}
       isToday={dateISO === dateISOInTz(new Date(), ctx.timezone)}

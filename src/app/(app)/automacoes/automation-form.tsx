@@ -7,6 +7,12 @@ import { Select } from "@/components/ui/select";
 import { createAutomationAction } from "./actions";
 
 const PRESETS = {
+  appointment_created: {
+    name: "Confirmação imediata do agendamento",
+    days: 0,
+    message:
+      "Oi, {nome}! Seu agendamento de {servico} foi realizado com sucesso ✨ Dia {data}, às {hora}, com {profissional}. Esperamos você!",
+  },
   before_appointment: {
     name: "Lembrete para evitar faltas",
     days: 1,
@@ -36,7 +42,7 @@ const PRESETS = {
 type Trigger = keyof typeof PRESETS;
 
 export function AutomationForm() {
-  const [trigger, setTrigger] = useState<Trigger>("before_appointment");
+  const [trigger, setTrigger] = useState<Trigger>("appointment_created");
   const [state, formAction, pending] = useActionState(createAutomationAction, { ok: false, message: "" });
   const preset = PRESETS[trigger];
   // A chave recria os campos quando o gatilho muda, aplicando o modelo sugerido.
@@ -44,6 +50,7 @@ export function AutomationForm() {
     <form action={formAction} className="space-y-4">
       <Field label="Quando enviar" htmlFor="trigger">
         <Select id="trigger" name="trigger" value={trigger} onChange={(event) => setTrigger(event.target.value as Trigger)}>
+          <option value="appointment_created">Assim que o agendamento for criado</option>
           <option value="before_appointment">X dias antes do agendamento</option>
           <option value="appointment_day">No dia do agendamento</option>
           <option value="after_appointment">X dias depois do atendimento</option>
@@ -51,17 +58,26 @@ export function AutomationForm() {
         </Select>
       </Field>
 
-      <div key={trigger} className="grid gap-4 sm:grid-cols-[1fr_120px_130px]">
+      <div key={trigger} className={trigger === "appointment_created" ? "grid gap-4" : "grid gap-4 sm:grid-cols-[1fr_120px_130px]"}>
         <Field label="Nome da automação" htmlFor="name">
           <Input id="name" name="name" defaultValue={preset.name} required maxLength={80} />
         </Field>
-        <Field label={trigger === "appointment_day" ? "No mesmo dia" : "Após quantos dias"} htmlFor="daysOffset">
-          <Input id="daysOffset" name="daysOffset" type="number" min={0} max={365} defaultValue={preset.days} disabled={trigger === "appointment_day"} required />
-          {trigger === "appointment_day" ? <input type="hidden" name="daysOffset" value="0" /> : null}
-        </Field>
-        <Field label="Horário" htmlFor="sendTime">
-          <Input id="sendTime" name="sendTime" type="time" defaultValue="09:00" required />
-        </Field>
+        {trigger === "appointment_created" ? (
+          <>
+            <input type="hidden" name="daysOffset" value="0" />
+            <input type="hidden" name="sendTime" value="00:00" />
+          </>
+        ) : (
+          <>
+            <Field label={trigger === "appointment_day" ? "No mesmo dia" : "Após quantos dias"} htmlFor="daysOffset">
+              <Input id="daysOffset" name="daysOffset" type="number" min={0} max={365} defaultValue={preset.days} disabled={trigger === "appointment_day"} required />
+              {trigger === "appointment_day" ? <input type="hidden" name="daysOffset" value="0" /> : null}
+            </Field>
+            <Field label="Horário" htmlFor="sendTime">
+              <Input id="sendTime" name="sendTime" type="time" defaultValue="09:00" required />
+            </Field>
+          </>
+        )}
       </div>
 
       <div key={`${trigger}-message`}>

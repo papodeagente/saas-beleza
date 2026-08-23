@@ -19,6 +19,7 @@ import type { TenantContext } from "@/server/auth";
 import { startOutboundConversation } from "@/server/services/outbound-conversation-service";
 
 export type AutomationTrigger =
+  | "appointment_created"
   | "before_appointment"
   | "appointment_day"
   | "after_appointment"
@@ -56,7 +57,7 @@ export async function createAutomationRule(ctx: TenantContext, input: Automation
   await db.insert(automationRules).values({
     organizationId: ctx.organizationId,
     ...input,
-    daysOffset: input.trigger === "appointment_day" ? 0 : input.daysOffset,
+    daysOffset: input.trigger === "appointment_day" || input.trigger === "appointment_created" ? 0 : input.daysOffset,
     createdByUserId: ctx.userId,
   });
 }
@@ -84,6 +85,7 @@ export async function deleteAutomationRule(ctx: TenantContext, id: number) {
 }
 
 export function automationScheduledFor(eventAt: Date, trigger: AutomationTrigger, days: number, time: string, timezone: string) {
+  if (trigger === "appointment_created") return eventAt;
   const signedDays = trigger === "before_appointment" ? -days : trigger === "appointment_day" ? 0 : days;
   const targetDay = addDays(eventAt, signedDays);
   return localDateTimeToUtc(dateISOInTz(targetDay, timezone), time.slice(0, 5), timezone);
@@ -177,6 +179,71 @@ async function candidatesForRule(rule: typeof automationRules.$inferSelect, now:
   });
 }
 
+/**
+ * Dispara a confirmação operacional logo após o commit do agendamento.
+ * O livro-razão torna a operação idempotente, inclusive se uma rota repetir a chamada.
+ */
+export async function dispatchAppointmentCreatedAutomations(ctx: TenantContext, appointmentId: number) {
+  const rules = await db
+    .select()
+    .from(automationRules)
+    .where(
+      and(
+        eq(automationRules.organizationId, ctx.organizationId),
+        eq(automationRules.trigger, "appointment_created"),
+        eq(automationRules.active, true),
+      ),
+    );
+  if (!rules.length) return;
+
+  const [row] = await db
+    .select({
+      sourceId: appointments.id,
+      customerId: customers.id,
+      customerName: customers.name,
+      consentMarketing: customers.consentMarketing,
+      eventAt: appointments.startsAt,
+      serviceName: services.name,
+      professionalName: professionals.name,
+    })
+    .from(appointments)
+    .innerJoin(customers, eq(customers.id, appointments.customerId))
+    .innerJoin(services, eq(services.id, appointments.serviceId))
+    .innerJoin(professionals, eq(professionals.id, appointments.professionalId))
+    .where(and(eq(appointments.id, appointmentId), eq(appointments.organizationId, ctx.organizationId)))
+    .limit(1);
+  if (!row) return;
+
+  const candidate: Candidate = { ...row, sourceType: "appointment" };
+  const bookingUrl = `${(process.env.APP_URL ?? "").replace(/\/$/, "")}/agendar/${ctx.organizationSlug}`;
+  for (const rule of rules) {
+    const message = renderAutomationTemplate(rule.messageTemplate, candidate, ctx.timezone, bookingUrl);
+    const now = new Date();
+    const [claimed] = await db
+      .insert(automationDispatches)
+      .values({
+        organizationId: ctx.organizationId,
+        ruleId: rule.id,
+        customerId: candidate.customerId,
+        sourceType: candidate.sourceType,
+        sourceId: candidate.sourceId,
+        scheduledFor: now,
+        message,
+      })
+      .onConflictDoNothing()
+      .returning({ id: automationDispatches.id });
+    if (!claimed) continue;
+
+    const result = await startOutboundConversation(ctx, { customerId: candidate.customerId, body: message });
+    await db
+      .update(automationDispatches)
+      .set(result.ok
+        ? { status: "sent", sentAt: new Date() }
+        : { status: "failed", error: result.error.slice(0, 500) })
+      .where(eq(automationDispatches.id, claimed.id));
+  }
+}
+
 async function automationContext(organizationId: number): Promise<TenantContext | null> {
   const [row] = await db
     .select({
@@ -206,6 +273,7 @@ export async function dispatchDueAutomations(now = new Date()) {
   let skipped = 0;
 
   for (const rule of rules) {
+    if (rule.trigger === "appointment_created") continue;
     const ctx = await automationContext(rule.organizationId);
     if (!ctx) continue;
     const candidates = await candidatesForRule(rule, now);

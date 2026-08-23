@@ -12,6 +12,7 @@ export const metadata = { title: "Automações" };
 export const dynamic = "force-dynamic";
 
 const TRIGGER_LABEL: Record<AutomationTrigger, (days: number) => string> = {
+  appointment_created: () => "Imediatamente após criar o agendamento",
   before_appointment: (days) => `${days} ${days === 1 ? "dia" : "dias"} antes do agendamento`,
   appointment_day: () => "No dia do agendamento",
   after_appointment: (days) => `${days} ${days === 1 ? "dia" : "dias"} após o atendimento`,
@@ -45,7 +46,7 @@ export default async function AutomationsPage() {
                         <Badge tone={rule.active ? "positive" : "neutral"}>{rule.active ? "Ativa" : "Pausada"}</Badge>
                       </div>
                       <p className="mt-1 text-caption text-ink-secondary">
-                        {TRIGGER_LABEL[rule.trigger](rule.daysOffset)}, às {rule.sendTime.slice(0, 5)}
+                        {TRIGGER_LABEL[rule.trigger](rule.daysOffset)}{rule.trigger === "appointment_created" ? "" : `, às ${rule.sendTime.slice(0, 5)}`}
                       </p>
                       <p className="mt-1 line-clamp-2 text-caption text-ink-tertiary">{rule.messageTemplate}</p>
                     </div>
