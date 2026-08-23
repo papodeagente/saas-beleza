@@ -1,3 +1,4 @@
+import { asc, eq } from "drizzle-orm";
 import { ChevronLeft, ChevronRight, Wallet } from "lucide-react";
 import Link from "next/link";
 import { PageBody, PageHeader, SectionLabel } from "@/components/app-shell";
@@ -6,6 +7,8 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Metric, MetricRow } from "@/components/ui/metric";
 import { ProfessionalDot } from "@/components/ui/status-stripe";
+import { db } from "@/db";
+import { branches } from "@/db/schema";
 import { formatBRL, formatBRLCompact } from "@/lib/money";
 import { formatTz, formatTzCapitalized } from "@/lib/tz";
 import { cn } from "@/lib/utils";
@@ -19,6 +22,7 @@ import {
   getRevenueByService,
   listTransactions,
 } from "@/server/services/finance-service";
+import { TransactionForm } from "./transaction-form";
 
 export const metadata = { title: "Financeiro" };
 export const dynamic = "force-dynamic";
@@ -68,12 +72,13 @@ export default async function FinancePage({
   const period = monthPeriod(month);
   const filter = FILTERS.find((f) => f.value === params.filtro)?.value ?? "todos";
 
-  const [summary, transactions, result, byService, byProfessional] = await Promise.all([
+  const [summary, transactions, result, byService, byProfessional, branchOptions] = await Promise.all([
     getCashSummary(ctx, period),
     listTransactions(ctx, period, filter),
     getManagementResult(ctx, period),
     getRevenueByService(ctx, period),
     getCommissionsByProfessional(ctx, period),
+    db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.organizationId, ctx.organizationId)).orderBy(asc(branches.name)),
   ]);
 
   const monthDate = new Date(`${period.fromISO}T12:00:00Z`);
@@ -99,6 +104,7 @@ export default async function FinancePage({
         }
         actions={
           <div className="flex flex-wrap items-center gap-1">
+            <TransactionForm branches={branchOptions} />
             <MonthStep
               href={href({ mes: shiftMonth(month, -1) })}
               label={`Ver ${formatTz(new Date(`${shiftMonth(month, -1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
