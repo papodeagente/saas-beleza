@@ -4,6 +4,8 @@ import { db } from "@/db";
 import {
   appointments,
   conversations,
+  customerTagLinks,
+  customerTags,
   customers,
   messages,
   professionals,
@@ -169,11 +171,33 @@ export type ConversationContext = {
   customerId: number;
   name: string;
   phone: string | null;
+  email: string | null;
   visitsCount: number;
+  noShowCount: number;
   totalSpentCents: number;
   lastVisitAt: Date | null;
-  nextAppointment: { startsAt: Date; serviceName: string; professionalName: string } | null;
+  /** Derivado do histórico, não digitado: é o que resume a relação num olhar. */
+  stage: "novo" | "ativo" | "recorrente" | "sumido";
+  tags: string[];
+  nextAppointments: Array<{
+    id: number;
+    startsAt: Date;
+    serviceName: string;
+    professionalName: string;
+    status: string;
+  }>;
 };
+
+/**
+ * Estágio do cliente a partir do que aconteceu, não de um campo que alguém
+ * precisa lembrar de atualizar.
+ */
+function customerStage(visits: number, lastVisitAt: Date | null): ConversationContext["stage"] {
+  if (visits === 0) return "novo";
+  const dias = lastVisitAt ? (Date.now() - lastVisitAt.getTime()) / 86_400_000 : Infinity;
+  if (dias > 120) return "sumido";
+  return visits >= 4 ? "recorrente" : "ativo";
+}
 
 export type ConversationDetail = {
   conversation: {
@@ -258,7 +282,9 @@ export async function getConversation(
         customerId: customers.id,
         name: customers.name,
         phone: customers.phone,
+        email: customers.email,
         visitsCount: customers.visitsCount,
+        noShowCount: customers.noShowCount,
         totalSpentCents: customers.totalSpentCents,
         lastVisitAt: customers.lastVisitAt,
       })
@@ -266,11 +292,13 @@ export async function getConversation(
       .where(eq(customers.id, conversation.customerId))
       .limit(1);
 
-    const [next] = await db
+    const proximos = await db
       .select({
+        id: appointments.id,
         startsAt: appointments.startsAt,
         serviceName: services.name,
         professionalName: professionals.name,
+        status: appointments.status,
       })
       .from(appointments)
       .innerJoin(services, eq(services.id, appointments.serviceId))
@@ -283,9 +311,23 @@ export async function getConversation(
         ),
       )
       .orderBy(asc(appointments.startsAt))
-      .limit(1);
+      .limit(4);
 
-    if (customer) context = { ...customer, nextAppointment: next ?? null };
+    const tags = await db
+      .select({ name: customerTags.name })
+      .from(customerTagLinks)
+      .innerJoin(customerTags, eq(customerTags.id, customerTagLinks.tagId))
+      .where(eq(customerTagLinks.customerId, conversation.customerId))
+      .limit(8);
+
+    if (customer) {
+      context = {
+        ...customer,
+        stage: customerStage(customer.visitsCount, customer.lastVisitAt),
+        tags: tags.map((t) => t.name),
+        nextAppointments: proximos,
+      };
+    }
   }
 
   return {

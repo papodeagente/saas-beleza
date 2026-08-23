@@ -49,6 +49,7 @@ export default async function InboxPage({
       initialTab={tab}
       currentUserId={ctx.userId}
       whatsappConnected={connection?.status === "connected"}
+      canSupervise={ctx.role === "owner" || ctx.role === "admin"}
     />
   );
 }

@@ -276,39 +276,6 @@ const ROLE_LABEL: Record<Role, string> = {
   professional: "Profissional",
 };
 
-function NavGroup({
-  items,
-  isActive,
-}: {
-  items: Array<{ href: string; label: string; icon: typeof Sparkles }>;
-  isActive: (href: string) => boolean;
-}) {
-  return (
-    <ul className="space-y-0.5">
-      {items.map((item) => {
-        const active = isActive(item.href);
-        return (
-          <li key={item.href}>
-            <Link
-              href={item.href}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-3 rounded-pill px-3 py-2.5 text-label transition-colors duration-[120ms]",
-                active
-                  ? "bg-white/25 font-semibold text-white"
-                  : "text-white/85 hover:bg-white/12 hover:text-white",
-              )}
-            >
-              <item.icon className="size-[18px]" />
-              {item.label}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 /** Caixa flutuante ancorada abaixo do gatilho, fechando ao clicar fora. */
 function DropdownPanel({
   children,

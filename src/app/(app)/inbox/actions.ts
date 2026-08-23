@@ -59,10 +59,20 @@ export type InboxDetail = {
     customerId: number;
     name: string;
     phone: string | null;
+    email: string | null;
     visitsCount: number;
+    noShowCount: number;
     totalSpentCents: number;
     lastVisitAt: string | null;
-    nextAppointment: { startsAt: string; serviceName: string; professionalName: string } | null;
+    stage: "novo" | "ativo" | "recorrente" | "sumido";
+    tags: string[];
+    nextAppointments: Array<{
+      id: number;
+      startsAt: string;
+      serviceName: string;
+      professionalName: string;
+      status: string;
+    }>;
   } | null;
 };
 
@@ -89,12 +99,10 @@ function serialize(detail: ConversationDetail): InboxDetail {
       ? {
           ...detail.context,
           lastVisitAt: detail.context.lastVisitAt?.toISOString() ?? null,
-          nextAppointment: detail.context.nextAppointment
-            ? {
-                ...detail.context.nextAppointment,
-                startsAt: detail.context.nextAppointment.startsAt.toISOString(),
-              }
-            : null,
+          nextAppointments: detail.context.nextAppointments.map((a) => ({
+            ...a,
+            startsAt: a.startsAt.toISOString(),
+          })),
         }
       : null,
   };

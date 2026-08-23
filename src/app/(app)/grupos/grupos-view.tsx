@@ -135,12 +135,17 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
   return (
     <div className="mx-auto w-full max-w-[980px] px-4 py-6 md:px-6 md:py-8">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-title text-ink">Grupos</h1>
-          <p className="mt-1 text-body text-ink-secondary">
-            {total > 0 ? `${total} grupos no aparelho conectado.` : "Grupos do aparelho conectado."} As mudanças valem no
-            WhatsApp na hora.
-          </p>
+        <div className="flex items-center gap-3">
+          <span className="bg-brand flex size-10 shrink-0 items-center justify-center rounded-card text-white">
+            <Users className="size-5" aria-hidden />
+          </span>
+          <div>
+            <h1 className="text-title text-ink">Grupos</h1>
+            <p className="mt-0.5 text-caption text-ink-secondary">
+              {total > 0 ? `${total} grupos no aparelho conectado` : "Grupos do aparelho conectado"} · as mudanças valem
+              no WhatsApp na hora
+            </p>
+          </div>
         </div>
         {canManage ? (
           <div className="flex gap-2">
@@ -195,7 +200,14 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
+                  {group.participantCount > 0 ? (
+                    <Badge tone="neutral">
+                      <Users className="size-3" aria-hidden />
+                      {group.participantCount}
+                    </Badge>
+                  ) : null}
                   {group.onlyAdminsSend ? <Badge tone="attention">Só admin</Badge> : null}
+                  {group.requiresApproval ? <Badge tone="info">Aprovação</Badge> : null}
                 </span>
               </button>
             </li>

@@ -7,21 +7,32 @@ import {
   CalendarCheck,
   Check,
   CheckCheck,
+  CheckCircle2,
   ChevronLeft,
   Clock,
   FileText,
+  Headphones,
   Image as ImageIcon,
   Inbox as InboxIcon,
+  LayoutGrid,
+  ListOrdered,
+  Mail,
   MessageSquare,
   Mic,
   PanelRightClose,
   PanelRightOpen,
   Pause,
+  Pencil,
+  Phone,
   Play,
+  Plus,
+  Search,
   TriangleAlert,
   User,
   UserPlus,
   Users,
+  UserX,
+  Wallet,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
@@ -33,7 +44,9 @@ import { Card, DataRow } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { formatBRL } from "@/lib/money";
+import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
+import { listGroupsAction } from "../grupos/actions";
 import { loadMediaAction } from "./actions";
 import { Composer, type ReplyTarget } from "./composer";
 import { MessageActions } from "./message-actions";
@@ -70,10 +83,10 @@ type Tab = "meus" | "fila" | "todos" | "resolvidas";
 type Draft = { tempId: string; conversationId: number; body: string; failed: boolean };
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof InboxIcon }> = [
-  { id: "meus", label: "Meus", icon: User },
-  { id: "fila", label: "Fila", icon: InboxIcon },
-  { id: "todos", label: "Todos", icon: Users },
-  { id: "resolvidas", label: "Resolvidas", icon: Check },
+  { id: "meus", label: "Meus", icon: InboxIcon },
+  { id: "fila", label: "Fila", icon: ListOrdered },
+  { id: "todos", label: "Todos", icon: LayoutGrid },
+  { id: "resolvidas", label: "Resolvidas", icon: CheckCircle2 },
 ];
 
 /** Grafia dos canais: "whatsapp" nunca deve virar "Whatsapp" via CSS. */
@@ -113,6 +126,7 @@ export function InboxView({
   initialTab,
   currentUserId,
   whatsappConnected,
+  canSupervise,
 }: {
   conversations: ConversationItem[];
   counts: { meus: number; fila: number; todos: number };
@@ -121,6 +135,7 @@ export function InboxView({
   initialTab: Tab;
   currentUserId: number;
   whatsappConnected: boolean;
+  canSupervise: boolean;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
@@ -133,6 +148,11 @@ export function InboxView({
   const [drafts, setDrafts] = useState<Draft[]>([]);
   // Mensagem que está sendo respondida — some assim que o envio conclui.
   const [reply, setReply] = useState<ReplyTarget>(null);
+  /**
+   * Total de grupos, buscado depois que a tela aparece: a contagem vem do
+   * WhatsApp e leva segundos, o que não pode atrasar a abertura do inbox.
+   */
+  const [groupCount, setGroupCount] = useState(0);
   /**
    * A ficha do cliente ocupa uma coluna inteira. Em tela larga ela cabe junto
    * com lista e conversa; abaixo disso, competir por espaço deixa a conversa
@@ -160,6 +180,17 @@ export function InboxView({
   const detail = activeId == null ? null : (cache[activeId] ?? null);
   const conversationDrafts = drafts.filter((d) => d.conversationId === activeId);
   const loading = activeId != null && !detail;
+
+  useEffect(() => {
+    if (!whatsappConnected) return;
+    let ativo = true;
+    void listGroupsAction({ limit: 1, offset: 0 }).then((resultado) => {
+      if (ativo && resultado.ok) setGroupCount(resultado.data.total);
+    });
+    return () => {
+      ativo = false;
+    };
+  }, [whatsappConnected]);
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
@@ -291,22 +322,70 @@ export function InboxView({
           selectedId == null ? "flex" : "hidden",
         )}
       >
-        <div className="sticky top-0 z-10 border-b border-line bg-surface-raised px-4 py-3">
-          <h1 className="text-title text-ink">Inbox</h1>
+        {/* Ações da caixa: o que vale para a fila inteira, não para uma conversa */}
+        <div className="sticky top-0 z-10 flex flex-col gap-2 border-b border-line bg-surface-raised px-3 py-3">
+          <div className="flex items-center gap-2">
+            {canSupervise ? (
+              <Button variant="primary" size="sm" className="h-9 flex-1" asChild>
+                <Link href="/supervisao">
+                  <Headphones aria-hidden />
+                  Supervisão
+                </Link>
+              </Button>
+            ) : null}
+            <Button variant="secondary" size="sm" className="h-9 flex-1" asChild>
+              <Link href="/grupos">
+                <Users aria-hidden />
+                Grupos
+                {groupCount > 0 ? <span className="tabular">{groupCount}</span> : null}
+              </Link>
+            </Button>
+            <span
+              title={whatsappConnected ? "WhatsApp conectado" : "WhatsApp desconectado"}
+              className={cn(
+                "size-2.5 shrink-0 rounded-full",
+                whatsappConnected ? "bg-positive" : "bg-attention",
+              )}
+            />
+          </div>
+
           {!whatsappConnected ? (
             <Link
               href="/whatsapp"
-              className="mt-2 flex items-center gap-1.5 rounded-control bg-attention-soft px-2 py-1.5 text-caption text-attention"
+              className="flex items-center gap-1.5 rounded-control bg-attention-soft px-2 py-1.5 text-caption text-attention"
             >
               <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
               WhatsApp não conectado. Conectar agora
             </Link>
           ) : null}
-          <div className="mt-3 flex gap-1" role="tablist">
+
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-tertiary"
+              aria-hidden
+            />
+            <Input
+              value={search}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder="Pesquisar conversa"
+              className="pl-9"
+            />
+          </div>
+
+          {/* Abas em ícone + rótulo: cabem cinco numa coluna estreita, e o
+              número pendente fica colado no ícone, como aviso e não como texto. */}
+          <div className="grid grid-cols-4 gap-1 rounded-card bg-surface-sunken p-1" role="tablist">
             {TABS.map((item) => {
               const active = tab === item.id;
               const badge =
-                item.id === "meus" ? tabCounts.meus : item.id === "fila" ? tabCounts.fila : item.id === "todos" ? tabCounts.todos : 0;
+                item.id === "meus"
+                  ? tabCounts.meus
+                  : item.id === "fila"
+                    ? tabCounts.fila
+                    : item.id === "todos"
+                      ? tabCounts.todos
+                      : 0;
+              const TabIcon = item.icon;
               return (
                 <button
                   key={item.id}
@@ -315,22 +394,25 @@ export function InboxView({
                   aria-selected={active}
                   onClick={() => changeTab(item.id)}
                   className={cn(
-                    "flex-1 rounded-control px-2 py-1.5 text-caption font-medium transition-colors",
-                    active ? "bg-accent-soft text-accent" : "text-ink-secondary hover:bg-surface-sunken",
+                    "flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-control px-1 py-1.5 text-meta font-medium transition-colors",
+                    active
+                      ? "bg-surface-raised text-accent shadow-[var(--shadow-raised)]"
+                      : "text-ink-secondary hover:text-ink",
                   )}
                 >
-                  {item.label}
-                  {badge > 0 ? <span className="ml-1 tabular">{badge}</span> : null}
+                  <span className="relative flex items-center justify-center">
+                    <TabIcon className="size-4 shrink-0" aria-hidden />
+                    {badge > 0 ? (
+                      <span className="absolute -top-1.5 -right-3 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold text-white tabular">
+                        {badge > 99 ? "99+" : badge}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="max-w-full truncate leading-tight">{item.label}</span>
                 </button>
               );
             })}
           </div>
-          <Input
-            value={search}
-            onChange={(event) => onSearch(event.target.value)}
-            placeholder="Buscar por nome ou telefone"
-            className="mt-2"
-          />
         </div>
 
         {list.length === 0 ? (
@@ -343,71 +425,16 @@ export function InboxView({
           </p>
         ) : (
           <ul>
-            {list.map((conversation) => {
-              const opened = conversation.id === selectedId;
-              const active = conversation.id === activeId;
-              return (
-                <li key={conversation.id} className="border-b border-line">
-                  <button
-                    type="button"
-                    onClick={() => open(conversation.id)}
-                    aria-current={active ? "true" : undefined}
-                    className={cn(
-                      "flex w-full gap-2.5 border-l-[3px] py-3 pr-4 pl-[13px] text-left transition-colors duration-[120ms]",
-                      "border-l-transparent hover:bg-surface-sunken",
-                      active && "md:border-l-accent md:bg-accent-soft md:hover:bg-accent-soft",
-                      opened && "border-l-accent bg-accent-soft hover:bg-accent-soft",
-                    )}
-                  >
-                    <Avatar name={conversation.customerName} size="md" />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span className={cn("truncate text-label text-ink", (active || opened) && "font-semibold")}>
-                          {conversation.customerName}
-                        </span>
-                        {conversation.lastMessageAt ? (
-                          <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-                            {relativeTime(conversation.lastMessageAt)}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-0.5 flex items-center gap-1.5">
-                        <span className="min-w-0 flex-1 truncate text-caption text-ink-secondary">
-                          {conversation.lastMessageInbound ? "" : "Você: "}
-                          {conversation.lastMessagePreview ?? "Sem mensagens"}
-                        </span>
-                        {conversation.unreadCount > 0 ? (
-                          <span className="shrink-0 rounded-full bg-accent px-1.5 text-meta font-semibold text-white tabular">
-                            {conversation.unreadCount}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        {conversation.aiPaused ? (
-                          <Badge tone="attention">
-                            <Pause className="size-3" aria-hidden />
-                            IA pausada
-                          </Badge>
-                        ) : conversation.controlledBy === "ai" ? (
-                          <Badge tone="info">
-                            <Bot className="size-3" aria-hidden />
-                            IA atendendo
-                          </Badge>
-                        ) : null}
-                        {conversation.assignedUserName ? (
-                          <Badge tone="neutral">
-                            <User className="size-3" aria-hidden />
-                            {conversation.assignedUserName}
-                          </Badge>
-                        ) : conversation.lastAssignedUserName ? (
-                          <Badge tone="neutral">Antes: {conversation.lastAssignedUserName}</Badge>
-                        ) : null}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {list.map((conversation) => (
+              <li key={conversation.id} className="border-b border-line">
+                <ConversationRow
+                  conversation={conversation}
+                  active={conversation.id === activeId}
+                  opened={conversation.id === selectedId}
+                  onOpen={() => open(conversation.id)}
+                />
+              </li>
+            ))}
           </ul>
         )}
       </aside>
@@ -537,7 +564,7 @@ export function InboxView({
                   abre a conversa, para não sumir justamente no aparelho onde
                   trocar de tela custa mais. */}
               <div className="mx-auto mb-3 w-full max-w-[680px] shrink-0 lg:hidden">
-                <ContextPanel context={detail.context} compact />
+                <ContactPanel context={detail.context} compact />
               </div>
               {/* A conversa cresce de baixo para cima: a última mensagem encosta
                   no composer, como em qualquer thread. */}
@@ -631,7 +658,7 @@ export function InboxView({
             mostrarFicha ? "hidden lg:block" : "hidden",
           )}
         >
-          <ContextPanel context={detail.context} />
+          <ContactPanel context={detail.context} />
         </aside>
       ) : null}
     </div>
@@ -642,7 +669,32 @@ export function InboxView({
  * Ficha resumida do cliente. Par rótulo/valor via DataRow — a mesma unidade de
  * leitura do painel do atendimento e da ficha completa.
  */
-function ContextPanel({
+/** Rótulo e tom do estágio, derivado do histórico e não de campo digitado. */
+const STAGE: Record<string, { label: string; tone: "info" | "positive" | "accent" | "attention" }> = {
+  novo: { label: "Cliente novo", tone: "info" },
+  ativo: { label: "Cliente ativo", tone: "positive" },
+  recorrente: { label: "Cliente fiel", tone: "accent" },
+  sumido: { label: "Sem vir há tempo", tone: "attention" },
+};
+
+const APPOINTMENT_STATUS: Record<string, string> = {
+  scheduled: "Agendado",
+  confirmed: "Confirmado",
+  checked_in: "Chegou",
+  in_progress: "Em atendimento",
+  completed: "Concluído",
+  cancelled: "Cancelado",
+  no_show: "Faltou",
+};
+
+/**
+ * Ficha do cliente ao lado da conversa.
+ *
+ * A ordem responde ao que a atendente pergunta enquanto digita: quem é, como
+ * falar com ele, o que já gastou aqui, e o que está marcado. Métricas em
+ * cartões porque são consultadas de relance, no meio de uma frase.
+ */
+function ContactPanel({
   context,
   compact = false,
 }: {
@@ -651,79 +703,268 @@ function ContextPanel({
 }) {
   if (!context) {
     return (
-      <Card className="px-4 py-3.5">
+      <div className="rounded-card border border-line bg-surface-raised px-4 py-3.5">
         <p className="text-card text-ink">Contato ainda não cadastrado</p>
         <p className="mt-1 text-caption text-ink-secondary">
           Ao agendar por esta conversa, o cliente é criado automaticamente.
         </p>
-      </Card>
+      </div>
     );
   }
 
+  const stage = STAGE[context.stage] ?? STAGE.novo;
+
   return (
-    <div className="space-y-3">
-      <Card className="px-4 py-3.5">
-        <div className="flex items-center gap-2.5">
-          <Avatar name={context.name} size="lg" />
-          <p className="min-w-0 truncate text-card text-ink">{context.name}</p>
+    <div className={cn("flex flex-col gap-3", compact && "rounded-card border border-line bg-surface-raised p-3")}>
+      <div className="flex flex-col items-center gap-2 text-center">
+        <Avatar name={context.name} size="lg" />
+        <div className="min-w-0">
+          <p className="truncate text-card text-ink">{context.name}</p>
+          <Badge tone={stage.tone} className="mt-1">
+            {stage.label}
+          </Badge>
+        </div>
+      </div>
+
+      {context.tags.length > 0 ? (
+        <div className="flex flex-wrap justify-center gap-1">
+          {context.tags.map((tag) => (
+            <Badge key={tag} tone="neutral">
+              {tag}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-1.5 border-t border-line pt-3 text-caption">
+        {context.phone ? (
+          <a
+            href={`tel:${context.phone.replace(/\D/g, "")}`}
+            className="flex items-center gap-2 text-ink hover:text-accent"
+          >
+            <Phone className="size-3.5 shrink-0 text-ink-tertiary" aria-hidden />
+            <span className="truncate tabular">{formatPhone(context.phone)}</span>
+          </a>
+        ) : null}
+        {context.email ? (
+          <a href={`mailto:${context.email}`} className="flex items-center gap-2 text-ink hover:text-accent">
+            <Mail className="size-3.5 shrink-0 text-ink-tertiary" aria-hidden />
+            <span className="truncate">{context.email}</span>
+          </a>
+        ) : null}
+        <Link
+          href={`/clientes/${context.customerId}`}
+          className="flex items-center gap-2 text-accent hover:underline"
+        >
+          <Pencil className="size-3.5 shrink-0" aria-hidden />
+          Editar detalhes do cliente
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <MetricCard icon={CalendarCheck} label="Visitas" value={String(context.visitsCount)} tone="text-accent" />
+        <MetricCard
+          icon={Wallet}
+          label="Total gasto"
+          value={formatBRL(context.totalSpentCents)}
+          tone="text-positive"
+        />
+        <MetricCard
+          icon={UserX}
+          label="Faltas"
+          value={String(context.noShowCount)}
+          tone={context.noShowCount > 0 ? "text-attention" : "text-ink-tertiary"}
+        />
+        <MetricCard
+          icon={Clock}
+          label="Última vez"
+          value={
+            context.lastVisitAt
+              ? format(new Date(context.lastVisitAt), "dd/MM/yy", { locale: ptBR })
+              : "—"
+          }
+          tone="text-info"
+        />
+      </div>
+
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-meta font-medium tracking-wide text-ink-secondary uppercase">
+            Agendamentos ({context.nextAppointments.length})
+          </span>
+          <Link
+            href={`/agenda?novo=1&cliente=${context.customerId}`}
+            aria-label="Agendar atendimento"
+            className="flex size-6 items-center justify-center rounded-control text-ink-secondary hover:bg-surface-sunken hover:text-ink"
+          >
+            <Plus className="size-4" aria-hidden />
+          </Link>
         </div>
 
-        <dl className="mt-3 border-t border-line pt-2">
-          <DataRow label="Atendimentos">
-            <span className="tabular">{context.visitsCount}</span>
-          </DataRow>
-          <DataRow label="Total gasto">
-            <span className="tabular">{formatBRL(context.totalSpentCents)}</span>
-          </DataRow>
-          <DataRow label="Última visita">
-            {context.lastVisitAt
-              ? format(new Date(context.lastVisitAt), "d MMM yyyy", { locale: ptBR })
-              : "Ainda não veio"}
-          </DataRow>
-        </dl>
-      </Card>
-
-      <Card className="px-4 py-3">
-        <p className="flex items-center gap-1.5 text-section">
-          <CalendarCheck className="size-3.5 text-ink-tertiary" aria-hidden />
-          Próximo atendimento
-        </p>
-        {context.nextAppointment ? (
-          <>
-            <p className="mt-1.5 text-label text-ink">
-              {format(new Date(context.nextAppointment.startsAt), "d 'de' MMM', 'HH:mm", {
-                locale: ptBR,
-              })}
-            </p>
-            <p className="text-caption text-ink-secondary">
-              {context.nextAppointment.serviceName} ·{" "}
-              {context.nextAppointment.professionalName.split(" ")[0]}
-            </p>
-          </>
+        {context.nextAppointments.length === 0 ? (
+          <p className="rounded-control bg-surface-sunken px-2.5 py-3 text-center text-caption text-ink-secondary">
+            Sem horário marcado.
+          </p>
         ) : (
-          <p className="mt-1.5 text-caption text-ink-secondary">Sem horário marcado.</p>
+          <ul className="flex flex-col gap-1.5">
+            {context.nextAppointments.map((item) => (
+              <li key={item.id} className="rounded-control border border-line px-2.5 py-2">
+                <p className="truncate text-label text-ink">{item.serviceName}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-caption text-ink-secondary">
+                  <span className="tabular">
+                    {format(new Date(item.startsAt), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                  </span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">{item.professionalName}</span>
+                </p>
+                <Badge tone={item.status === "confirmed" ? "positive" : "neutral"} className="mt-1">
+                  {APPOINTMENT_STATUS[item.status] ?? item.status}
+                </Badge>
+              </li>
+            ))}
+          </ul>
         )}
-      </Card>
-
-      <div className={cn("gap-2", compact ? "flex" : "space-y-2")}>
-        <Button
-          variant="secondary"
-          size="md"
-          className={cn("h-11 md:h-9", compact ? "flex-1" : "w-full")}
-          asChild
-        >
-          <Link href={`/agenda?novo=1&cliente=${context.customerId}`}>Agendar atendimento</Link>
-        </Button>
-        <Button
-          variant="secondary"
-          size="md"
-          className={cn("h-11 md:h-9", compact ? "flex-1" : "w-full")}
-          asChild
-        >
-          <Link href={`/clientes/${context.customerId}`}>Abrir ficha completa</Link>
-        </Button>
       </div>
+
+      <Button variant="secondary" size="md" className="h-10 w-full" asChild>
+        <Link href={`/agenda?novo=1&cliente=${context.customerId}`}>
+          <CalendarCheck aria-hidden />
+          Agendar atendimento
+        </Link>
+      </Button>
     </div>
+  );
+}
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: typeof CalendarCheck;
+  label: string;
+  value: string;
+  tone: string;
+}) {
+  return (
+    <div className="rounded-control border border-line bg-surface-raised px-2.5 py-2">
+      <div className="flex items-center gap-1.5">
+        <Icon className={cn("size-3.5 shrink-0", tone)} aria-hidden />
+        <span className="truncate text-meta font-medium tracking-wide text-ink-secondary uppercase">{label}</span>
+      </div>
+      <p className="mt-0.5 truncate text-card text-ink tabular">{value}</p>
+    </div>
+  );
+}
+
+/**
+ * Linha da lista de conversas.
+ *
+ * Densa de propósito: numa fila de dezenas, cada linha precisa responder em um
+ * olhar quem é, o que foi dito, quando, e quem está cuidando. O selo do canal
+ * fica sobre o avatar porque o canal é atributo da conversa, não informação
+ * que mereça uma linha própria.
+ */
+function ConversationRow({
+  conversation,
+  active,
+  opened,
+  onOpen,
+}: {
+  conversation: ConversationItem;
+  active: boolean;
+  opened: boolean;
+  onOpen: () => void;
+}) {
+  const naoLidas = conversation.unreadCount;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-current={active ? "true" : undefined}
+      className={cn(
+        "flex w-full items-center gap-3 border-l-[3px] py-3 pr-3 pl-[9px] text-left transition-colors duration-[120ms]",
+        "border-l-transparent hover:bg-surface-sunken",
+        active && "md:border-l-accent md:bg-accent-soft md:hover:bg-accent-soft",
+        opened && "border-l-accent bg-accent-soft hover:bg-accent-soft",
+      )}
+    >
+      <span className="relative shrink-0">
+        <Avatar name={conversation.customerName} size="lg" />
+        {/* Selo do canal, no padrão que todo aplicativo de mensagem usa. */}
+        <span
+          title={conversation.channel === "whatsapp" ? "WhatsApp" : conversation.channel}
+          className="absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full bg-[#25D366] ring-2 ring-surface-raised"
+        >
+          <WhatsAppGlyph />
+        </span>
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className={cn("truncate text-label text-ink", naoLidas > 0 && "font-semibold")}>
+            {conversation.customerName}
+          </span>
+          {conversation.lastMessageAt ? (
+            <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
+              {relativeTime(conversation.lastMessageAt)}
+            </span>
+          ) : null}
+        </span>
+
+        <span className="mt-0.5 flex items-center gap-1.5">
+          {!conversation.lastMessageInbound ? (
+            <Check className="size-3 shrink-0 text-ink-tertiary" aria-hidden />
+          ) : null}
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-caption",
+              naoLidas > 0 ? "text-ink" : "text-ink-secondary",
+            )}
+          >
+            {conversation.lastMessagePreview ?? "Sem mensagens"}
+          </span>
+          {naoLidas > 0 ? (
+            <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
+              {naoLidas > 99 ? "99+" : naoLidas}
+            </span>
+          ) : null}
+        </span>
+
+        <span className="mt-1 flex flex-wrap items-center gap-1">
+          {conversation.aiPaused ? (
+            <Badge tone="attention">
+              <Pause className="size-3" aria-hidden />
+              IA pausada
+            </Badge>
+          ) : conversation.controlledBy === "ai" ? (
+            <Badge tone="info">
+              <Bot className="size-3" aria-hidden />
+              IA atendendo
+            </Badge>
+          ) : null}
+          {conversation.assignedUserName ? (
+            <Badge tone="neutral">
+              <User className="size-3" aria-hidden />
+              {conversation.assignedUserName.split(" ")[0]}
+            </Badge>
+          ) : conversation.lastAssignedUserName ? (
+            <Badge tone="neutral">Antes: {conversation.lastAssignedUserName.split(" ")[0]}</Badge>
+          ) : null}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** Marca do WhatsApp em traço único, para caber dentro do selo de 18px. */
+function WhatsAppGlyph() {
+  return (
+    <svg viewBox="0 0 308 308" className="size-2.5 text-white" fill="currentColor" aria-hidden>
+      <path d="M227.9 177c-.6-.3-23-11.3-26.7-12.6-3.6-1.3-6.3-1.9-8.9 1.9-2.6 3.9-10.2 12.6-12.5 15.2-2.3 2.6-4.6 2.9-8.6.9-3.9-2-16.7-6.1-31.8-19.5-11.7-10.4-19.7-23.3-22-27.3-2.3-3.9-.2-6.1 1.7-8.1 1.8-1.8 4-4.6 5.9-6.9 2-2.3 2.6-4 4-6.6 1.3-2.6.6-4.9-.3-6.9-1-2-8.9-21.4-12.2-29.3-3.2-7.7-6.5-6.7-8.9-6.8-2.3-.1-5-.1-7.6-.1s-6.9 1-10.6 4.9c-3.6 3.9-13.9 13.5-13.9 32.9s14.2 38.2 16.2 40.8c2 2.6 27.9 42.5 67.6 59.6 9.4 4.1 16.8 6.5 22.6 8.3 9.5 3 18.1 2.6 24.9 1.6 7.6-1.1 23.1-9.4 26.3-18.5 3.3-9.1 3.3-16.9 2.3-18.5-1-1.6-3.6-2.6-7.6-4.6zM156.7 0C73.3 0 5.5 67.4 5.5 150.1c0 26.8 7.2 53 20.7 75.9L0 308l84-25.7c21.9 11.7 46.6 17.8 71.6 17.8h.1c83.3 0 151.2-67.4 151.2-150.1C307 67.4 240.1 0 156.7 0zm0 275.6h-.1c-22.6 0-44.8-6.1-64.1-17.6l-4.6-2.7-47.7 12.5 12.7-46.3-3-4.8c-12.6-20-19.2-42.6-19.2-66 0-69.6 56.9-125.9 127.1-125.9 34 0 66 13.2 90 37.2 24 24 37.3 55.9 37.3 89.7-.1 69.6-57 125.5-127.4 125.5z" />
+    </svg>
   );
 }
 
