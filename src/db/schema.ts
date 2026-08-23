@@ -88,6 +88,18 @@ export const scheduledMessageStatus = pgEnum("scheduled_message_status", [
   "failed",
   "cancelled",
 ]);
+export const automationTrigger = pgEnum("automation_trigger", [
+  "before_appointment",
+  "appointment_day",
+  "after_appointment",
+  "after_purchase",
+]);
+export const automationDispatchStatus = pgEnum("automation_dispatch_status", [
+  "processing",
+  "sent",
+  "failed",
+  "skipped",
+]);
 /**
  * Como o grupo é tratado pela clínica. Com centenas de grupos, é o que separa
  * o que merece atenção do que é só ruído.
@@ -695,6 +707,58 @@ export const scheduledGroupMessages = pgTable(
     index("scheduled_group_org_idx").on(t.organizationId, t.groupJid, t.scheduledFor),
     // Índice da varredura: só o que está pendente e já venceu importa.
     index("scheduled_group_due_idx").on(t.status, t.scheduledFor),
+  ],
+);
+
+/** Regras simples de relacionamento, calculadas no fuso da clínica. */
+export const automationRules = pgTable(
+  "automation_rules",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    name: text("name").notNull(),
+    trigger: automationTrigger("trigger").notNull(),
+    /** Sempre positivo; o gatilho define se é antes ou depois. */
+    daysOffset: integer("days_offset").notNull().default(0),
+    sendTime: time("send_time").notNull().default("09:00"),
+    messageTemplate: text("message_template").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("automation_rules_org_idx").on(t.organizationId, t.active)],
+);
+
+/** Livro-razão de disparos: a chave única impede mensagem duplicada. */
+export const automationDispatches = pgTable(
+  "automation_dispatches",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    ruleId: bigint("rule_id", { mode: "number" })
+      .notNull()
+      .references(() => automationRules.id),
+    customerId: bigint("customer_id", { mode: "number" })
+      .notNull()
+      .references(() => customers.id),
+    sourceType: text("source_type").notNull(),
+    sourceId: bigint("source_id", { mode: "number" }).notNull(),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+    status: automationDispatchStatus("status").notNull().default("processing"),
+    attempts: integer("attempts").notNull().default(1),
+    message: text("message").notNull(),
+    error: text("error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("automation_dispatch_source_unique").on(t.ruleId, t.sourceType, t.sourceId),
+    index("automation_dispatch_org_idx").on(t.organizationId, t.createdAt),
   ],
 );
 

@@ -1,5 +1,6 @@
 import "server-only";
 import { dispatchDueMessages } from "@/server/services/scheduled-group-messages";
+import { dispatchDueAutomations } from "@/server/services/automation-service";
 
 /**
  * Varredura das mensagens programadas.
@@ -26,6 +27,12 @@ export function startScheduledMessagesWorker(): void {
       const resultado = await dispatchDueMessages();
       if (resultado.sent > 0 || resultado.failed > 0) {
         console.log(`[agendadas] enviadas: ${resultado.sent}, falhas: ${resultado.failed}`);
+      }
+      const automacoes = await dispatchDueAutomations();
+      if (automacoes.sent > 0 || automacoes.failed > 0 || automacoes.skipped > 0) {
+        console.log(
+          `[automações] enviadas: ${automacoes.sent}, falhas: ${automacoes.failed}, ignoradas: ${automacoes.skipped}`,
+        );
       }
     } catch (error) {
       // Uma varredura que estoura não pode derrubar as próximas.
