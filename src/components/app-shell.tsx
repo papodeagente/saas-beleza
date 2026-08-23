@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   ChevronDown,
   Settings,
+  ShieldCheck,
   Smartphone,
   Sparkles,
   User,
@@ -67,11 +68,18 @@ export function AppShell({
   user,
   organization,
   signals,
+  isPlatformAdmin = false,
 }: {
   children: React.ReactNode;
   user: { name: string; email: string; role: Role };
   organization: { name: string };
   signals: Signal[];
+  /**
+   * Vem do servidor (`platform_admins`), nunca do papel na clínica. Esconder o
+   * item no cliente é cortesia visual, não proteção: quem digitar /admin sem
+   * autorização é barrado pelo layout do painel, que consulta a tabela.
+   */
+  isPlatformAdmin?: boolean;
 }) {
   const pathname = usePathname();
   const [panel, setPanel] = useState<"none" | "avisos" | "mais" | "usuario" | "gestao">("none");
@@ -215,7 +223,7 @@ export function AppShell({
               <span className="block text-meta text-white/70">{ROLE_LABEL[user.role]}</span>
             </span>
           </button>
-          {panel === "usuario" ? <UserMenu /> : null}
+          {panel === "usuario" ? <UserMenu isPlatformAdmin={isPlatformAdmin} /> : null}
         </div>
       </nav>
 
@@ -262,6 +270,7 @@ export function AppShell({
           signals={signals}
           user={user}
           isActive={isActive}
+          isPlatformAdmin={isPlatformAdmin}
           onClose={() => setPanel("none")}
         />
       ) : null}
@@ -350,9 +359,9 @@ function SignalPanel({ signals, onClose }: { signals: Signal[]; onClose: () => v
   );
 }
 
-function UserMenu() {
+function UserMenu({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
   return (
-    <div className="animate-dialog-in absolute top-full right-0 z-50 mt-1 w-[196px] rounded-card border border-line bg-surface-raised p-1 shadow-[var(--shadow-overlay)]">
+    <div className="animate-dialog-in absolute top-full right-0 z-50 mt-1 w-[236px] rounded-card border border-line bg-surface-raised p-1 shadow-[var(--shadow-overlay)]">
       <Link
         href="/conta"
         className="flex items-center gap-2 rounded-control px-2 py-1.5 text-label text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
@@ -360,6 +369,23 @@ function UserMenu() {
         <User className="size-3.5" />
         Minha conta
       </Link>
+
+      {/* Sai do escopo da clínica e entra no do SaaS. Fica separado por uma
+          linha justamente para não ser confundido com uma opção da conta. */}
+      {isPlatformAdmin ? (
+        <div className="my-1 border-t border-line pt-1">
+          <Link
+            href="/admin"
+            className="flex items-center gap-2 rounded-control px-2 py-1.5 text-label text-accent transition-colors hover:bg-accent-soft"
+          >
+            <ShieldCheck className="size-3.5" />
+            Administrar a plataforma
+          </Link>
+          <p className="px-2 pt-0.5 pb-1 text-meta leading-4 text-ink-tertiary">
+            Todas as clínicas e o faturamento do SaaS.
+          </p>
+        </div>
+      ) : null}
       <form action="/api/sair" method="post">
         <button
           type="submit"
@@ -379,7 +405,9 @@ function MobileMore({
   user,
   isActive,
   onClose,
+  isPlatformAdmin = false,
 }: {
+  isPlatformAdmin?: boolean;
   items: Array<{ href: string; label: string; icon: typeof Sparkles }>;
   signals: Signal[];
   user: { name: string; role: Role };
@@ -435,6 +463,17 @@ function MobileMore({
               Minha conta
             </Link>
           </li>
+          {isPlatformAdmin ? (
+            <li>
+              <Link
+                href="/admin"
+                className="flex min-h-[52px] items-center gap-3 px-4 text-body text-accent"
+              >
+                <ShieldCheck className="size-[18px]" />
+                Administrar a plataforma
+              </Link>
+            </li>
+          ) : null}
           <li>
             <form action="/api/sair" method="post">
               <button

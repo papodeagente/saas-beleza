@@ -1,6 +1,14 @@
 "use client";
 
-import { ArrowLeft, Building2, CreditCard, Layers, LineChart, LogOut } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  CreditCard,
+  Layers,
+  LineChart,
+  LogOut,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -18,6 +26,7 @@ const NAV = [
   { href: "/admin/contas", label: "Contas", icon: Building2 },
   { href: "/admin/planos", label: "Planos", icon: Layers },
   { href: "/admin/pagamentos", label: "Pagamentos", icon: CreditCard },
+  { href: "/admin/administradores", label: "Administradores", icon: ShieldCheck },
 ];
 
 export function PlatformShell({
