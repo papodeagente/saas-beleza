@@ -123,8 +123,8 @@ const CHANNEL_LABEL: Record<string, string> = {
   site: "Site",
 };
 
-/** Atualização em segundo plano: sem isso a atendente precisa recarregar a página. */
-const POLL_MS = 10_000;
+/** Rede ou proxy podem interromper SSE; esta varredura é apenas a rede de segurança. */
+const FALLBACK_POLL_MS = 30_000;
 
 /**
  * Quando a conversa falou pela última vez.
@@ -384,18 +384,50 @@ export function InboxView({
     [],
   );
 
-  // Mensagem nova chega pelo webhook, sem avisar a tela. A varredura periódica
-  // mantém a lista e a conversa aberta em dia.
+  // O webhook publica no Redis e este canal autenticado avisa a tela assim que
+  // o banco terminou de gravar. EventSource se reconecta sozinho se a internet
+  // oscilar; o intervalo abaixo é apenas a rede de segurança.
   useEffect(() => {
-    const timer = setInterval(async () => {
+    let syncing = false;
+    let queued = false;
+
+    const sync = async () => {
       if (document.hidden) return;
-      await refreshList(tab, search);
-      if (activeId) {
-        const loaded = await loadConversationAction(activeId, { markRead: false });
-        if (loaded) guardarConversa(activeId, loaded);
+      if (syncing) {
+        queued = true;
+        return;
       }
-    }, POLL_MS);
-    return () => clearInterval(timer);
+      syncing = true;
+      do {
+        queued = false;
+        await refreshList(tab, search);
+        if (activeId) {
+          const loaded = await loadConversationAction(activeId, { markRead: false });
+          if (loaded) guardarConversa(activeId, loaded);
+        }
+      } while (queued);
+      syncing = false;
+    };
+
+    const events = new EventSource("/api/inbox/events");
+    events.addEventListener("ready", () => void sync());
+    events.onmessage = () => void sync();
+
+    const onVisible = () => {
+      if (!document.hidden) void sync();
+    };
+    const timer = setInterval(() => void sync(), FALLBACK_POLL_MS);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      events.close();
+      clearInterval(timer);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [tab, search, activeId, refreshList, guardarConversa]);
 
   /**

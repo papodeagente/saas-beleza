@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { whatsappConnections, whatsappWebhookEvents } from "@/db/schema";
 import { connectionByWebhookToken } from "@/server/services/whatsapp-connection-service";
+import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
   applyReaction,
   applyStatusUpdate,
@@ -79,6 +80,12 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   try {
     if (event.kind === "message") {
       const result = await ingestMessage(connection, event.message);
+      if (result.isNew) {
+        await publishInboxEvent(connection.organizationId, {
+          type: "message",
+          conversationId: result.conversationId,
+        });
+      }
       if (result.isNew && result.isInbound) {
         if (event.message.kind === "audio" && result.messageId && process.env.OPENAI_API_KEY) {
           await transcribeAudio(connection.organizationId, result.conversationId, result.messageId).catch((error) => {
@@ -97,10 +104,13 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       for (const externalId of event.externalIds) {
         await applyStatusUpdate(connection, externalId, event.status);
       }
+      await publishInboxEvent(connection.organizationId, { type: "status" });
     } else if (event.kind === "reaction") {
       await applyReaction(connection, event.targetExternalId, event.emoji, event.fromMe);
+      await publishInboxEvent(connection.organizationId, { type: "reaction" });
     } else if (event.kind === "deleted") {
       await markMessageDeleted(connection, event.externalId);
+      await publishInboxEvent(connection.organizationId, { type: "deleted" });
     } else if (event.kind === "qrcode") {
       await db
         .update(whatsappConnections)
