@@ -91,6 +91,14 @@ export const organizations = pgTable("organizations", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   timezone: text("timezone").notNull().default("America/Sao_Paulo"),
+  /**
+   * Suspensão é decisão da plataforma (inadimplência, abuso) e bloqueia o
+   * login da clínica inteira. Separada do status da assinatura de propósito:
+   * uma conta pode estar cancelada comercialmente e ainda ter acesso até o fim
+   * do período pago.
+   */
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedReason: text("suspended_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -885,4 +893,215 @@ export const auditLogs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("audit_logs_org_idx").on(t.organizationId, t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Plataforma — o SaaS cobrando das clínicas.
+//
+// ATENÇÃO À NOMENCLATURA: `payments` e `financial_transactions` são da CLÍNICA
+// cobrando o cliente final. Tudo aqui é a Lumina cobrando a clínica. Misturar
+// os dois contamina o financeiro do tenant e o MRR da plataforma de uma vez.
+// ---------------------------------------------------------------------------
+
+export const billingCycle = pgEnum("billing_cycle", ["monthly", "yearly"]);
+
+export const subscriptionStatus = pgEnum("subscription_status", [
+  "trialing",
+  "active",
+  "past_due",
+  "paused",
+  "canceled",
+]);
+
+/**
+ * O log de eventos é a fonte de verdade do MOVIMENTO de MRR (novo, expansão,
+ * contração, churn). O valor atual sai da soma das assinaturas ativas; a
+ * variação do mês só é reconstituível se cada mudança guardar o MRR antes e
+ * depois dela.
+ */
+export const subscriptionEventKind = pgEnum("subscription_event_kind", [
+  "trial_started",
+  "trial_converted",
+  "created",
+  "renewed",
+  "upgraded",
+  "downgraded",
+  "cycle_changed",
+  "past_due",
+  "recovered",
+  "canceled",
+  "reactivated",
+]);
+
+export const paymentProviderKind = pgEnum("payment_provider_kind", [
+  "hotmart",
+  "asaas",
+  "pagarme",
+  "cakto",
+  "stripe",
+  "manual",
+]);
+
+export const platformChargeStatus = pgEnum("platform_charge_status", [
+  "pending",
+  "paid",
+  "refunded",
+  "chargeback",
+  "failed",
+]);
+
+/** Acesso ao painel da plataforma. Nunca inferido de ser dono de uma clínica. */
+export const platformAdmins = pgTable(
+  "platform_admins",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .notNull()
+      .references(() => users.id)
+      .unique(),
+    grantedByUserId: bigint("granted_by_user_id", { mode: "number" }).references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+);
+
+export const plans = pgTable(
+  "plans",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    description: text("description"),
+    monthlyPriceCents: integer("monthly_price_cents").notNull(),
+    /** Preço do ano inteiro, não do mês equivalente. */
+    yearlyPriceCents: integer("yearly_price_cents").notNull(),
+    trialDays: integer("trial_days").notNull().default(14),
+    maxBranches: integer("max_branches"),
+    maxProfessionals: integer("max_professionals"),
+    maxUsers: integer("max_users"),
+    features: jsonb("features"),
+    active: boolean("active").notNull().default(true),
+    position: integer("position").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+);
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id)
+      .unique(),
+    planId: bigint("plan_id", { mode: "number" })
+      .notNull()
+      .references(() => plans.id),
+    status: subscriptionStatus("status").notNull().default("trialing"),
+    cycle: billingCycle("cycle").notNull().default("monthly"),
+    /** Preço travado na contratação: o plano pode mudar de preço depois. */
+    priceCents: integer("price_cents").notNull(),
+    trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    cancelReason: text("cancel_reason"),
+    providerId: bigint("provider_id", { mode: "number" }),
+    externalId: text("external_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("subscriptions_status_idx").on(t.status),
+    index("subscriptions_plan_idx").on(t.planId),
+  ],
+);
+
+export const subscriptionEvents = pgTable(
+  "subscription_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    subscriptionId: bigint("subscription_id", { mode: "number" }).references(() => subscriptions.id),
+    kind: subscriptionEventKind("kind").notNull(),
+    /** MRR normalizado (mensal) antes e depois — é o que permite o movimento. */
+    mrrBeforeCents: integer("mrr_before_cents").notNull().default(0),
+    mrrAfterCents: integer("mrr_after_cents").notNull().default(0),
+    planIdBefore: bigint("plan_id_before", { mode: "number" }),
+    planIdAfter: bigint("plan_id_after", { mode: "number" }),
+    source: text("source").notNull().default("system"),
+    note: text("note"),
+    payload: jsonb("payload"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("subscription_events_occurred_idx").on(t.occurredAt),
+    index("subscription_events_org_idx").on(t.organizationId, t.occurredAt),
+  ],
+);
+
+export const paymentProviders = pgTable(
+  "payment_providers",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: paymentProviderKind("kind").notNull(),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    /**
+     * O token do webhook é guardado como HASH: ele só serve para comparar o que
+     * chega, nunca para ser lido de volta. Credenciais que precisam ser usadas
+     * para chamar a API do provedor ficam em `credentials` — ver a dívida de
+     * cifragem em docs/product-architecture.md.
+     */
+    webhookTokenHash: text("webhook_token_hash"),
+    webhookTokenHint: text("webhook_token_hint"),
+    credentials: jsonb("credentials"),
+    config: jsonb("config"),
+    lastEventAt: timestamp("last_event_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("payment_providers_kind_unique").on(t.kind)],
+);
+
+/** Cobrança da plataforma contra a clínica. */
+export const platformCharges = pgTable(
+  "platform_charges",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    subscriptionId: bigint("subscription_id", { mode: "number" }).references(() => subscriptions.id),
+    providerId: bigint("provider_id", { mode: "number" }).references(() => paymentProviders.id),
+    status: platformChargeStatus("status").notNull().default("pending"),
+    amountCents: integer("amount_cents").notNull(),
+    externalId: text("external_id"),
+    dueDate: date("due_date"),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    payload: jsonb("payload"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("platform_charges_org_idx").on(t.organizationId, t.createdAt)],
+);
+
+/** Entrega bruta de webhook. Guardada antes de processar, para poder reprocessar. */
+export const platformWebhookEvents = pgTable(
+  "platform_webhook_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    providerId: bigint("provider_id", { mode: "number" }).references(() => paymentProviders.id),
+    kind: paymentProviderKind("kind").notNull(),
+    externalId: text("external_id"),
+    eventName: text("event_name"),
+    payload: jsonb("payload").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    error: text("error"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("platform_webhook_received_idx").on(t.receivedAt),
+    uniqueIndex("platform_webhook_external_unique").on(t.kind, t.externalId),
+  ],
 );

@@ -13,7 +13,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx --env-file=.env.local src/db/seed.ts"
+    "db:seed": "tsx --env-file=.env.local src/db/seed.ts",
+    "db:seed:platform": "tsx --env-file=.env.local scripts/seed-platform.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
