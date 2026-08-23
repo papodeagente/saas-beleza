@@ -24,6 +24,15 @@ const twMerge = extendTailwindMerge({
             "caption",
             "meta",
             "section",
+            // Escala da landing pública. Esquecer um nome aqui não quebra
+            // build, tipo nem lint: a manchete simplesmente renderiza em 14px,
+            // ou perde a cor, dependendo da ordem das classes.
+            "hero",
+            "section-title",
+            "lede",
+            "stat",
+            "quote",
+            "eyebrow",
           ],
         },
       ],

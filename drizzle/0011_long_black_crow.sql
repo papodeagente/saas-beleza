@@ -1,0 +1,2 @@
+ALTER TABLE "plans" ADD CONSTRAINT "plans_checkout_urls_https" CHECK (("plans"."checkout_url_monthly" is null or "plans"."checkout_url_monthly" like 'https://%')
+        and ("plans"."checkout_url_yearly" is null or "plans"."checkout_url_yearly" like 'https://%'));

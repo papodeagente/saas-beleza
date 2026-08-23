@@ -15,17 +15,19 @@ import { hashPassword } from "@/server/auth";
 import type { PlatformContext } from "@/server/platform-auth";
 
 /**
- * Cadastro de uma clínica real pela plataforma.
+ * Cadastro de uma clínica real — pelo painel da plataforma OU pelo autocadastro
+ * público.
  *
- * Enquanto não existe autocadastro, é por aqui que uma conta entra — então
- * "entrar" precisa significar a mesma coisa que significaria num signup: a
- * clínica nasce utilizável (tem unidade), com um responsável que consegue
- * entrar (tem senha) e com a receita já contabilizada (tem assinatura E o
- * evento correspondente).
+ * "Entrar" significa a mesma coisa nos dois caminhos: a clínica nasce utilizável
+ * (tem unidade), com um responsável que consegue entrar (tem senha) e com a
+ * receita já contabilizada (tem assinatura E o evento correspondente).
  *
  * Tudo numa transação só. Meia conta criada é pior que nenhuma: ficaria
  * ocupando o slug, invisível na lista de pagantes e sem ninguém que consiga
  * entrar nela.
+ *
+ * O QUE MUDA ENTRE OS DOIS CAMINHOS está inteiro no ator, nunca em booleano
+ * solto de parâmetro. Ver `CreateAccountActor`.
  */
 
 export class CreateAccountError extends Error {
@@ -38,12 +40,29 @@ export class CreateAccountError extends Error {
   }
 }
 
+/**
+ * Quem está criando a conta. É o ator que decide a autoria do evento de receita
+ * e o que pode ser feito com um e-mail já cadastrado — os dois nunca podem ser
+ * escolhidos por quem chama.
+ *
+ * Adotar um usuário existente pelo e-mail é correto no painel: quem opera a
+ * plataforma já provou quem é, e a dona de duas clínicas não deve ter dois
+ * logins. No autocadastro seria TOMADA DE CONTA: a rota termina em
+ * `createSession(ownerUserId)`, então digitar o e-mail de uma cliente
+ * qualquer entregaria uma sessão como ela, sem nunca provar a senha.
+ */
+export type CreateAccountActor =
+  | { kind: "platform_admin"; ctx: PlatformContext }
+  | { kind: "self_signup" };
+
 export type CreateAccountInput = {
   clinicName: string;
   timezone: string;
   ownerName: string;
   ownerEmail: string;
   ownerPassword: string;
+  /** WhatsApp de quem assina, só dígitos. O painel não coleta; o site, sim. */
+  ownerPhone?: string | null;
   planId: number;
   cycle: "monthly" | "yearly";
   /** `trial` começa no período de testes do plano; `active` já entra pagando. */
@@ -53,6 +72,8 @@ export type CreateAccountInput = {
 export type CreateAccountResult = {
   organizationId: number;
   slug: string;
+  /** Quem responde pela conta. O autocadastro abre a sessão com este id. */
+  ownerUserId: number;
   ownerReused: boolean;
   trialEndsAt: Date | null;
 };
@@ -60,8 +81,12 @@ export type CreateAccountResult = {
 /**
  * Slug legível a partir do nome. `demo-` é reservado: foi o prefixo dos dados
  * de demonstração, e uma conta real não pode herdar essa marca.
+ *
+ * Exportado porque o autocadastro precisa recusar o slug ANTES de criar
+ * qualquer linha — e para isso ele tem que derivar exatamente o mesmo texto que
+ * seria gravado aqui. Duas derivações separadas divergiriam no primeiro acento.
  */
-function slugify(name: string): string {
+export function slugFromClinicName(name: string): string {
   const base = name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -78,20 +103,37 @@ function periodEnd(from: Date, cycle: "monthly" | "yearly"): Date {
 }
 
 export async function createAccount(
-  ctx: PlatformContext,
+  actor: CreateAccountActor,
   input: CreateAccountInput,
 ): Promise<CreateAccountResult> {
   const clinicName = input.clinicName.trim();
   const ownerName = input.ownerName.trim();
   const ownerEmail = input.ownerEmail.trim().toLowerCase();
+  const allowExistingOwner = actor.kind === "platform_admin";
 
   return db.transaction(async (tx) => {
     const [plan] = await tx.select().from(plans).where(eq(plans.id, input.planId)).limit(1);
     if (!plan) throw new CreateAccountError("Plano não encontrado.", "PLAN_NOT_FOUND");
 
+    // O e-mail é decidido ANTES de qualquer escrita e antes do bcrypt: no
+    // autocadastro isto é uma recusa, e recusar depois de gastar ~250ms de CPU
+    // por tentativa transforma a rota pública em amplificador de carga.
+    const [existente] = await tx
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(eq(users.email, ownerEmail))
+      .limit(1);
+
+    if (existente && !allowExistingOwner) {
+      throw new CreateAccountError(
+        "Este e-mail já tem cadastro. Entre com ele ou recupere a senha.",
+        "EMAIL_TAKEN",
+      );
+    }
+
     // Slug único sem corrida: tenta o preferido e vai numerando. O UNIQUE do
     // banco continua sendo a autoridade — isto só escolhe um nome bonito.
-    const preferido = slugify(clinicName);
+    const preferido = slugFromClinicName(clinicName);
     let slug = preferido;
     for (let i = 2; i < 200; i += 1) {
       const [ocupado] = await tx
@@ -108,16 +150,10 @@ export async function createAccount(
       .values({ name: clinicName, slug, timezone: input.timezone })
       .returning();
 
-    // Se a pessoa já tem login (dona de duas clínicas, por exemplo), vinculamos
-    // o usuário existente em vez de recusar o cadastro. A senha dela NÃO é
-    // trocada: cadastrar uma clínica nova não pode derrubar o acesso que ela já
-    // tinha em outra.
-    const [existente] = await tx
-      .select({ id: users.id, name: users.name })
-      .from(users)
-      .where(eq(users.email, ownerEmail))
-      .limit(1);
-
+    // Pelo painel, e-mail conhecido vincula o login existente (dona de duas
+    // clínicas) em vez de recusar o cadastro. Nada do cadastro antigo é
+    // sobrescrito — nem senha, nem nome, nem telefone: cadastrar uma clínica
+    // nova não pode derrubar nem alterar o acesso que ela já tinha em outra.
     let ownerId: number;
     if (existente) {
       ownerId = existente.id;
@@ -127,6 +163,7 @@ export async function createAccount(
         .values({
           name: ownerName,
           email: ownerEmail,
+          phone: input.ownerPhone?.trim() || null,
           passwordHash: await hashPassword(input.ownerPassword),
         })
         .returning({ id: users.id });
@@ -170,6 +207,23 @@ export async function createAccount(
       })
       .returning({ id: subscriptions.id });
 
+    // Autoria do evento sai do ator, nunca de parâmetro: nenhuma origem pode
+    // assinar como se fosse outra, e o histórico da conta precisa dizer a
+    // verdade sobre quem a criou anos depois.
+    const sufixoTeste = emTeste ? ` — teste de ${plan.trialDays} dias` : "";
+    const autoria =
+      actor.kind === "platform_admin"
+        ? {
+            source: "platform_admin",
+            note: `Conta cadastrada por ${actor.ctx.userName}${sufixoTeste}.`,
+            payload: { actorUserId: actor.ctx.userId, actorEmail: actor.ctx.userEmail },
+          }
+        : {
+            source: "self_signup",
+            note: `Cadastro feito pela própria clínica no site${sufixoTeste}.`,
+            payload: { selfSignup: true },
+          };
+
     // O gráfico de MRR é reconstruído a partir dos eventos, não do estado das
     // assinaturas. Criar uma sem o evento faria o mês não fechar.
     await tx.insert(subscriptionEvents).values({
@@ -180,15 +234,16 @@ export async function createAccount(
       mrrAfterCents: mrrAfter,
       planIdBefore: null,
       planIdAfter: plan.id,
-      source: "platform_admin",
-      note: `Conta cadastrada por ${ctx.userName}${emTeste ? ` — teste de ${plan.trialDays} dias` : ""}.`,
-      payload: { actorUserId: ctx.userId, actorEmail: ctx.userEmail },
+      source: autoria.source,
+      note: autoria.note,
+      payload: autoria.payload,
       occurredAt: now,
     });
 
     return {
       organizationId: organization.id,
       slug,
+      ownerUserId: ownerId,
       ownerReused: Boolean(existente),
       trialEndsAt,
     };

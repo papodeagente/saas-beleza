@@ -3,7 +3,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { LaunchReadiness } from "@/server/services/platform-metrics";
+import type { CohortFunnel, LaunchReadiness } from "@/server/services/platform-metrics";
+import { CohortFunnelSection } from "./cohort-funnel";
 
 /**
  * Painel antes da primeira assinatura.
@@ -25,7 +26,18 @@ type Passo = {
   icone: React.ComponentType<{ className?: string }>;
 };
 
-export function PreLaunch({ readiness }: { readiness: LaunchReadiness }) {
+export function PreLaunch({
+  readiness,
+  cohorts,
+}: {
+  readiness: LaunchReadiness;
+  /**
+   * Antes da primeira venda o funil é o ÚNICO indicador honesto da tela: MRR e
+   * retenção só existem depois que alguém paga, mas cadastro e ativação já
+   * dizem se o produto está sendo usado.
+   */
+  cohorts: CohortFunnel;
+}) {
   const passos: Passo[] = [
     {
       titulo: "Planos",
@@ -39,10 +51,10 @@ export function PreLaunch({ readiness }: { readiness: LaunchReadiness }) {
     {
       titulo: "Cobrança",
       pronto: readiness.liveProviders > 0,
-      descricaoPronto: "Meio de pagamento ligado e com credenciais gravadas.",
+      descricaoPronto: "Meio de pagamento ligado e com o segredo do webhook guardado.",
       descricaoPendente:
         readiness.configuredProviders > 0
-          ? "O provedor está cadastrado, mas falta a credencial para ele cobrar de verdade."
+          ? "O provedor está cadastrado, mas falta ligar e guardar o segredo do webhook."
           : "Sem meio de pagamento, dá para cadastrar contas e cobrar por fora — o painel só não concilia sozinho.",
       href: "/admin/pagamentos",
       acao: readiness.liveProviders > 0 ? "Ver cobrança" : "Configurar cobrança",
@@ -90,6 +102,8 @@ export function PreLaunch({ readiness }: { readiness: LaunchReadiness }) {
           ) : null}
         </div>
       </Card>
+
+      <CohortFunnelSection funnel={cohorts} />
 
       <section>
         <h2 className="text-section">O que já está de pé</h2>

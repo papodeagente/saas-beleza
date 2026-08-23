@@ -20,6 +20,11 @@ import { requirePlatformAdmin } from "@/server/platform-auth";
  * O dia em que existir "reprecificar quem já assina", essa operação passa a ser
  * mutação de assinatura: escreve `upgraded`/`downgraded` com before/after na
  * MESMA transação, senão o movimento de MRR do painel passa a mentir.
+ *
+ * O que MUDA de natureza aqui é a vitrine: os campos de vitrine saem desta tela
+ * direto para uma página pública. Deixaram de ser configuração interna e viraram
+ * entrada não confiável — daí a validação de `checkoutUrl` ser tão dura quanto
+ * seria a de um formulário aberto na internet.
  */
 
 export type PlanResult =
@@ -38,6 +43,17 @@ const payloadSchema = z.object({
   maxProfessionals: z.string(),
   maxUsers: z.string(),
   position: z.string(),
+
+  // Vitrine pública. Chega inteira a cada salvamento (inclusive a lista de
+  // benefícios completa): o formulário não manda diferença, manda o estado final.
+  publicVisible: z.boolean(),
+  tagline: z.string(),
+  benefits: z.array(z.string()),
+  ctaLabel: z.string(),
+  checkoutUrlMonthly: z.string(),
+  checkoutUrlYearly: z.string(),
+  highlight: z.boolean(),
+  highlightLabel: z.string(),
 });
 
 export type PlanPayload = z.infer<typeof payloadSchema>;
@@ -55,11 +71,27 @@ type PlanValues = {
   maxProfessionals: number | null;
   maxUsers: number | null;
   position: number;
+  publicVisible: boolean;
+  tagline: string | null;
+  features: string[];
+  ctaLabel: string | null;
+  checkoutUrlMonthly: string | null;
+  checkoutUrlYearly: string | null;
+  highlight: boolean;
+  highlightLabel: string | null;
 };
 
 type Normalized = { ok: true; value: PlanValues } | { ok: false; error: string; field: string };
 
 const invalid = (field: string, error: string): Normalized => ({ ok: false, error, field });
+
+/**
+ * Os normalizadores abaixo devolvem "valor OU erro", e o valor legítimo pode ser
+ * `null` (campo em branco). `typeof x === "object"` sozinho classificaria esse
+ * `null` como erro e recusaria todo campo opcional vazio.
+ */
+const isInvalid = (value: unknown): value is Normalized =>
+  typeof value === "object" && value !== null;
 
 /** Limite vazio significa ILIMITADO — não zero. Zero seria um plano que não serve para nada. */
 function limit(raw: string, field: string, label: string): number | null | Normalized {
@@ -70,6 +102,86 @@ function limit(raw: string, field: string, label: string): number | null | Norma
     return invalid(field, `${label}: informe um número inteiro a partir de 1, ou deixe em branco para ilimitado.`);
   }
   return n;
+}
+
+/** Texto curto de vitrine: vazio vira null, para o site poder testar por ausência. */
+function shortText(
+  raw: string,
+  field: string,
+  label: string,
+  max: number,
+): string | null | Normalized {
+  const value = raw.trim().replace(/\s+/g, " ");
+  if (value === "") return null;
+  if (value.length > max) {
+    return invalid(field, `${label}: no máximo ${max} caracteres — este ficou com ${value.length}.`);
+  }
+  return value;
+}
+
+/** Mais que isto não é uma lista de benefícios, é um manual. */
+const MAX_BENEFITS = 20;
+const MAX_BENEFIT_LENGTH = 120;
+
+/**
+ * Benefícios: array de strings, sem item vazio e sem espaço sobrando.
+ *
+ * A limpeza acontece AQUI e não na tela porque o array é gravado como jsonb e
+ * lido direto pelo site: um `""` no meio da lista viraria uma linha em branco no
+ * cartão de preço, e ninguém descobriria olhando o painel.
+ */
+function benefits(raw: string[]): string[] | Normalized {
+  const cleaned = raw.map((item) => item.trim().replace(/\s+/g, " ")).filter(Boolean);
+  if (cleaned.length > MAX_BENEFITS) {
+    return invalid("benefits", `A lista vai até ${MAX_BENEFITS} benefícios. Tire alguns dos menos importantes.`);
+  }
+  const longo = cleaned.find((item) => item.length > MAX_BENEFIT_LENGTH);
+  if (longo) {
+    return invalid(
+      "benefits",
+      `Cada benefício cabe em ${MAX_BENEFIT_LENGTH} caracteres. Encurte "${longo.slice(0, 40)}…".`,
+    );
+  }
+  return cleaned;
+}
+
+const MAX_URL_LENGTH = 500;
+
+/**
+ * Link de checkout — o campo mais perigoso desta tela.
+ *
+ * Ele vira o `href` de um botão numa página pública, então `javascript:` colado
+ * aqui é execução de script no navegador de quem visita o site, não um link
+ * torto. `http:` é recusado junto: pagamento em texto claro, e navegador
+ * moderno bloqueia conteúdo misto de qualquer jeito.
+ *
+ * Guarda o resultado de `URL.toString()`, não o texto digitado: `HTTPS://…` e
+ * `https:/loja` são aceitos pelo parser mas não passam no CHECK do banco, que
+ * compara `like 'https://%'` com maiúsculas e barras contando.
+ */
+function checkoutUrl(raw: string, field: string, label: string): string | null | Normalized {
+  const value = raw.trim();
+  if (value === "") return null;
+  if (value.length > MAX_URL_LENGTH) {
+    return invalid(field, `${label}: esse link é longo demais. Confira se colou só o endereço.`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return invalid(
+      field,
+      `${label}: cole o endereço completo da página de pagamento, começando com https://.`,
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    return invalid(
+      field,
+      `${label}: só aceitamos endereço que comece com https://. Confira o link copiado do provedor de pagamento.`,
+    );
+  }
+  return parsed.toString();
 }
 
 function normalize(input: PlanPayload, creating: boolean): Normalized {
@@ -105,11 +217,50 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
   }
 
   const maxBranches = limit(input.maxBranches, "maxBranches", "Unidades");
-  if (maxBranches !== null && typeof maxBranches === "object") return maxBranches;
+  if (isInvalid(maxBranches)) return maxBranches;
   const maxProfessionals = limit(input.maxProfessionals, "maxProfessionals", "Profissionais");
-  if (maxProfessionals !== null && typeof maxProfessionals === "object") return maxProfessionals;
+  if (isInvalid(maxProfessionals)) return maxProfessionals;
   const maxUsers = limit(input.maxUsers, "maxUsers", "Usuários");
-  if (maxUsers !== null && typeof maxUsers === "object") return maxUsers;
+  if (isInvalid(maxUsers)) return maxUsers;
+
+  const tagline = shortText(input.tagline, "tagline", "Chamada do site", 90);
+  if (isInvalid(tagline)) return tagline;
+  const ctaLabel = shortText(input.ctaLabel, "ctaLabel", "Rótulo do botão", 40);
+  if (isInvalid(ctaLabel)) return ctaLabel;
+
+  /**
+   * O selo só é lido quando o destaque está ligado, e há duas razões para isso.
+   *
+   * A primeira é de dado: sem destaque o selo não tem onde aparecer, e guardar o
+   * texto órfão faria o plano voltar destacado com um rótulo antigo no dia em
+   * que alguém remarcasse a caixa.
+   *
+   * A segunda é o que quebrava de verdade: o formulário ESCONDE o campo do selo
+   * quando o destaque está desligado. Validar assim mesmo devolvia um erro
+   * apontando para um campo que não está na tela — a folha ficava aberta, sem
+   * mensagem nenhuma em lugar nenhum, e quem opera só via o botão Salvar parar
+   * de responder. Erro que não tem onde aparecer não pode ser emitido.
+   */
+  const highlightLabel = input.highlight
+    ? shortText(input.highlightLabel, "highlightLabel", "Selo do destaque", 24)
+    : null;
+  if (isInvalid(highlightLabel)) return highlightLabel;
+
+  const features = benefits(input.benefits);
+  if (!Array.isArray(features)) return features;
+
+  const checkoutUrlMonthly = checkoutUrl(
+    input.checkoutUrlMonthly,
+    "checkoutUrlMonthly",
+    "Link de checkout mensal",
+  );
+  if (isInvalid(checkoutUrlMonthly)) return checkoutUrlMonthly;
+  const checkoutUrlYearly = checkoutUrl(
+    input.checkoutUrlYearly,
+    "checkoutUrlYearly",
+    "Link de checkout anual",
+  );
+  if (isInvalid(checkoutUrlYearly)) return checkoutUrlYearly;
 
   return {
     ok: true,
@@ -124,12 +275,37 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
       maxProfessionals,
       maxUsers,
       position,
+      publicVisible: input.publicVisible,
+      tagline,
+      features,
+      ctaLabel,
+      checkoutUrlMonthly,
+      checkoutUrlYearly,
+      highlight: input.highlight,
+      highlightLabel,
     },
   };
 }
 
 function isUniqueViolation(error: unknown): boolean {
   return Boolean(error) && (error as { code?: string }).code === "23505";
+}
+
+/** O CHECK do banco, quando alguém contorna a validação da tela. */
+function isCheckViolation(error: unknown, constraint: string): boolean {
+  const e = error as { code?: string; constraint?: string } | null;
+  return Boolean(e) && e?.code === "23514" && e?.constraint === constraint;
+}
+
+/**
+ * A landing entra na lista porque ela renderiza os planos da vitrine e é
+ * estática: sem invalidar aqui, marcar "aparece no site" só teria efeito no
+ * próximo deploy — e quem mexeu ia concluir que o painel não salvou.
+ */
+function revalidatePlanSurfaces() {
+  revalidatePath("/admin/planos");
+  revalidatePath("/admin");
+  revalidatePath("/");
 }
 
 export async function savePlanAction(input: unknown, planId?: number): Promise<PlanResult> {
@@ -151,7 +327,7 @@ export async function savePlanAction(input: unknown, planId?: number): Promise<P
       // de tudo que já aconteceu.
       const [row] = await db
         .update(plans)
-        .set(fields)
+        .set({ ...fields, updatedAt: new Date() })
         .where(eq(plans.id, planId))
         .returning({ id: plans.id });
       if (!row) return { ok: false, error: "Esse plano não existe mais." };
@@ -172,12 +348,18 @@ export async function savePlanAction(input: unknown, planId?: number): Promise<P
       saved = row.id;
     }
 
-    revalidatePath("/admin/planos");
-    revalidatePath("/admin");
+    revalidatePlanSurfaces();
     return { ok: true, planId: saved };
   } catch (error) {
     if (isUniqueViolation(error)) {
       return { ok: false, error: "Já existe um plano com esse identificador.", field: "slug" };
+    }
+    if (isCheckViolation(error, "plans_checkout_urls_https")) {
+      return {
+        ok: false,
+        error: "O link de checkout precisa começar com https://.",
+        field: "checkoutUrlMonthly",
+      };
     }
     console.error(error);
     return { ok: false, error: "Não foi possível salvar o plano. Tente de novo." };
@@ -199,8 +381,9 @@ export async function setPlanActiveAction(planId: number, active: boolean): Prom
       .returning({ id: plans.id });
     if (!row) return { ok: false, error: "Esse plano não existe mais." };
 
-    revalidatePath("/admin/planos");
-    revalidatePath("/admin");
+    // A vitrine também filtra por `active`: desativar tira o plano do site sem
+    // que ninguém desmarque "aparece no site".
+    revalidatePlanSurfaces();
     return { ok: true, planId: row.id };
   } catch (error) {
     console.error(error);
@@ -248,8 +431,7 @@ export async function deletePlanAction(planId: number): Promise<PlanResult> {
     const [row] = await db.delete(plans).where(eq(plans.id, planId)).returning({ id: plans.id });
     if (!row) return { ok: false, error: "Esse plano não existe mais." };
 
-    revalidatePath("/admin/planos");
-    revalidatePath("/admin");
+    revalidatePlanSurfaces();
     return { ok: true, planId: row.id };
   } catch (error) {
     console.error(error);

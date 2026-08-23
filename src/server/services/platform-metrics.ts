@@ -321,6 +321,145 @@ export async function getTrialFunnel(from: Date, to: Date): Promise<TrialFunnel>
   };
 }
 
+/**
+ * Fuso em que a plataforma corta a semana.
+ *
+ * Métrica cross-tenant não tem "fuso do tenant" para respeitar, e cortar em UTC
+ * jogaria o cadastro de domingo à noite em São Paulo para a semana seguinte —
+ * bem no ponto em que a coorte vira. O produto é brasileiro; a semana dele
+ * também.
+ */
+const PLATFORM_TZ = "America/Sao_Paulo";
+
+export type CohortWeek = {
+  /** Segunda-feira da semana de cadastro, em `YYYY-MM-DD` no fuso da plataforma. */
+  weekStartISO: string;
+  created: number;
+  activated: number;
+  paying: number;
+  /** Mediana entre o cadastro e o primeiro agendamento, em horas. */
+  medianActivationHours: number | null;
+  /** A semana em curso ainda vai receber gente: comparar com as fechadas engana. */
+  inProgress: boolean;
+};
+
+export type CohortFunnel = {
+  weeks: CohortWeek[];
+  totals: {
+    created: number;
+    activated: number;
+    paying: number;
+    activationRate: number | null;
+    payingRate: number | null;
+    medianActivationHours: number | null;
+  };
+};
+
+/**
+ * Funil de aquisição por COORTE SEMANAL de cadastro.
+ *
+ * Somar tudo num período só faz o funil mentir: quem se cadastrou ontem ainda
+ * não teve chance de virar pagante, e entra no denominador arrastando a taxa
+ * para baixo. Cada linha aqui acompanha as contas que ENTRARAM naquela semana,
+ * pelo tempo que for — é a única leitura em que a conversão de uma semana pode
+ * ser comparada com a de outra.
+ *
+ * ATIVAÇÃO = primeiro agendamento criado na agenda da conta.
+ *
+ * Não é login (dá para logar e sair sem nada acontecer), não é "cadastro
+ * completo" (preencher formulário não é usar). Agendar é o único fato que prova
+ * que a clínica tirou um horário do caderno e colocou aqui dentro. É o mesmo
+ * ato que sustenta todo o resto do produto — sem agendamento não há lembrete,
+ * não há comissão e não há caixa —, então uma conta que nunca agendou não está
+ * usando a Lumina, esteja pagando ou não.
+ */
+export async function getWeeklyCohortFunnel(weeks = 8): Promise<CohortFunnel> {
+  const { rows } = await db.execute<{
+    semana: string | null;
+    criadas: number;
+    ativadas: number;
+    pagantes: number;
+    mediana_segundos: number | string | null;
+  }>(sql`
+    with semanas as (
+      select generate_series(
+        date_trunc('week', now() at time zone ${PLATFORM_TZ}) - make_interval(weeks => ${weeks - 1}),
+        date_trunc('week', now() at time zone ${PLATFORM_TZ}),
+        interval '1 week'
+      )::date as inicio
+    ),
+    contas as (
+      select
+        o.id,
+        o.created_at,
+        date_trunc('week', o.created_at at time zone ${PLATFORM_TZ})::date as semana,
+        (select min(a.created_at) from appointments a where a.organization_id = o.id) as ativou_em,
+        (
+          exists (
+            select 1 from subscriptions s
+             where s.organization_id = o.id and s.status in ('active', 'past_due')
+          )
+          -- Quem pagou e cancelou depois converteu do mesmo jeito: a coorte
+          -- mede a passagem, não o saldo de hoje.
+          or exists (
+            select 1 from subscription_events e
+             where e.organization_id = o.id and e.mrr_after_cents > 0
+          )
+        ) as pagante
+      from organizations o
+      where o.created_at >= ((select min(inicio) from semanas)::timestamp at time zone ${PLATFORM_TZ})
+    )
+    select
+      to_char(s.inicio, 'YYYY-MM-DD') as semana,
+      count(c.id)::int as criadas,
+      count(c.ativou_em)::int as ativadas,
+      count(*) filter (where c.pagante)::int as pagantes,
+      percentile_cont(0.5) within group (
+        order by extract(epoch from (c.ativou_em - c.created_at))::float8
+      ) filter (where c.ativou_em is not null) as mediana_segundos
+    from semanas s
+    left join contas c on c.semana = s.inicio
+    -- A linha do total sai da MESMA varredura (grouping sets) porque a mediana
+    -- do conjunto não é a média das medianas das semanas.
+    group by grouping sets ((s.inicio), ())
+    order by s.inicio nulls first
+  `);
+
+  const horas = (segundos: number | string | null) =>
+    segundos === null ? null : Math.round((Number(segundos) / 3600) * 10) / 10;
+
+  const linhas = rows as Array<{
+    semana: string | null;
+    criadas: number;
+    ativadas: number;
+    pagantes: number;
+    mediana_segundos: number | string | null;
+  }>;
+
+  const total = linhas.find((r) => r.semana === null);
+  const semanas = linhas.filter((r) => r.semana !== null);
+  const ultima = semanas.at(-1)?.semana;
+
+  return {
+    weeks: semanas.map((r) => ({
+      weekStartISO: r.semana as string,
+      created: r.criadas,
+      activated: r.ativadas,
+      paying: r.pagantes,
+      medianActivationHours: horas(r.mediana_segundos),
+      inProgress: r.semana === ultima,
+    })),
+    totals: {
+      created: total?.criadas ?? 0,
+      activated: total?.ativadas ?? 0,
+      paying: total?.pagantes ?? 0,
+      activationRate: total?.criadas ? (total.ativadas ?? 0) / total.criadas : null,
+      payingRate: total?.criadas ? (total.pagantes ?? 0) / total.criadas : null,
+      medianActivationHours: horas(total?.mediana_segundos ?? null),
+    },
+  };
+}
+
 export type UsageMetrics = {
   activeAccounts30d: number;
   appointmentsInPeriod: number;
@@ -365,7 +504,7 @@ export type LaunchReadiness = {
   preLaunch: boolean;
   organizations: number;
   activePlans: number;
-  /** Provedor com credencial gravada e ligado — só isso cobra de verdade. */
+  /** Provedor ligado E com o segredo que ele usa guardado — só isso cobra. */
   liveProviders: number;
   configuredProviders: number;
   platformAdmins: number;
@@ -389,8 +528,18 @@ export async function getLaunchReadiness(): Promise<LaunchReadiness> {
       (select count(*) from organizations)::int as orgs,
       (select count(*) from subscriptions)::int as subs,
       (select count(*) from plans where active)::int as active_plans,
+      -- Só "credentials" dava sempre zero: NADA escreve nessa coluna hoje. O
+      -- caminho real de salvar provedor (saveProvider, em services/hotmart.ts)
+      -- grava o segredo do webhook em "webhook_token_hash", e "credentials"
+      -- está reservada para a chave de API de um provedor que ainda não existe.
+      -- Com a condição antiga o passo "Cobrança" do painel inicial nunca ficava
+      -- verde, nem com a Hotmart ligada e validando entrega — o painel dizia
+      -- que faltava fazer o que já estava feito. As duas colunas contam porque
+      -- são o mesmo fato dito de dois jeitos: o provedor tem o segredo de que
+      -- precisa para operar.
       (select count(*) from payment_providers
-        where enabled and credentials is not null)::int as live_providers,
+        where enabled
+          and (webhook_token_hash is not null or credentials is not null))::int as live_providers,
       (select count(*) from payment_providers)::int as configured_providers,
       (select count(*) from platform_admins)::int as admins
   `);

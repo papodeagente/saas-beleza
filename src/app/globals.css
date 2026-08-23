@@ -90,6 +90,65 @@
   --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
 
   --ease-out-quint: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* -------------------------------------------------------------------------
+     Landing pública — a "noite" da marca.
+
+     REGRA QUE MANDA AQUI: esta seção só ADICIONA nomes. Nenhum token do produto
+     (surface, ink, accent, line) é redefinido sob escopo. Redefinir seria o
+     vetor de vazamento real: todo componente compartilhado renderizado dentro
+     da landing recoloriria em silêncio e os contrastes medidos acima iriam para
+     o lixo.
+
+     Os azuis-noite saem do MESMO matiz do ink #1b2559, então o site escuro e o
+     produto claro são a mesma marca em dois horários, não dois produtos.
+     Contrastes medidos sobre #0b1030.
+     ------------------------------------------------------------------------- */
+  --color-night: #0b1030;
+  --color-night-raised: #151c3f;
+  --color-night-sunken: #070a22;
+  --color-night-ink: #f2f5fd; /* 17.0:1 */
+  --color-night-ink-secondary: #a9b6d9; /* 9.2:1 */
+  --color-night-ink-tertiary: #8b98c0; /* 6.5:1 */
+  --color-night-line: #232c55;
+  --color-night-line-strong: #2f3a6b;
+  /* O #2560d6 do produto dá 3.3:1 no escuro e REPROVA como texto. Este é o
+     mesmo azul relido para fundo escuro: 8.1:1. Link, número e ícone em seção
+     escura usam este, nunca o accent. */
+  --color-accent-lift: #86a9ff;
+  /* Só aura e desfoque. Proibido como cor de texto. */
+  --color-night-glow: #2f6bff;
+
+  /* Escala de display da landing. O produto para em 26px porque tela de
+     operação não tem manchete; página de venda tem. */
+  --text-hero: clamp(34px, 4.2vw, 54px);
+  --text-hero--line-height: 1.06;
+  --text-hero--font-weight: 800;
+  --text-hero--letter-spacing: -0.035em;
+
+  --text-section-title: clamp(28px, 3.6vw, 46px);
+  --text-section-title--line-height: 1.06;
+  --text-section-title--font-weight: 800;
+  --text-section-title--letter-spacing: -0.03em;
+
+  --text-lede: clamp(16px, 1.15vw, 19px);
+  --text-lede--line-height: 1.55;
+  --text-lede--font-weight: 400;
+  --text-lede--letter-spacing: -0.011em;
+
+  --text-stat: clamp(30px, 3vw, 40px);
+  --text-stat--line-height: 1;
+  --text-stat--font-weight: 800;
+  --text-stat--letter-spacing: -0.04em;
+
+  --text-quote: clamp(18px, 1.6vw, 22px);
+  --text-quote--line-height: 1.4;
+  --text-quote--font-weight: 600;
+  --text-quote--letter-spacing: -0.02em;
+
+  --animate-rise-in: rise-in 700ms var(--ease-out-quint) backwards;
+  --animate-fade-in: fade-in 600ms var(--ease-out-quint) backwards;
+  --animate-mockup-in: mockup-in 1100ms var(--ease-out-quint) backwards;
 }
 
 :root {
@@ -138,6 +197,49 @@
     outline-offset: 2px;
     border-radius: 6px;
   }
+
+  /* -------------------------------------------------------------------------
+     Superfície escura da landing.
+
+     `body:has()` e não só o wrapper: pintar apenas o wrapper deixa o branco do
+     body aparecer no overscroll do iOS e em página mais curta que a viewport.
+
+     As três regras precisam estar DENTRO de @layer base. Fora dele venceriam as
+     utilities do Tailwind, que é exatamente o bug documentado no topo deste
+     arquivo.
+     ------------------------------------------------------------------------- */
+  body:has([data-surface="night"]) {
+    background-color: var(--color-night);
+    color-scheme: dark;
+  }
+
+  /* Sem isto, toda borda dentro da landing herda o #e8edf5 da regra universal
+     lá em cima e vira uma malha de fios claros sobre o azul-noite. */
+  [data-surface="night"] *,
+  [data-surface="night"] ::before,
+  [data-surface="night"] ::after {
+    border-color: var(--color-night-line);
+  }
+
+  [data-surface="night"] :focus-visible {
+    outline-color: var(--color-accent-lift);
+  }
+
+  [data-surface="night"] ::selection {
+    background-color: color-mix(in oklab, var(--color-accent-lift) 30%, transparent);
+    color: var(--color-night-ink);
+  }
+
+  /* Estado inicial dos blocos que entram por rolagem. Fica no CSS, e não em
+     estado do React, por dois motivos: `prefers-reduced-motion` consegue
+     anulá-lo sem provocar um segundo render da página inteira, e o conteúdo
+     continua visível se o JavaScript falhar — que é o pior caso possível numa
+     página de vendas. Dentro de @layer base para continuar perdendo para as
+     utilities, como toda regra deste arquivo. */
+  [data-reveal="escondido"] {
+    opacity: 0;
+    transform: translateY(18px);
+  }
 }
 
 /* Rótulo de seção */
@@ -165,6 +267,63 @@
 /* Gradiente da marca — barra lateral e superfícies de destaque */
 @utility bg-brand {
   background-image: var(--brand-gradient);
+}
+
+/* Rótulo de seção da landing: caixa alta pequena com tracking aberto. */
+@utility text-eyebrow {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+@utility shadow-hero {
+  box-shadow:
+    0 40px 90px -20px rgb(3 6 20 / 0.7),
+    0 0 0 1px var(--color-night-line-strong);
+}
+
+@utility shadow-lift {
+  box-shadow: 0 18px 40px -18px rgb(3 6 20 / 0.6);
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* O print nunca frontal: entra girando até a posição de repouso.
+   O `backwards` do token cobre o estado ANTES da animação; o estado DEPOIS é o
+   CSS do próprio elemento — por isso a inclinação final precisa existir como
+   regra, senão o print volta a ficar reto assim que a animação termina. */
+@utility mockup-tilt {
+  transform-style: preserve-3d;
+  /* Só a partir do desktop: no celular a rotação corta a borda esquerda do
+     print, que é justamente onde fica a navegação do produto. */
+  @media (width >= 64rem) {
+    transform: perspective(1800px) rotateY(-7deg) rotateX(4deg);
+  }
+}
+
+@keyframes mockup-in {
+  from { opacity: 0; transform: perspective(1800px) rotateY(-14deg) rotateX(8deg) scale(0.97); }
+  to { opacity: 1; transform: perspective(1800px) rotateY(-7deg) rotateX(4deg) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Quem pede menos movimento também não precisa do print torto. */
+  .mockup-tilt { transform: none; }
+
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
 
 time,

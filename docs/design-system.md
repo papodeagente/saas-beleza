@@ -72,8 +72,22 @@ Contraste medido e verificado no navegador em todas as rotas. Alvo de toque de 4
 
 ## 6. Copy
 
-Português direto, sentence case, verbos ativos. O botão diz o que acontece ("Agendar") e o toast confirma no mesmo vocabulário ("Agendamento criado"). Um conceito, um nome, em toda a interface. **O produto nunca afirma o que não faz:** não há canal de WhatsApp/e-mail/SMS conectado no envio, então nenhum texto diz que o sistema avisa, lembra ou envia.
+Português direto, sentence case, verbos ativos. O botão diz o que acontece ("Agendar") e o toast confirma no mesmo vocabulário ("Agendamento criado"). Um conceito, um nome, em toda a interface. **O produto nunca afirma o que não faz** — e a regra vale nos dois sentidos: quando o WhatsApp passou a enviar de verdade pela uazapi, a frase que dizia o contrário virou mentira e teve de sair. Texto que descreve capacidade envelhece; revise-o junto com o código.
 
 ## 7. Modo escuro
 
-Adiado. O produto comete-se com um único look claro.
+O **produto** é claro, e continua sendo: uma ferramenta de oito horas sob a luz de uma clínica não pede fundo escuro.
+
+A **landing pública** (`src/app/(marketing)`) é escura, e a decisão é de contexto, não de gosto: são noventa segundos de atenção disputada, muitas vezes no celular à noite, e as capturas do produto — que são claras — só têm presença sobre fundo escuro.
+
+As duas convivem sem conflito por causa de uma regra única: **a landing só adiciona nomes de token, nunca redefine os existentes.**
+
+| | Produto | Landing |
+|---|---|---|
+| Chão | `--color-surface` `#f4f7fc` | `--color-night` `#0b1030` |
+| Texto | `--color-ink` `#1b2559` | `--color-night-ink` `#f2f5fd` |
+| Azul de texto | `--color-accent` `#2560d6` | `--color-accent-lift` `#86a9ff` |
+
+O azul-noite é derivado do `ink` do produto (mesmo matiz), então as duas superfícies são a mesma marca em dois horários. **`--color-accent` reprova como texto sobre o escuro (3,3:1); use `--color-accent-lift` (8,1:1).** Confundir os dois é o erro mais provável de quem for mexer aqui, porque "o azul do app" tem o mesmo nome nos dois lugares.
+
+Três regras escopadas por `[data-surface="night"]` vivem em `globals.css` **dentro de `@layer base`** (fora dela venceriam as utilities do Tailwind): o chão via `body:has()`, a cor das bordas e o anel de foco. `src/lib/design-tokens.test.ts` falha se alguém redefinir um token do produto sob escopo ou esquecer de registrar uma escala nova no tailwind-merge.

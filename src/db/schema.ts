@@ -3,6 +3,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -139,6 +140,13 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  /**
+   * WhatsApp de quem assina, só dígitos. É o único canal pelo qual a plataforma
+   * alcança a clínica durante o teste — e-mail de dono de clínica costuma ficar
+   * sem resposta. Nulo de propósito: usuário criado pelo painel ou antes do
+   * autocadastro não tem telefone, e exigir um quebraria o cadastro interno.
+   */
+  phone: text("phone"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -1073,11 +1081,75 @@ export const plans = pgTable(
     maxBranches: integer("max_branches"),
     maxProfessionals: integer("max_professionals"),
     maxUsers: integer("max_users"),
-    features: jsonb("features"),
+    /** Benefícios exibidos no cartão de preço do site, na ordem em que aparecem. */
+    features: jsonb("features").$type<string[]>(),
     active: boolean("active").notNull().default(true),
     position: integer("position").notNull().default(0),
+
+    // -- Vitrine pública ----------------------------------------------------
+    /**
+     * `active` diz se o plano ACEITA nova assinatura; isto diz se ele APARECE
+     * no site. São decisões diferentes: um preço negociado continua vendável
+     * pelo painel e fora do ar, e um plano descontinuado some do site sem
+     * quebrar quem já assina.
+     *
+     * O padrão é `false` de propósito: publicar preço é decisão de quem manda,
+     * não efeito colateral de rodar a migração.
+     */
+    publicVisible: boolean("public_visible").notNull().default(false),
+    /** Chamada curta do cartão. `description` continua sendo a frase do painel. */
+    tagline: text("tagline"),
+    highlight: boolean("highlight").notNull().default(false),
+    highlightLabel: text("highlight_label"),
+    ctaLabel: text("cta_label"),
+    /**
+     * Um link por ciclo, não um só: a Hotmart emite uma oferta por periodicidade,
+     * então um campo único deixaria o botão do anual levando ao preço do mensal.
+     * Vazio faz o botão cair no teste grátis, que é o que converte enquanto o
+     * meio de pagamento não está ligado.
+     */
+    checkoutUrlMonthly: text("checkout_url_monthly"),
+    checkoutUrlYearly: text("checkout_url_yearly"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * Estes dois campos viram o `href` de um botão numa página PÚBLICA. Um
+     * `javascript:` colado aqui não é um link torto: é execução de script no
+     * navegador de quem visita o site.
+     *
+     * O formulário já recusa, e o serviço da vitrine ainda filtra na leitura —
+     * mas as duas defesas moram na aplicação. Esta é a única que sobrevive a um
+     * UPDATE feito direto no banco, num script de importação ou numa rota nova
+     * que alguém escreva daqui a um ano sem ler o resto.
+     */
+    check(
+      "plans_checkout_urls_https",
+      sql`(${t.checkoutUrlMonthly} is null or ${t.checkoutUrlMonthly} like 'https://%')
+        and (${t.checkoutUrlYearly} is null or ${t.checkoutUrlYearly} like 'https://%')`,
+    ),
+  ],
+);
+
+/**
+ * Tentativas de autocadastro, para segurar abuso.
+ *
+ * Vive no banco e não só em memória porque o processo reinicia a cada deploy e
+ * um limitador que zera sozinho não limita nada. Guarda o IP e o e-mail
+ * tentado — nunca a senha.
+ */
+export const signupAttempts = pgTable(
+  "signup_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    ip: text("ip").notNull(),
+    email: text("email"),
+    outcome: text("outcome").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
+  (t) => [index("signup_attempts_ip_idx").on(t.ip, t.createdAt)],
 );
 
 export const subscriptions = pgTable(

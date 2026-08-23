@@ -465,7 +465,10 @@ export async function createAccountAction(input: unknown): Promise<CreateAccount
 
   try {
     const ctx = await requirePlatformAdmin();
-    const resultado = await createAccount(ctx, parsed.data);
+    // Ator explícito: só o painel pode adotar um e-mail que já tem login, e é
+    // este objeto que autoriza (o autocadastro público passa `self_signup` e
+    // esbarra em EMAIL_TAKEN).
+    const resultado = await createAccount({ kind: "platform_admin", ctx }, parsed.data);
 
     revalidatePath("/admin");
     revalidatePath("/admin/contas");

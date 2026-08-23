@@ -3,8 +3,10 @@ import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { and, eq, gt } from "drizzle-orm";
 import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
+import { getAccountAccess } from "@/server/services/account-access";
 
 export const SESSION_COOKIE = "lumina_session";
 const SESSION_DAYS = 30;
@@ -100,10 +102,29 @@ export async function getSession(): Promise<TenantContext | null> {
   return rows[0] ?? null;
 }
 
-/** Contexto da sessão. Lança se não autenticado — use em toda action/página privada. */
+/**
+ * Contexto de quem PODE operar a clínica agora. Lança se não autenticado — use
+ * em toda action/página privada.
+ *
+ * O portão de acesso mora aqui, e não apenas no layout de (app), porque layout
+ * não roda antes de Server Action: o Next executa a action e só depois renderiza
+ * a árvore. Com a checagem só no layout, uma aba aberta quando o teste vencia
+ * continuava gravando no banco (verificado em 23/08/2026: cliente criado com o
+ * teste vencido, e a navegação para /conta/assinatura acontecendo DEPOIS da
+ * escrita). Como toda action do painel começa por esta função, este é o único
+ * ponto onde a regra não depende de alguém lembrar dela na próxima action.
+ */
 export async function requireSession(): Promise<TenantContext> {
   const ctx = await getSession();
   if (!ctx) throw new Error("UNAUTHENTICATED");
+
+  // `redirect` em vez de `throw`: a action que não trata erro mostraria uma
+  // falha genérica ("tente de novo"), que é conselho errado para quem precisa
+  // assinar. Quem envolve a chamada em try/catch engole o redirect e mostra o
+  // próprio aviso — aceitável, porque a escrita já não aconteceu.
+  const access = await getAccountAccess(ctx.organizationId);
+  if (!access.allowed) redirect("/conta/assinatura");
+
   return ctx;
 }
 

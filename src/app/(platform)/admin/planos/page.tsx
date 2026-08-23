@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { db } from "@/db";
 import { subscriptionEvents, subscriptions } from "@/db/schema";
 import { formatBRL } from "@/lib/money";
+import { annualDeal, formatMonths, formatPercent } from "@/lib/pricing";
 import { cn } from "@/lib/utils";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import { listPlans } from "@/server/services/platform-accounts";
@@ -35,29 +36,6 @@ const MRR_CASE = sql<number>`
 type Usage = { accounts: number; paying: number; trialing: number; mrrCents: number };
 
 const EMPTY_USAGE: Usage = { accounts: 0, paying: 0, trialing: 0, mrrCents: 0 };
-
-const formatPercent = (ratio: number) =>
-  ratio.toLocaleString("pt-BR", { style: "percent", maximumFractionDigits: 1 });
-
-function formatMonths(months: number): string {
-  const rounded = Math.round(months * 10) / 10;
-  const label = rounded.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
-  return `${label} ${rounded === 1 ? "mês" : "meses"}`;
-}
-
-/** O que o anual economiza em relação a doze mensalidades. */
-function annualDeal(monthlyCents: number, yearlyCents: number) {
-  const equivalentMonthly = Math.round(yearlyCents / 12);
-  if (monthlyCents <= 0) return { equivalentMonthly, savedCents: 0, ratio: 0, months: 0 };
-  const fullCents = monthlyCents * 12;
-  const savedCents = fullCents - yearlyCents;
-  return {
-    equivalentMonthly,
-    savedCents,
-    ratio: savedCents / fullCents,
-    months: savedCents / monthlyCents,
-  };
-}
 
 export default async function PlanosPage() {
   await requirePlatformAdmin();
@@ -155,6 +133,14 @@ export default async function PlanosPage() {
                 maxUsers: plan.maxUsers,
                 position: plan.position,
                 active: plan.active,
+                publicVisible: plan.publicVisible,
+                tagline: plan.tagline,
+                benefits: Array.isArray(plan.features) ? plan.features : [],
+                ctaLabel: plan.ctaLabel,
+                checkoutUrlMonthly: plan.checkoutUrlMonthly,
+                checkoutUrlYearly: plan.checkoutUrlYearly,
+                highlight: plan.highlight,
+                highlightLabel: plan.highlightLabel,
               };
 
               return (
@@ -167,6 +153,12 @@ export default async function PlanosPage() {
                           <Badge tone={plan.active ? "positive" : "neutral"}>
                             {plan.active ? "À venda" : "Fora de venda"}
                           </Badge>
+                          <Badge tone={plan.publicVisible ? "accent" : "neutral"}>
+                            {plan.publicVisible ? "No site" : "Fora do site"}
+                          </Badge>
+                          {plan.highlight ? (
+                            <Badge tone="info">{plan.highlightLabel ?? "Em destaque"}</Badge>
+                          ) : null}
                         </div>
                         <p className="mt-1 text-caption text-ink-secondary">
                           <span className="text-ink-tertiary">{plan.slug}</span>
@@ -194,7 +186,7 @@ export default async function PlanosPage() {
                           {formatBRL(plan.yearlyPriceCents)}
                         </p>
                         <p className="mt-0.5 text-meta text-ink-secondary">
-                          {formatBRL(deal.equivalentMonthly)} por mês
+                          {formatBRL(deal.equivalentMonthlyCents)} por mês
                           {deal.savedCents > 0 ? (
                             <>
                               {" · "}
@@ -258,6 +250,8 @@ export default async function PlanosPage() {
                         </p>
                       </div>
                     </div>
+
+                    <Vitrine plan={plan} />
                   </Card>
                 </li>
               );
@@ -266,6 +260,78 @@ export default async function PlanosPage() {
         )}
       </PlatformBody>
     </div>
+  );
+}
+
+/**
+ * Estado da vitrine de um plano.
+ *
+ * Existe por causa de uma pergunta que ninguém responde olhando a tabela de
+ * preços: "esse botão no site VENDE hoje?". Sem link de checkout ele não vende —
+ * ele inscreve no teste grátis, o que é uma decisão legítima e completamente
+ * diferente. Dizer isso por extenso é o que impede alguém de anunciar o preço
+ * achando que o dinheiro entra sozinho.
+ */
+function Vitrine({ plan }: { plan: Awaited<ReturnType<typeof listPlans>>[number] }) {
+  const beneficios = Array.isArray(plan.features) ? plan.features.length : 0;
+
+  return (
+    <div className="mt-4 border-t border-line pt-4">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <p className="text-section">Vitrine</p>
+        <p className="text-caption text-ink-secondary">
+          {plan.publicVisible
+            ? plan.active
+              ? "Aparece na página de preços do site."
+              : "Marcado para o site, mas fora de venda — não aparece enquanto estiver desativado."
+            : "Não aparece no site. Vendável só pelo painel."}
+        </p>
+      </div>
+
+      <p className="mt-1 text-caption text-ink-secondary">
+        {plan.tagline ? (
+          <span className="text-ink">“{plan.tagline}”</span>
+        ) : (
+          <span className="text-ink-tertiary">Sem chamada curta</span>
+        )}
+        {" · "}
+        <span className={beneficios === 0 ? "text-ink-tertiary" : undefined}>
+          {beneficios === 0
+            ? "nenhum benefício listado"
+            : `${beneficios} ${beneficios === 1 ? "benefício" : "benefícios"}`}
+        </span>
+      </p>
+
+      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+        <Checkout ciclo="Mensal" url={plan.checkoutUrlMonthly} trialDays={plan.trialDays} />
+        <Checkout ciclo="Anual" url={plan.checkoutUrlYearly} trialDays={plan.trialDays} />
+      </div>
+    </div>
+  );
+}
+
+/** A mesma decisão que `planCta` toma no site, dita em português para quem opera. */
+function Checkout({
+  ciclo,
+  url,
+  trialDays,
+}: {
+  ciclo: string;
+  url: string | null;
+  trialDays: number;
+}) {
+  const colado = Boolean(url);
+  return (
+    <p className="flex items-baseline gap-1.5 text-caption">
+      <span className="shrink-0 text-ink-secondary">{ciclo}:</span>
+      <span className={colado ? "text-positive" : "text-ink-tertiary"}>
+        {colado
+          ? "Link colado"
+          : trialDays > 0
+            ? "Sem checkout — o botão do site leva ao teste grátis"
+            : "Sem checkout e sem teste — o botão do site só leva ao contato"}
+      </span>
+    </p>
   );
 }
 

@@ -19,7 +19,9 @@ import {
   getSnapshot,
   getTrialFunnel,
   getUsage,
+  getWeeklyCohortFunnel,
 } from "@/server/services/platform-metrics";
+import { CohortFunnelSection } from "./cohort-funnel";
 import { PreLaunch } from "./pre-launch";
 
 export const metadata = { title: "Visão do negócio" };
@@ -39,7 +41,9 @@ export default async function PlatformDashboard() {
   // Antes da primeira assinatura não há o que medir. O painel cheio de zeros
   // seria indistinguível de um painel com defeito, então dá lugar ao primeiro
   // passo — e volta sozinho quando existir receita para reportar.
-  const readiness = await getLaunchReadiness();
+  // O funil de coorte é a única medida de tração que não depende de receita, e
+  // por isso vale nas duas caras do painel — inclusive antes da primeira venda.
+  const [readiness, cohorts] = await Promise.all([getLaunchReadiness(), getWeeklyCohortFunnel(8)]);
   if (readiness.preLaunch) {
     return (
       <div>
@@ -48,7 +52,7 @@ export default async function PlatformDashboard() {
           description="Nenhuma assinatura ainda — o painel começa a medir na primeira"
         />
         <PlatformBody>
-          <PreLaunch readiness={readiness} />
+          <PreLaunch readiness={readiness} cohorts={cohorts} />
         </PlatformBody>
       </div>
     );
@@ -281,6 +285,8 @@ export default async function PlatformDashboard() {
             </Card>
           </section>
         </div>
+
+        <CohortFunnelSection funnel={cohorts} />
 
         {/* Uso — num SaaS vertical, conta que não usa é cancelamento com atraso */}
         <section>

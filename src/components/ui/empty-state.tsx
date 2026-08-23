@@ -2,8 +2,12 @@ import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Empty state ajuda, nunca informa vazio.
- * Título na voz do produto (serif) + uma orientação + uma ação.
+ * Empty state ajuda, nunca informa vazio: título + uma orientação + uma ação.
+ *
+ * O título usa a escala do produto (`text-entity`/`text-card`) na Plus Jakarta,
+ * a ÚNICA família do tema — não existe fonte serifada aqui, e escrever
+ * `font-serif` traria a Times do sistema para dentro da marca sem que nada
+ * quebrasse no build.
  *
  * `size="sm"` é para estado rotineiro (o dia acabou, a busca não achou):
  * merece explicação, não meia tela de espaço morto.

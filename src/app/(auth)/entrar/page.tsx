@@ -1,33 +1,39 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/server/auth";
+import { AuthShell } from "../auth-shell";
 import { LoginForm } from "./login-form";
 
-export const metadata = { title: "Entrar — Lumina" };
+// Só o nome da tela: o layout raiz já aplica o template "%s · Lumina". Repetir
+// a marca aqui rendia a aba "Entrar — Lumina · Lumina" — e a aba é a primeira
+// coisa que a pessoa vê ao atravessar do site para o login.
+export const metadata = { title: "Entrar" };
 
 export default async function LoginPage() {
   if (await getSession()) redirect("/hoje");
 
   return (
-    <div className="flex min-h-dvh flex-col justify-center px-6 py-12">
-      <div className="mx-auto w-full max-w-[360px]">
-        <div className="mb-8">
-          {/* Primeiro contato com a marca: o quadrado sozinho não diz o nome do produto. */}
-          <p className="flex items-center gap-2.5">
-            <span
-              aria-hidden
-              className="flex size-8 items-center justify-center rounded-control bg-accent text-label font-semibold text-white"
-            >
-              L
-            </span>
-            <span className="text-title font-extrabold tracking-[0.08em] text-ink">Lumina</span>
-          </p>
-          <h1 className="mt-6 text-display text-ink">Bom te ver de novo</h1>
-          <p className="mt-1.5 text-body text-ink-secondary">
-            Entre para acompanhar a operação da sua clínica.
-          </p>
-        </div>
+    <AuthShell>
+      <h1 className="text-display text-ink">Bom te ver de novo</h1>
+      <p className="mt-1.5 text-body text-ink-secondary">
+        Entre para acompanhar a operação da sua clínica.
+      </p>
+
+      <div className="mt-8">
         <LoginForm />
       </div>
-    </div>
+
+      {/* Fora do <form>: quem chega do site sem conta não pode ser obrigado a
+          descobrir isso errando a senha primeiro. */}
+      <p className="mt-6 border-t border-line pt-5 text-center text-label text-ink-secondary">
+        Ainda não tem conta?{" "}
+        <Link
+          href="/criar-conta"
+          className="font-semibold text-accent underline underline-offset-4 transition-colors hover:text-accent-hover"
+        >
+          Criar conta
+        </Link>
+      </p>
+    </AuthShell>
   );
 }
