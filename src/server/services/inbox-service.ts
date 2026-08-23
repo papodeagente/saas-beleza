@@ -1,5 +1,6 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import {
   appointments,
@@ -11,8 +12,10 @@ import {
   professionals,
   services,
   users,
+  whatsappProfilePictures,
 } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
+import { whichHavePictures } from "@/server/services/profile-picture-service";
 import { formatBrPhone } from "@/server/whatsapp/phone";
 
 /**
@@ -43,6 +46,12 @@ export type ConversationListItem = {
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
+  /**
+   * Endereço da foto de perfil guardada, ou nulo quando não há foto para este
+   * contato. Nulo faz o Avatar cair nas iniciais — pedir uma imagem que não
+   * existe encheria o console de 404 e faria a lista piscar.
+   */
+  photoUrl: string | null;
 };
 
 function tabFilter(ctx: TenantContext, tab: InboxTab) {
@@ -79,6 +88,10 @@ export async function listConversations(
     .where(eq(messages.organizationId, ctx.organizationId))
     .as("last_message");
 
+  // Alias porque a junção é por (organização, jid) e a mesma tabela pode voltar
+  // a ser usada noutro ponto da consulta.
+  const profilePic = alias(whatsappProfilePictures, "profile_pic");
+
   const assignee = db
     .select({ id: users.id, name: users.name })
     .from(users)
@@ -105,8 +118,21 @@ export async function listConversations(
       assignedUserId: conversations.assignedUserId,
       assignedUserName: assignee.name,
       lastAssignedUserName: previous.name,
+      remoteJid: conversations.remoteJid,
+      // Só a existência da foto vem no SELECT. Trazer os bytes aqui carregaria
+      // ~2,6 KB por linha em toda abertura do inbox, para uma imagem que o
+      // navegador já sabe guardar em cache sozinho.
+      temFoto: sql<boolean>`${profilePic.id} is not null`,
     })
     .from(conversations)
+    .leftJoin(
+      profilePic,
+      and(
+        eq(profilePic.organizationId, conversations.organizationId),
+        eq(profilePic.jid, conversations.remoteJid),
+        eq(profilePic.missing, false),
+      ),
+    )
     .leftJoin(customers, eq(customers.id, conversations.customerId))
     .leftJoin(assignee, eq(assignee.id, conversations.assignedUserId))
     .leftJoin(previous, eq(previous.id, conversations.lastAssignedUserId))
@@ -130,10 +156,12 @@ export async function listConversations(
     .orderBy(desc(conversations.lastMessageAt))
     .limit(100);
 
-  return rows.map((row) => ({
+  return rows.map(({ remoteJid, temFoto, ...row }) => ({
     ...row,
     aiPaused: Boolean(row.aiPausedAt),
     phone: row.phone ? formatBrPhone(row.phone) : null,
+    photoUrl:
+      temFoto && remoteJid ? `/api/foto-perfil?jid=${encodeURIComponent(remoteJid)}` : null,
   }));
 }
 
@@ -211,6 +239,8 @@ export type ConversationDetail = {
     controlledBy: "ai" | "human" | "waiting";
     status: string;
     aiPaused: boolean;
+    /** Foto de perfil guardada, ou nulo quando não há. */
+    photoUrl: string | null;
     assignedUserId: number | null;
     assignedUserName: string | null;
     lastAssignedUserName: string | null;
@@ -249,6 +279,13 @@ export async function getConversation(
     .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, ctx.organizationId)))
     .limit(1);
   if (!conversation) return null;
+
+  // Consulta separada e não junção: a foto não participa de nenhum filtro e
+  // uma leitura por chave única é mais barata que arrastar a tabela pela
+  // junção da conversa inteira.
+  const temFoto = conversation.remoteJid
+    ? (await whichHavePictures(ctx.organizationId, [conversation.remoteJid])).size > 0
+    : false;
 
   const sender = db.select({ id: users.id, name: users.name }).from(users).as("message_sender");
   const rows = await db
@@ -346,6 +383,10 @@ export async function getConversation(
       assignedUserName: conversation.assignedUserName,
       lastAssignedUserName: conversation.lastAssignedUserName,
       hasWhatsapp: Boolean(conversation.remoteJid),
+      photoUrl:
+        conversation.remoteJid && temFoto
+          ? `/api/foto-perfil?jid=${encodeURIComponent(conversation.remoteJid)}`
+          : null,
     },
     messages: rows,
     context,

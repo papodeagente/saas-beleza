@@ -7,6 +7,7 @@ import {
   Check,
   Copy,
   Crown,
+  ImageDown,
   Link2,
   Lock,
   LogOut,
@@ -59,6 +60,7 @@ import {
   updateGroupAction,
   updateParticipantsAction,
 } from "./actions";
+import { syncPhotosAction } from "@/app/(app)/inbox/actions";
 
 /**
  * Caixa de entrada de grupos.
@@ -85,6 +87,7 @@ type GroupItem = {
   lastMessageFromMe: boolean;
   unreadCount: number;
   awaitingReply: boolean;
+  photoUrl: string | null;
 };
 
 type Participant = {
@@ -154,6 +157,7 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [carregando, setCarregando] = useState(connected);
+  const [buscandoFotos, buscarFotos] = useTransition();
   const [selecionado, setSelecionado] = useState<string | null>(null);
   const [criando, setCriando] = useState(false);
   const [entrando, setEntrando] = useState(false);
@@ -233,6 +237,28 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
                 </Button>
               </>
             ) : null}
+            {/* A foto do grupo é o que a atendente reconhece antes de ler o
+                nome. Buscar daqui evita ter que ir ao Inbox para atualizar
+                uma lista que se olha nesta tela. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Buscar no WhatsApp as fotos de perfil que ainda faltam"
+              loading={buscandoFotos}
+              onClick={() =>
+                buscarFotos(async () => {
+                  const r = await syncPhotosAction();
+                  if (r.ok) {
+                    toast.success(r.mensagem);
+                    carregar(filtro, busca, 0);
+                  } else {
+                    toast.error(r.error);
+                  }
+                })
+              }
+            >
+              <ImageDown aria-hidden />
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -409,7 +435,7 @@ function GroupRow({
       )}
     >
       <span className="relative shrink-0">
-        <Avatar name={group.name} size="lg" />
+        <Avatar name={group.name} src={group.photoUrl} size="lg" />
         <span className="absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full bg-[#25D366] ring-2 ring-surface-raised">
           <Users className="size-2.5 text-white" aria-hidden />
         </span>
@@ -541,7 +567,7 @@ function GroupWorkspace({
           <Button variant="ghost" size="sm" className="md:hidden" onClick={onBack}>
             Voltar
           </Button>
-          <Avatar name={group.name} size="md" />
+          <Avatar name={group.name} src={group.photoUrl} size="md" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-card text-ink">{group.name}</h2>
             <p className="flex items-center gap-1.5 text-caption text-ink-secondary">

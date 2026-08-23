@@ -13,6 +13,7 @@ import {
   getConversation,
   listConversations,
 } from "@/server/services/inbox-service";
+import { syncProfilePictures } from "@/server/services/profile-picture-service";
 import {
   deleteFromInbox,
   notifyPresence,
@@ -37,6 +38,7 @@ export type InboxDetail = {
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
   hasWhatsapp: boolean;
+  photoUrl: string | null;
   messages: Array<{
     id: number;
     direction: "inbound" | "outbound";
@@ -89,6 +91,7 @@ function serialize(detail: ConversationDetail): InboxDetail {
     assignedUserName: detail.conversation.assignedUserName,
     lastAssignedUserName: detail.conversation.lastAssignedUserName,
     hasWhatsapp: detail.conversation.hasWhatsapp,
+    photoUrl: detail.conversation.photoUrl,
     messages: detail.messages.map(({ deletedAt, ...message }) => ({
       ...message,
       reactions: Array.isArray(message.reactions) ? message.reactions : null,
@@ -406,5 +409,62 @@ export async function presenceAction(input: unknown): Promise<void> {
     await notifyPresence(ctx.organizationId, data.conversationId, data.presence);
   } catch {
     /* silencioso de propósito */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fotos de perfil
+// ---------------------------------------------------------------------------
+
+export type SyncPhotosResult =
+  | { ok: true; mensagem: string }
+  | { ok: false; error: string };
+
+/**
+ * Busca no WhatsApp as fotos que ainda faltam.
+ *
+ * É uma ação explícita, e não algo que roda sozinho ao abrir o inbox, por dois
+ * motivos: cada foto é uma chamada a um serviço de terceiro compartilhado por
+ * toda a clínica, e a atendente precisa saber que a demora tem uma causa. O
+ * serviço já respeita um intervalo entre buscas e só procura o que está
+ * faltando ou vencido, então clicar duas vezes seguidas não repete o trabalho.
+ */
+export async function syncPhotosAction(): Promise<SyncPhotosResult> {
+  try {
+    const ctx = await requireSession();
+    const r = await syncProfilePictures(ctx);
+
+    if (r.buscadas === 0) return { ok: true, mensagem: "As fotos já estão atualizadas." };
+
+    const partes: string[] = [];
+    if (r.atualizadas > 0) {
+      partes.push(`${r.atualizadas} ${r.atualizadas === 1 ? "foto encontrada" : "fotos encontradas"}`);
+    }
+    // Contato sem foto não é falha: é privacidade, e dizer isso evita a
+    // impressão de que o botão não funcionou.
+    if (r.semFoto > 0) {
+      partes.push(`${r.semFoto} sem foto no WhatsApp`);
+    }
+    if (r.falhas > 0) {
+      partes.push(`${r.falhas} não ${r.falhas === 1 ? "respondeu" : "responderam"}`);
+    }
+
+    // Dizer quanto falta é o que transforma um botão que "parece não ter feito
+    // nada" num processo com fim à vista. Numa conta com centenas de grupos,
+    // uma rodada só não dá conta e o silêncio pareceria defeito.
+    const cauda =
+      r.restantes > 0
+        ? `. Faltam ${r.restantes} — toque de novo para continuar.`
+        : ".";
+
+    revalidatePath("/inbox");
+    revalidatePath("/grupos");
+    return { ok: true, mensagem: (partes.join(", ") || "Nada para atualizar") + cauda };
+  } catch (error) {
+    if (error instanceof Error && error.message === "UNAUTHENTICATED") {
+      return { ok: false, error: "Sessão expirada. Entre de novo." };
+    }
+    console.error(error);
+    return { ok: false, error: "Não foi possível buscar as fotos agora." };
   }
 }

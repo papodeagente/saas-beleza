@@ -2,6 +2,7 @@ import "server-only";
 import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappGroups } from "@/db/schema";
+import { whichHavePictures } from "@/server/services/profile-picture-service";
 import type { TenantContext } from "@/server/auth";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { listGroups, type Group } from "@/server/whatsapp/uazapi-groups";
@@ -32,6 +33,8 @@ export type GroupInboxItem = {
   unreadCount: number;
   /** Última palavra foi do grupo: alguém falou e ninguém respondeu. */
   awaitingReply: boolean;
+  /** Foto do grupo guardada, ou nulo quando não há. */
+  photoUrl: string | null;
 };
 
 export type GroupInboxPage = {
@@ -173,7 +176,9 @@ export async function listGroupInbox(
     }
   }
 
-  let items: GroupInboxItem[] = pagina.groups.map((grupo) => {
+  // A foto entra só no fim, para a página visível — por isso a lista
+  // intermediária ainda não a carrega.
+  let items: Array<Omit<GroupInboxItem, "photoUrl">> = pagina.groups.map((grupo) => {
     const decisao = decisoes.get(grupo.jid);
     const conversa = conversasPorJid.get(grupo.jid);
     return {
@@ -223,8 +228,20 @@ export async function listGroupInbox(
   };
   for (const linha of totalPorClasse) counts[linha.classification] = linha.total;
 
+  const visiveis = filtro === "all" ? items : items.slice(offset, offset + limit);
+
+  // A foto é resolvida só para a página visível: numa clínica com centenas de
+  // grupos, perguntar por todos a cada abertura seria trabalho jogado fora.
+  const comFoto = await whichHavePictures(
+    ctx.organizationId,
+    visiveis.map((g) => g.jid),
+  );
+
   return {
-    items: filtro === "all" ? items : items.slice(offset, offset + limit),
+    items: visiveis.map((g) => ({
+      ...g,
+      photoUrl: comFoto.has(g.jid) ? `/api/foto-perfil?jid=${encodeURIComponent(g.jid)}` : null,
+    })),
     total: filtro === "all" ? pagina.total : items.length,
     counts,
   };

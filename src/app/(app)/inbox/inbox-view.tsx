@@ -26,6 +26,7 @@ import {
   Phone,
   Play,
   Plus,
+  ImageDown,
   Search,
   TriangleAlert,
   User,
@@ -53,6 +54,7 @@ import { MessageActions } from "./message-actions";
 import {
   type InboxDetail,
   listConversationsAction,
+  syncPhotosAction,
   loadConversationAction,
   sendMessageAction,
   setAiPauseAction,
@@ -75,6 +77,7 @@ type ConversationItem = {
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
+  photoUrl: string | null;
 };
 
 type Tab = "meus" | "fila" | "todos" | "resolvidas";
@@ -359,17 +362,20 @@ export function InboxView({
             </Link>
           ) : null}
 
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-tertiary"
-              aria-hidden
-            />
-            <Input
-              value={search}
-              onChange={(event) => onSearch(event.target.value)}
-              placeholder="Pesquisar conversa"
-              className="pl-9"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-tertiary"
+                aria-hidden
+              />
+              <Input
+                value={search}
+                onChange={(event) => onSearch(event.target.value)}
+                placeholder="Pesquisar conversa"
+                className="pl-9"
+              />
+            </div>
+            <BotaoFotos />
           </div>
 
           {/* Abas em ícone + rótulo: cabem cinco numa coluna estreita, e o
@@ -564,7 +570,7 @@ export function InboxView({
                   abre a conversa, para não sumir justamente no aparelho onde
                   trocar de tela custa mais. */}
               <div className="mx-auto mb-3 w-full max-w-[680px] shrink-0 lg:hidden">
-                <ContactPanel context={detail.context} compact />
+                <ContactPanel context={detail.context} photoUrl={detail.photoUrl} compact />
               </div>
               {/* A conversa cresce de baixo para cima: a última mensagem encosta
                   no composer, como em qualquer thread. */}
@@ -658,7 +664,7 @@ export function InboxView({
             mostrarFicha ? "hidden lg:block" : "hidden",
           )}
         >
-          <ContactPanel context={detail.context} />
+          <ContactPanel context={detail.context} photoUrl={detail.photoUrl} />
         </aside>
       ) : null}
     </div>
@@ -696,9 +702,12 @@ const APPOINTMENT_STATUS: Record<string, string> = {
  */
 function ContactPanel({
   context,
+  photoUrl,
   compact = false,
 }: {
   context: InboxDetail["context"];
+  /** Vem da conversa, não do cliente: a foto é do WhatsApp, não do cadastro. */
+  photoUrl?: string | null;
   compact?: boolean;
 }) {
   if (!context) {
@@ -717,7 +726,7 @@ function ContactPanel({
   return (
     <div className={cn("flex flex-col gap-3", compact && "rounded-card border border-line bg-surface-raised p-3")}>
       <div className="flex flex-col items-center gap-2 text-center">
-        <Avatar name={context.name} size="lg" />
+        <Avatar name={context.name} src={photoUrl} size="lg" />
         <div className="min-w-0">
           <p className="truncate text-card text-ink">{context.name}</p>
           <Badge tone={stage.tone} className="mt-1">
@@ -866,6 +875,36 @@ function MetricCard({
  * fica sobre o avatar porque o canal é atributo da conversa, não informação
  * que mereça uma linha própria.
  */
+/**
+ * Puxa do WhatsApp as fotos que faltam.
+ *
+ * Fica ao lado da busca porque é uma manutenção da LISTA, não de uma conversa.
+ * O rótulo some em tela estreita e sobra só o ícone: numa coluna de 320px, o
+ * texto roubaria espaço da busca, que é o que se usa todo dia.
+ */
+function BotaoFotos() {
+  const [pendente, iniciar] = useTransition();
+
+  return (
+    <button
+      type="button"
+      disabled={pendente}
+      title="Buscar no WhatsApp as fotos de perfil que ainda faltam"
+      onClick={() =>
+        iniciar(async () => {
+          const r = await syncPhotosAction();
+          if (r.ok) toast.success(r.mensagem);
+          else toast.error(r.error);
+        })
+      }
+      className="flex h-9 shrink-0 items-center gap-1.5 rounded-control border border-line px-2.5 text-label text-ink-secondary transition-colors hover:border-line-strong hover:text-ink disabled:opacity-60"
+    >
+      <ImageDown className={cn("size-4", pendente && "animate-pulse")} aria-hidden />
+      <span className="hidden lg:inline">{pendente ? "Buscando" : "Fotos"}</span>
+    </button>
+  );
+}
+
 function ConversationRow({
   conversation,
   active,
@@ -892,7 +931,7 @@ function ConversationRow({
       )}
     >
       <span className="relative shrink-0">
-        <Avatar name={conversation.customerName} size="lg" />
+        <Avatar name={conversation.customerName} src={conversation.photoUrl} size="lg" />
         {/* Selo do canal, no padrão que todo aplicativo de mensagem usa. */}
         <span
           title={conversation.channel === "whatsapp" ? "WhatsApp" : conversation.channel}

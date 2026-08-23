@@ -1140,6 +1140,43 @@ export const plans = pgTable(
  * um limitador que zera sozinho não limita nada. Guarda o IP e o e-mail
  * tentado — nunca a senha.
  */
+/**
+ * Foto de perfil do WhatsApp, guardada como BYTES e não como link.
+ *
+ * A uazapi devolve uma URL em `pps.whatsapp.net`, e essa URL expira: guardar o
+ * link daria uma lista de avatares que funciona hoje e quebra na semana que vem,
+ * em silêncio. Guardando a miniatura (2,6 KB em JPEG, medido) a foto vira nossa
+ * e para de depender do CDN de terceiro.
+ *
+ * Há um segundo motivo, menos óbvio e mais importante: servir a imagem do nosso
+ * domínio significa que o navegador da clínica nunca conta ao WhatsApp qual
+ * cliente está sendo aberto na tela.
+ *
+ * A imagem em alta resolução (`image`) não entra aqui de propósito — ela
+ * responde 403 para quem não é o aparelho pareado. Só a miniatura é buscável.
+ *
+ * `missing` distingue "ainda não perguntamos" de "perguntamos e esta pessoa não
+ * tem foto (ou escondeu por privacidade)". Sem isso, todo carregamento do inbox
+ * bateria na uazapi de novo para os mesmos contatos sem foto.
+ */
+export const whatsappProfilePictures = pgTable(
+  "whatsapp_profile_pictures",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    /** Chave real da conversa: `...@s.whatsapp.net` ou `...@g.us`. */
+    jid: text("jid").notNull(),
+    mime: text("mime"),
+    /** Base64 da miniatura. Nulo quando `missing`. */
+    dataBase64: text("data_base64"),
+    missing: boolean("missing").notNull().default(false),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("wa_profile_pictures_unique").on(t.organizationId, t.jid)],
+);
+
 export const signupAttempts = pgTable(
   "signup_attempts",
   {

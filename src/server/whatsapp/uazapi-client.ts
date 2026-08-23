@@ -412,3 +412,55 @@ export async function findMessages(
   });
   return Array.isArray(resp) ? resp : asArray(get(resp, "messages") ?? get(resp, "data"));
 }
+
+// ---------------------------------------------------------------------------
+// Ficha do contato
+// ---------------------------------------------------------------------------
+
+export type ChatDetails = {
+  /** Nome que o contato escolheu para si (`wa_name`), quando existe. */
+  waName: string | null;
+  /** Nome salvo na agenda do aparelho pareado (`wa_contactName`). */
+  contactName: string | null;
+  phone: string | null;
+  /** Identificador anônimo do contato. Útil para casar conversa vinda de LID. */
+  lid: string | null;
+  /**
+   * URL da MINIATURA da foto de perfil, no CDN do WhatsApp — e ela expira.
+   * Quem for exibir isso precisa baixar os bytes, não guardar o link.
+   *
+   * A imagem em alta resolução (`image`) NÃO é lida aqui de propósito:
+   * responde 403 para quem não é o aparelho pareado, então guardá-la só
+   * produziria avatar quebrado.
+   */
+  imagePreviewUrl: string | null;
+};
+
+/**
+ * Ficha de um contato ou grupo.
+ *
+ * A resposta vem ora crua, ora envelopada em `chat`, e os campos vazios chegam
+ * como string vazia em vez de nulo — daí a normalização aqui em vez de na
+ * chamada.
+ */
+export async function getChatDetails(
+  creds: UazapiCredentials,
+  jid: string,
+): Promise<ChatDetails | null> {
+  const resp = await request(creds, "POST", "/chat/details", {
+    number: jid,
+    preview: true,
+  });
+  const data = (get(resp, "chat") ?? resp) as Json;
+  if (!data || typeof data !== "object") return null;
+
+  const texto = (...valores: unknown[]) => firstString(...valores) || null;
+
+  return {
+    waName: texto(get(data, "wa_name"), get(data, "name")),
+    contactName: texto(get(data, "wa_contactName"), get(data, "lead_name")),
+    phone: texto(get(data, "phone")),
+    lid: texto(get(data, "wa_chatlid")),
+    imagePreviewUrl: texto(get(data, "imagePreview")),
+  };
+}
