@@ -77,6 +77,8 @@ export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMe
       // sistema: registra como humana, sem dono, e é isso que faz o agente
       // recuar quando alguém assume a conversa pelo aparelho.
       sender: msg.fromMe ? "user" : "customer",
+      senderName: msg.fromMe ? null : msg.senderName,
+      senderPhone: msg.senderPhone,
       body,
       messageType: msg.kind === "system" ? "system" : msg.kind,
       status: msg.fromMe ? "sent" : "delivered",

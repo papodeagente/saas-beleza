@@ -1,7 +1,17 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { z } from "zod";
 import { requireRole, requireSession } from "@/server/auth";
+import {
+  classifyGroup,
+  getGroupThread,
+  listGroupInbox,
+  rememberGroupSize,
+  toggleGroupPinned,
+  type GroupInboxPage,
+} from "@/server/services/group-inbox-service";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import {
   createGroup,
@@ -78,7 +88,10 @@ const jidSchema = z.string().trim().min(5).endsWith("@g.us");
 export async function getGroupAction(groupJid: unknown): Promise<GroupResult<Group>> {
   try {
     const jid = jidSchema.parse(groupJid);
+    const ctx = await requireSession();
     const group = await getGroup(await credentials(), jid, { inviteLink: true, pendingRequests: true });
+    // A lista rápida não sabe o tamanho do grupo; aqui ele é conhecido.
+    await rememberGroupSize(ctx, jid, group.participantCount);
     return { ok: true, data: group };
   } catch (error) {
     console.error(error);
@@ -188,5 +201,195 @@ export async function joinGroupAction(inviteCode: unknown): Promise<GroupResult<
   } catch (error) {
     console.error(error);
     return { ok: false, error: describe(error) };
+  }
+}
+
+// ── Caixa de entrada de grupos ────────────────────────────────────────────
+
+const inboxSchema = z.object({
+  search: z.string().trim().max(80).optional(),
+  classification: z.enum(["all", "none", "radar", "opportunity", "private"]).default("all"),
+  offset: z.number().int().min(0).max(10_000).default(0),
+  limit: z.number().int().min(1).max(60).default(30),
+});
+
+export async function listGroupInboxAction(input: unknown): Promise<GroupResult<GroupInboxPage>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = inboxSchema.parse(input ?? {});
+    const page = await listGroupInbox(ctx, data);
+    return { ok: true, data: page };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+const classifySchema = z.object({
+  jid: z.string().trim().endsWith("@g.us"),
+  classification: z.enum(["none", "radar", "opportunity", "private"]),
+});
+
+/** Classificar é decisão da clínica: nunca é sobrescrita pela sincronia. */
+export async function classifyGroupAction(input: unknown): Promise<GroupResult<true>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = classifySchema.parse(input);
+    await classifyGroup(ctx, data.jid, data.classification);
+    revalidatePath("/grupos");
+    return { ok: true, data: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+export async function pinGroupAction(input: unknown): Promise<GroupResult<true>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = z.object({ jid: z.string().trim().endsWith("@g.us"), pinned: z.boolean() }).parse(input);
+    await toggleGroupPinned(ctx, data.jid, data.pinned);
+    revalidatePath("/grupos");
+    return { ok: true, data: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+export type GroupThread = {
+  conversationId: number | null;
+  messages: Array<{
+    id: number;
+    body: string;
+    senderName: string | null;
+    direction: "inbound" | "outbound";
+    messageType: string;
+    mediaUrl: string | null;
+    audioTranscription: string | null;
+    createdAt: string;
+  }>;
+};
+
+export async function groupThreadAction(jid: unknown): Promise<GroupResult<GroupThread>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const alvo = jidSchema.parse(jid);
+    const thread = await getGroupThread(ctx, alvo);
+    return {
+      ok: true,
+      data: {
+        conversationId: thread.conversationId,
+        messages: thread.messages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+      },
+    };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+const sendSchema = z.object({
+  jid: z.string().trim().endsWith("@g.us"),
+  body: z.string().trim().min(1).max(4000),
+});
+
+/** Enviar no grupo passa pelo mesmo caminho de qualquer envio do sistema. */
+export async function sendToGroupAction(input: unknown): Promise<GroupResult<true>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = sendSchema.parse(input);
+
+    const { conversationId } = await getGroupThread(ctx, data.jid);
+    if (!conversationId) {
+      return {
+        ok: false,
+        error: "Ainda não há conversa deste grupo por aqui. Ela aparece assim que alguém escrever nele.",
+      };
+    }
+
+    const { sendFromInbox } = await import("@/server/services/whatsapp-message-service");
+    await sendFromInbox(ctx, conversationId, data.body);
+    revalidatePath("/grupos");
+    return { ok: true, data: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+/**
+ * Resume o que foi dito no grupo nas últimas horas.
+ *
+ * Grupo movimentado tem centenas de mensagens por dia, e a pergunta de quem
+ * abre é sempre a mesma: perdi alguma coisa importante? O resumo responde isso
+ * sem obrigar a rolar tudo.
+ */
+export async function summarizeGroupAction(
+  input: unknown,
+): Promise<GroupResult<{ summary: string; messageCount: number }>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = z
+      .object({ jid: z.string().trim().endsWith("@g.us"), hours: z.number().int().min(1).max(168).default(48) })
+      .parse(input);
+
+    const thread = await getGroupThread(ctx, data.jid);
+    const corte = Date.now() - data.hours * 3_600_000;
+    const recentes = thread.messages.filter((m) => m.createdAt.getTime() >= corte);
+
+    if (recentes.length === 0) {
+      return { ok: false, error: `Nada foi dito neste grupo nas últimas ${data.hours} horas.` };
+    }
+
+    const transcricao = recentes
+      .map((m) => {
+        const quem = m.direction === "outbound" ? "Nós" : (m.senderName ?? "Participante");
+        const texto = m.audioTranscription || m.body || `[${m.messageType}]`;
+        return `${quem}: ${texto}`;
+      })
+      .join("\n")
+      .slice(0, 24_000);
+
+    const { complete, DEFAULT_MODEL } = await import("@/server/ai/llm");
+    const turno = await complete({
+      model: DEFAULT_MODEL,
+      system:
+        "Você resume conversas de grupos de WhatsApp de um negócio de estética. Responda em português do Brasil, " +
+        "em no máximo seis linhas: o que foi combinado, o que ficou pendente e o que exige resposta nossa. " +
+        "Se alguém pediu algo e não foi respondido, diga isso primeiro. Não invente nada que não esteja no texto.",
+      messages: [{ role: "user", content: transcricao }],
+      tools: [],
+      maxOutputTokens: 500,
+      temperature: 30,
+    });
+
+    const summary = turno.text.trim();
+    if (!summary) return { ok: false, error: "O modelo não devolveu resumo." };
+
+    const { db } = await import("@/db");
+    const { whatsappGroups } = await import("@/db/schema");
+    const { and: e, eq: igual } = await import("drizzle-orm");
+    await db
+      .update(whatsappGroups)
+      .set({ lastSummary: summary, lastSummaryAt: new Date() })
+      .where(e(igual(whatsappGroups.organizationId, ctx.organizationId), igual(whatsappGroups.jid, data.jid)));
+
+    return { ok: true, data: { summary, messageCount: recentes.length } };
+  } catch (error) {
+    console.error(error);
+    const mensagem = error instanceof Error ? error.message : "Falha ao resumir.";
+    return {
+      ok: false,
+      error: mensagem.includes("API_KEY")
+        ? "Falta a chave do provedor de IA no servidor para gerar resumos."
+        : mensagem,
+    };
   }
 }

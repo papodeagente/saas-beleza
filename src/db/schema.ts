@@ -81,6 +81,16 @@ export const waMessageStatus = pgEnum("wa_message_status", [
  */
 export const aiAgentStatus = pgEnum("ai_agent_status", ["off", "testing", "active"]);
 export const aiActionResult = pgEnum("ai_action_result", ["ok", "error", "blocked"]);
+/**
+ * Como o grupo é tratado pela clínica. Com centenas de grupos, é o que separa
+ * o que merece atenção do que é só ruído.
+ */
+export const waGroupClassification = pgEnum("wa_group_classification", [
+  "none",
+  "radar",
+  "opportunity",
+  "private",
+]);
 
 // ---------------------------------------------------------------------------
 // Tenant / identidade
@@ -599,6 +609,40 @@ export const whatsappWebhookEvents = pgTable(
   ],
 );
 
+/**
+ * O que é nosso sobre um grupo do WhatsApp.
+ *
+ * O grupo em si vive no WhatsApp e é lido de lá a cada abertura — aqui ficam
+ * só as decisões da clínica sobre ele (classificação, fixado) e o último
+ * retrato conhecido, que serve para ordenar a lista antes da resposta chegar.
+ */
+export const whatsappGroups = pgTable(
+  "whatsapp_groups",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    connectionId: bigint("connection_id", { mode: "number" }).references(() => whatsappConnections.id),
+    jid: text("jid").notNull(),
+    name: text("name"),
+    description: text("description"),
+    participantCount: integer("participant_count").notNull().default(0),
+    classification: waGroupClassification("classification").notNull().default("none"),
+    pinned: boolean("pinned").notNull().default(false),
+    /** Resumo mais recente gerado pela IA, com a hora em que foi feito. */
+    lastSummary: text("last_summary"),
+    lastSummaryAt: timestamp("last_summary_at", { withTimezone: true }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("wa_groups_org_jid_unique").on(t.organizationId, t.jid),
+    index("wa_groups_org_classification_idx").on(t.organizationId, t.classification),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Inbox
 // ---------------------------------------------------------------------------
@@ -668,6 +712,10 @@ export const messages = pgTable(
     // Quem apertou enviar, quando foi humano. Nulo em mensagem do agente — é
     // esse contraste que o gate "humano assumiu" usa para pausar a IA.
     senderUserId: bigint("sender_user_id", { mode: "number" }).references(() => users.id),
+    // Em grupo, a mensagem é de uma pessoa dentro dele: sem isso a conversa
+    // vira um monólogo de vozes anônimas.
+    senderName: text("sender_name"),
+    senderPhone: text("sender_phone"),
     body: text("body").notNull().default(""),
     messageType: waMessageType("message_type").notNull().default("text"),
     status: waMessageStatus("status").notNull().default("sent"),

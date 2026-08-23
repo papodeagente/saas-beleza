@@ -1,15 +1,25 @@
 "use client";
 
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
   Check,
   Copy,
   Crown,
   Link2,
+  Lock,
   LogOut,
+  Megaphone,
+  MessageSquare,
+  Pin,
   Plus,
+  Radar,
+  RefreshCw,
   RotateCcw,
   Search,
+  Send,
   ShieldCheck,
+  Sparkles,
   TriangleAlert,
   UserMinus,
   UserPlus,
@@ -18,6 +28,7 @@ import {
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -27,15 +38,47 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import {
+  classifyGroupAction,
   createGroupAction,
   getGroupAction,
+  groupThreadAction,
   joinGroupAction,
   leaveGroupAction,
-  listGroupsAction,
+  listGroupInboxAction,
+  pinGroupAction,
   resetInviteAction,
+  sendToGroupAction,
+  summarizeGroupAction,
   updateGroupAction,
   updateParticipantsAction,
 } from "./actions";
+
+/**
+ * Caixa de entrada de grupos.
+ *
+ * Grupo não é conversa de atendimento: ninguém "assume" um grupo nem o
+ * resolve. O que se faz com grupo é decidir se ele merece atenção, ver o que
+ * foi dito e responder quando for o caso. Por isso a tela tem classificação no
+ * lugar de fila, e um resumo no lugar da promessa de ler tudo.
+ */
+
+type Classification = "none" | "radar" | "opportunity" | "private";
+type Filtro = Classification | "all";
+
+type GroupItem = {
+  jid: string;
+  name: string;
+  description: string | null;
+  participantCount: number;
+  classification: Classification;
+  pinned: boolean;
+  conversationId: number | null;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  lastMessageFromMe: boolean;
+  unreadCount: number;
+  awaitingReply: boolean;
+};
 
 type Participant = {
   jid: string;
@@ -45,7 +88,7 @@ type Participant = {
   isSuperAdmin: boolean;
 };
 
-type Group = {
+type GroupDetail = {
   jid: string;
   name: string;
   description: string | null;
@@ -59,58 +102,85 @@ type Group = {
   inviteLink?: string | null;
 };
 
+type ThreadMessage = {
+  id: number;
+  body: string;
+  senderName: string | null;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  mediaUrl: string | null;
+  audioTranscription: string | null;
+  createdAt: string;
+};
+
+/** As três gavetas que o negócio usa, mais o "sem classificar". */
+const CLASSIFICACOES: Array<{ id: Classification; label: string; icon: typeof Radar; tone: string }> = [
+  { id: "radar", label: "Radar", icon: Radar, tone: "text-accent" },
+  { id: "opportunity", label: "Oportunidade", icon: Megaphone, tone: "text-positive" },
+  { id: "private", label: "Particular", icon: Lock, tone: "text-attention" },
+];
+
 const PAGE_SIZE = 30;
 
+function tempoRelativo(iso: string): string {
+  const minutos = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutos < 1) return "agora";
+  if (minutos < 60) return `${minutos} min`;
+  const horas = Math.round(minutos / 60);
+  if (horas < 24) return `${horas}h`;
+  const dias = Math.round(horas / 24);
+  if (dias < 7) return `${dias}d`;
+  return format(new Date(iso), "d MMM", { locale: ptBR });
+}
+
 export function GruposView({ connected, canManage }: { connected: boolean; canManage: boolean }) {
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [total, setTotal] = useState(0);
+  const [items, setItems] = useState<GroupItem[]>([]);
+  const [counts, setCounts] = useState<Record<Filtro, number>>({
+    all: 0,
+    none: 0,
+    radar: 0,
+    opportunity: 0,
+    private: 0,
+  });
+  const [filtro, setFiltro] = useState<Filtro>("all");
+  const [busca, setBusca] = useState("");
   const [offset, setOffset] = useState(0);
-  const [search, setSearch] = useState("");
-  // Já nasce carregando só quando há de fato o que carregar.
-  const [loading, setLoading] = useState(connected);
-  const [selected, setSelected] = useState<Group | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [joining, setJoining] = useState(false);
-  const buscaRef = useRef(0);
+  const [total, setTotal] = useState(0);
+  const [carregando, setCarregando] = useState(connected);
+  const [selecionado, setSelecionado] = useState<string | null>(null);
+  const [criando, setCriando] = useState(false);
+  const [entrando, setEntrando] = useState(false);
+  const pedido = useRef(0);
 
-  const carregar = useCallback(async (termo: string, novoOffset: number) => {
-    const chamada = ++buscaRef.current;
-    setLoading(true);
-    const result = await listGroupsAction({ search: termo || undefined, offset: novoOffset, limit: PAGE_SIZE });
-    // Descarta resposta de uma busca que já foi substituída por outra.
-    if (chamada !== buscaRef.current) return;
-    setLoading(false);
-    if (!result.ok) {
-      toast.error(result.error);
-      return;
-    }
-    setGroups(result.data.groups);
-    setTotal(result.data.total);
-    setOffset(result.data.offset);
-  }, []);
+  const carregar = useCallback(
+    async (proximoFiltro: Filtro, termo: string, proximoOffset: number) => {
+      const chamada = ++pedido.current;
+      setCarregando(true);
+      const resultado = await listGroupInboxAction({
+        classification: proximoFiltro,
+        search: termo || undefined,
+        offset: proximoOffset,
+        limit: PAGE_SIZE,
+      });
+      if (chamada !== pedido.current) return;
+      setCarregando(false);
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      setItems(resultado.data.items as GroupItem[]);
+      setTotal(resultado.data.total);
+      setCounts(resultado.data.counts as Record<Filtro, number>);
+      setOffset(proximoOffset);
+    },
+    [],
+  );
 
-  /**
-   * Carrega no primeiro render e a cada busca, sempre depois de uma pausa na
-   * digitação — cada consulta vai até o WhatsApp. O atraso também mantém a
-   * mudança de estado fora do fluxo síncrono do efeito, que é o que dispara
-   * renderizações em cascata.
-   */
   useEffect(() => {
     if (!connected) return;
-    const timer = setTimeout(() => void carregar(search, 0), search ? 400 : 0);
+    const timer = setTimeout(() => void carregar(filtro, busca, 0), busca ? 400 : 0);
     return () => clearTimeout(timer);
-  }, [search, connected, carregar]);
-
-  async function abrir(jid: string) {
-    const parcial = groups.find((g) => g.jid === jid);
-    if (parcial) setSelected(parcial);
-    const result = await getGroupAction(jid);
-    if (!result.ok) {
-      toast.error(result.error);
-      return;
-    }
-    setSelected(result.data);
-  }
+  }, [busca, filtro, connected, carregar]);
 
   if (!connected) {
     return (
@@ -118,7 +188,7 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
         <EmptyState
           icon={Users}
           title="Conecte o WhatsApp para ver seus grupos"
-          description="A lista de grupos vem direto do aparelho conectado. Nada é copiado para cá, então o que você vê é sempre o estado real."
+          description="A lista vem direto do aparelho conectado. Nada é copiado para cá, então o que você vê é sempre o estado real."
           action={
             <Button variant="secondary" size="md" asChild>
               <Link href="/whatsapp">Ir para a conexão</Link>
@@ -129,154 +199,177 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
     );
   }
 
-  const paginaAtual = Math.floor(offset / PAGE_SIZE) + 1;
-  const totalPaginas = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const grupoSelecionado = items.find((g) => g.jid === selecionado) ?? null;
 
   return (
-    <div className="mx-auto w-full max-w-[980px] px-4 py-6 md:px-6 md:py-8">
-      <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="bg-brand flex size-10 shrink-0 items-center justify-center rounded-card text-white">
-            <Users className="size-5" aria-hidden />
-          </span>
-          <div>
-            <h1 className="text-title text-ink">Grupos</h1>
-            <p className="mt-0.5 text-caption text-ink-secondary">
-              {total > 0 ? `${total} grupos no aparelho conectado` : "Grupos do aparelho conectado"} · as mudanças valem
-              no WhatsApp na hora
-            </p>
+    <div className="flex h-[calc(100dvh_-_56px_-_env(safe-area-inset-bottom))] md:h-[calc(100dvh_-_var(--topbar-h,56px))]">
+      <aside
+        aria-label="Grupos"
+        className={cn(
+          "w-full shrink-0 flex-col overflow-y-auto border-r border-line bg-surface-raised md:flex md:w-[340px] lg:w-[380px]",
+          selecionado == null ? "flex" : "hidden",
+        )}
+      >
+        <div className="sticky top-0 z-10 flex flex-col gap-2 border-b border-line bg-surface-raised px-3 py-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-brand flex size-8 shrink-0 items-center justify-center rounded-control text-white">
+              <Users className="size-4" aria-hidden />
+            </span>
+            <h1 className="min-w-0 flex-1 truncate text-card text-ink">Grupos</h1>
+            {canManage ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => setEntrando(true)} title="Entrar por convite">
+                  <Link2 aria-hidden />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setCriando(true)} title="Criar grupo">
+                  <Plus aria-hidden />
+                </Button>
+              </>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Recarregar do WhatsApp"
+              loading={carregando}
+              onClick={() => carregar(filtro, busca, 0)}
+            >
+              <RefreshCw aria-hidden />
+            </Button>
+          </div>
+
+          {/* Classificação como filtro: com centenas de grupos, é o que separa
+              o que merece atenção do resto. */}
+          <div className="grid grid-cols-4 gap-1">
+            {[...CLASSIFICACOES, { id: "all" as const, label: "Todos", icon: Users, tone: "text-ink-secondary" }].map(
+              (opcao) => {
+                const ativo = filtro === opcao.id;
+                const Icone = opcao.icon;
+                const quantidade = counts[opcao.id as Filtro] ?? 0;
+                return (
+                  <button
+                    key={opcao.id}
+                    type="button"
+                    onClick={() => setFiltro(opcao.id as Filtro)}
+                    className={cn(
+                      "flex min-w-0 flex-col items-center gap-0.5 rounded-control border px-1 py-1.5 text-meta font-medium transition-colors",
+                      ativo
+                        ? "border-accent bg-accent-soft text-accent"
+                        : "border-line text-ink-secondary hover:bg-surface-sunken",
+                    )}
+                  >
+                    <Icone className={cn("size-4 shrink-0", ativo ? "text-accent" : opcao.tone)} aria-hidden />
+                    <span className="max-w-full truncate leading-tight">{opcao.label}</span>
+                    <span className="tabular">{quantidade}</span>
+                  </button>
+                );
+              },
+            )}
+          </div>
+
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-tertiary"
+              aria-hidden
+            />
+            <Input
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Buscar grupo"
+              className="pl-9"
+            />
           </div>
         </div>
-        {canManage ? (
-          <div className="flex gap-2">
-            <Button variant="secondary" size="md" onClick={() => setJoining(true)}>
-              <Link2 aria-hidden />
-              Entrar por convite
+
+        {carregando ? (
+          <ul className="flex flex-col gap-1 p-3">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <li key={i} className="h-[72px] animate-pulse rounded-card bg-surface-sunken" />
+            ))}
+          </ul>
+        ) : items.length === 0 ? (
+          <p className="px-4 py-8 text-center text-caption text-ink-secondary">
+            {busca ? "Nenhum grupo com esse nome." : "Nenhum grupo nesta gaveta."}
+          </p>
+        ) : (
+          <ul>
+            {items.map((grupo) => (
+              <li key={grupo.jid} className="border-b border-line">
+                <GroupRow
+                  group={grupo}
+                  active={grupo.jid === selecionado}
+                  onOpen={() => setSelecionado(grupo.jid)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {filtro === "all" && total > PAGE_SIZE ? (
+          <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={offset === 0 || carregando}
+              onClick={() => carregar(filtro, busca, Math.max(0, offset - PAGE_SIZE))}
+            >
+              Anterior
             </Button>
-            <Button size="md" onClick={() => setCreating(true)}>
-              <Plus aria-hidden />
-              Novo grupo
+            <span className="text-caption text-ink-secondary tabular">
+              {Math.floor(offset / PAGE_SIZE) + 1} de {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={offset + PAGE_SIZE >= total || carregando}
+              onClick={() => carregar(filtro, busca, offset + PAGE_SIZE)}
+            >
+              Próxima
             </Button>
           </div>
         ) : null}
-      </header>
+      </aside>
 
-      <div className="relative mb-4">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-tertiary" aria-hidden />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar grupo pelo nome"
-          className="pl-9"
-        />
-      </div>
-
-      {loading ? (
-        <ul className="flex flex-col gap-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <li key={i} className="h-[68px] animate-pulse rounded-card bg-surface-sunken" />
-          ))}
-        </ul>
-      ) : groups.length === 0 ? (
-        <p className="rounded-control bg-surface-sunken px-3 py-8 text-center text-caption text-ink-secondary">
-          {search ? `Nenhum grupo encontrado para ${search}.` : "Nenhum grupo neste aparelho."}
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {groups.map((group) => (
-            <li key={group.jid}>
-              <button
-                type="button"
-                onClick={() => abrir(group.jid)}
-                className="flex w-full items-center gap-3 rounded-card border border-line bg-surface-raised px-4 py-3 text-left transition-colors hover:bg-surface-sunken"
-              >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
-                  <Users className="size-5" aria-hidden />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-label text-ink">{group.name}</span>
-                  <span className="block truncate text-caption text-ink-secondary">
-                    {group.description || "Sem descrição"}
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  {group.participantCount > 0 ? (
-                    <Badge tone="neutral">
-                      <Users className="size-3" aria-hidden />
-                      {group.participantCount}
-                    </Badge>
-                  ) : null}
-                  {group.onlyAdminsSend ? <Badge tone="attention">Só admin</Badge> : null}
-                  {group.requiresApproval ? <Badge tone="info">Aprovação</Badge> : null}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {totalPaginas > 1 ? (
-        <div className="mt-4 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={offset === 0 || loading}
-            onClick={() => carregar(search, Math.max(0, offset - PAGE_SIZE))}
-          >
-            Anterior
-          </Button>
-          <span className="text-caption text-ink-secondary tabular">
-            {paginaAtual} de {totalPaginas}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={offset + PAGE_SIZE >= total || loading}
-            onClick={() => carregar(search, offset + PAGE_SIZE)}
-          >
-            Próxima
-          </Button>
-        </div>
-      ) : null}
-
-      <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent title={selected?.name ?? "Grupo"} className="w-full sm:max-w-[520px]">
-          {selected ? (
-            <GroupDetail
-              group={selected}
-              canManage={canManage}
-              onChange={(next) => {
-                setSelected(next);
-                setGroups((prev) => prev.map((g) => (g.jid === next.jid ? { ...g, ...next } : g)));
-              }}
-              onLeave={() => {
-                setGroups((prev) => prev.filter((g) => g.jid !== selected.jid));
-                setSelected(null);
-              }}
+      <section className={cn("min-w-0 flex-1 flex-col bg-surface md:flex", selecionado == null ? "hidden" : "flex")}>
+        {grupoSelecionado ? (
+          <GroupWorkspace
+            key={grupoSelecionado.jid}
+            group={grupoSelecionado}
+            canManage={canManage}
+            onBack={() => setSelecionado(null)}
+            onChanged={() => carregar(filtro, busca, offset)}
+            onLeft={() => {
+              setSelecionado(null);
+              carregar(filtro, busca, 0);
+            }}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center">
+            <EmptyState
+              icon={MessageSquare}
+              title="Escolha um grupo"
+              description="Veja o que foi dito, quem está dentro e o que precisa de resposta."
             />
-          ) : null}
-        </SheetContent>
-      </Sheet>
+          </div>
+        )}
+      </section>
 
-      <Sheet open={creating} onOpenChange={setCreating}>
+      <Sheet open={criando} onOpenChange={setCriando}>
         <SheetContent title="Novo grupo" className="w-full sm:max-w-[480px]">
           <CreateGroup
-            onCreated={(group) => {
-              setCreating(false);
-              setGroups((prev) => [group, ...prev]);
-              setSelected(group);
+            onCreated={() => {
+              setCriando(false);
+              carregar(filtro, busca, 0);
             }}
           />
         </SheetContent>
       </Sheet>
 
-      <Sheet open={joining} onOpenChange={setJoining}>
+      <Sheet open={entrando} onOpenChange={setEntrando}>
         <SheetContent title="Entrar por convite" className="w-full sm:max-w-[480px]">
           <JoinGroup
-            onJoined={(group) => {
-              setJoining(false);
-              setGroups((prev) => [group, ...prev]);
-              setSelected(group);
+            onJoined={() => {
+              setEntrando(false);
+              carregar(filtro, busca, 0);
             }}
           />
         </SheetContent>
@@ -285,311 +378,674 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
   );
 }
 
-function GroupDetail({
+/** Linha da lista: nome, tamanho, o que foi dito por último e o que pede ação. */
+function GroupRow({
+  group,
+  active,
+  onOpen,
+}: {
+  group: GroupItem;
+  active: boolean;
+  onOpen: () => void;
+}) {
+  const classe = CLASSIFICACOES.find((c) => c.id === group.classification);
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-current={active ? "true" : undefined}
+      className={cn(
+        "flex w-full items-start gap-3 border-l-[3px] px-3 py-3 text-left transition-colors",
+        "border-l-transparent hover:bg-surface-sunken",
+        active && "border-l-accent bg-accent-soft hover:bg-accent-soft",
+      )}
+    >
+      <span className="relative shrink-0">
+        <Avatar name={group.name} size="lg" />
+        <span className="absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full bg-[#25D366] ring-2 ring-surface-raised">
+          <Users className="size-2.5 text-white" aria-hidden />
+        </span>
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1">
+            {group.pinned ? <Pin className="size-3 shrink-0 -rotate-45 text-accent" aria-hidden /> : null}
+            <span className={cn("truncate text-label text-ink", group.unreadCount > 0 && "font-semibold")}>
+              {group.name}
+            </span>
+          </span>
+          {group.lastMessageAt ? (
+            <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
+              {tempoRelativo(group.lastMessageAt)}
+            </span>
+          ) : null}
+        </span>
+
+        <span className="mt-0.5 flex items-center gap-1.5">
+          {group.participantCount > 0 ? (
+            <span className="shrink-0 text-caption text-ink-tertiary tabular">{group.participantCount}</span>
+          ) : null}
+          <span className="min-w-0 flex-1 truncate text-caption text-ink-secondary">
+            {group.lastMessagePreview
+              ? `${group.lastMessageFromMe ? "Você: " : ""}${group.lastMessagePreview}`
+              : (group.description ?? "Sem mensagens por aqui")}
+          </span>
+          {group.unreadCount > 0 ? (
+            <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
+              {group.unreadCount > 99 ? "99+" : group.unreadCount}
+            </span>
+          ) : null}
+        </span>
+
+        <span className="mt-1 flex flex-wrap items-center gap-1">
+          {group.awaitingReply ? <Badge tone="attention">Sem resposta</Badge> : null}
+          {classe ? (
+            <Badge tone={group.classification === "opportunity" ? "positive" : "neutral"}>
+              <classe.icon className="size-3" aria-hidden />
+              {classe.label}
+            </Badge>
+          ) : null}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+type Aba = "conversa" | "membros" | "ajustes";
+
+/**
+ * O grupo aberto.
+ *
+ * O cabeçalho responde "o que é este grupo", a barra de classificação decide
+ * o quanto ele importa, e as abas separam três perguntas diferentes: o que foi
+ * dito, quem está dentro, e como o grupo está configurado.
+ */
+function GroupWorkspace({
   group,
   canManage,
-  onChange,
-  onLeave,
+  onBack,
+  onChanged,
+  onLeft,
 }: {
-  group: Group;
+  group: GroupItem;
   canManage: boolean;
-  onChange: (next: Group) => void;
-  onLeave: () => void;
+  onBack: () => void;
+  onChanged: () => void;
+  onLeft: () => void;
 }) {
-  const [aba, setAba] = useState<"participantes" | "ajustes">("participantes");
-  const [novoParticipante, setNovoParticipante] = useState("");
-  const [busy, startBusy] = useTransition();
-  const [copiado, setCopiado] = useState(false);
+  const [aba, setAba] = useState<Aba>("conversa");
+  const [detalhe, setDetalhe] = useState<GroupDetail | null>(null);
+  const [thread, setThread] = useState<ThreadMessage[]>([]);
+  const [resumo, setResumo] = useState<string | null>(null);
+  const [carregandoDetalhe, setCarregandoDetalhe] = useState(true);
+  const [resumindo, startResumindo] = useTransition();
+  const [classificando, startClassificando] = useTransition();
 
-  function agir(promessa: Promise<{ ok: true; data: Group } | { ok: false; error: string }>, sucesso: string) {
-    startBusy(async () => {
-      const result = await promessa;
-      if (!result.ok) {
-        toast.error(result.error);
+  // O componente é remontado a cada grupo (key={jid}), então o estado já nasce
+  // carregando: mudar isso dentro do efeito seria render em cascata à toa.
+  useEffect(() => {
+    let ativo = true;
+    void Promise.all([getGroupAction(group.jid), groupThreadAction(group.jid)]).then(([info, conversa]) => {
+      if (!ativo) return;
+      setCarregandoDetalhe(false);
+      if (info.ok) setDetalhe(info.data as GroupDetail);
+      else toast.error(info.error);
+      if (conversa.ok) setThread(conversa.data.messages as ThreadMessage[]);
+    });
+    return () => {
+      ativo = false;
+    };
+  }, [group.jid]);
+
+  function classificar(classification: Classification) {
+    startClassificando(async () => {
+      const resultado = await classifyGroupAction({
+        jid: group.jid,
+        // Tocar de novo na mesma gaveta tira o grupo dela.
+        classification: group.classification === classification ? "none" : classification,
+      });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
         return;
       }
-      onChange(result.data);
-      toast.success(sucesso);
+      onChanged();
     });
   }
 
-  const admins = group.participants.filter((p) => p.isAdmin || p.isSuperAdmin);
+  function resumir() {
+    startResumindo(async () => {
+      const resultado = await summarizeGroupAction({ jid: group.jid, hours: 48 });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      setResumo(resultado.data.summary);
+      toast.success(`Resumo de ${resultado.data.messageCount} mensagens`);
+    });
+  }
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b border-line pb-3">
-        <p className="text-caption text-ink-secondary">
-          {group.participantCount} {group.participantCount === 1 ? "participante" : "participantes"} ·{" "}
-          {admins.length} {admins.length === 1 ? "administrador" : "administradores"}
-        </p>
-        <div className="mt-3 flex gap-1">
-          {(["participantes", "ajustes"] as const).map((id) => (
+    <>
+      <header className="shrink-0 border-b border-line bg-surface-raised">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 md:px-5">
+          <Button variant="ghost" size="sm" className="md:hidden" onClick={onBack}>
+            Voltar
+          </Button>
+          <Avatar name={group.name} size="md" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-card text-ink">{group.name}</h2>
+            <p className="flex items-center gap-1.5 text-caption text-ink-secondary">
+              <Users className="size-3 shrink-0" aria-hidden />
+              <span className="tabular">{detalhe?.participantCount ?? group.participantCount}</span>
+              {group.awaitingReply ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="text-attention">esperando resposta</span>
+                </>
+              ) : null}
+            </p>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            title={group.pinned ? "Desafixar" : "Fixar no topo"}
+            onClick={async () => {
+              const resultado = await pinGroupAction({ jid: group.jid, pinned: !group.pinned });
+              if (!resultado.ok) toast.error(resultado.error);
+              else onChanged();
+            }}
+          >
+            <Pin className={cn("size-4", group.pinned && "-rotate-45 text-accent")} aria-hidden />
+          </Button>
+          <Button variant="secondary" size="sm" loading={resumindo} onClick={resumir}>
+            <Sparkles aria-hidden />
+            <span className="hidden sm:inline">Resumir 48h</span>
+          </Button>
+        </div>
+
+        {/* Classificação: a decisão que faz uma lista de centenas virar trabalho */}
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-line px-3 py-2 md:px-5">
+          <span className="mr-1 text-meta tracking-wide text-ink-secondary uppercase">Classificação</span>
+          {CLASSIFICACOES.map((opcao) => {
+            const ativo = group.classification === opcao.id;
+            const Icone = opcao.icon;
+            return (
+              <button
+                key={opcao.id}
+                type="button"
+                disabled={classificando}
+                onClick={() => classificar(opcao.id)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-pill border px-3 py-1.5 text-caption font-medium transition-colors",
+                  ativo
+                    ? "border-accent bg-accent-soft text-accent"
+                    : "border-line text-ink-secondary hover:bg-surface-sunken hover:text-ink",
+                )}
+              >
+                {ativo ? <Check className="size-3" aria-hidden /> : <Icone className="size-3" aria-hidden />}
+                {opcao.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex gap-1 border-t border-line px-3 md:px-5" role="tablist">
+          {(
+            [
+              ["conversa", "Conversa"],
+              ["membros", `Membros (${detalhe?.participantCount ?? group.participantCount})`],
+              ["ajustes", "Ajustes"],
+            ] as Array<[Aba, string]>
+          ).map(([id, rotulo]) => (
             <button
               key={id}
               type="button"
+              role="tab"
+              aria-selected={aba === id}
               onClick={() => setAba(id)}
               className={cn(
-                "rounded-control px-3 py-1.5 text-label font-medium transition-colors",
-                aba === id ? "bg-accent-soft text-accent" : "text-ink-secondary hover:bg-surface-sunken",
+                "border-b-2 px-3 py-2 text-label font-medium transition-colors",
+                aba === id
+                  ? "border-accent text-accent"
+                  : "border-transparent text-ink-secondary hover:text-ink",
               )}
             >
-              {id === "participantes" ? "Participantes" : "Ajustes"}
+              {rotulo}
             </button>
           ))}
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto pt-4">
-        {aba === "participantes" ? (
-          <div className="flex flex-col gap-3">
-            {canManage ? (
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <Field label="Adicionar pelo telefone" hint="Com país e DDD, por exemplo 5511999998888.">
-                    <Input
-                      value={novoParticipante}
-                      onChange={(e) => setNovoParticipante(e.target.value)}
-                      placeholder="5511999998888"
-                      inputMode="numeric"
-                    />
-                  </Field>
-                </div>
-                <Button
-                  size="md"
-                  loading={busy}
-                  disabled={novoParticipante.replace(/\D/g, "").length < 12}
-                  onClick={() => {
-                    agir(
-                      updateParticipantsAction({
-                        groupJid: group.jid,
-                        action: "add",
-                        participants: [novoParticipante.replace(/\D/g, "")],
-                      }) as never,
-                      "Convite enviado",
-                    );
-                    setNovoParticipante("");
-                  }}
-                >
-                  <UserPlus aria-hidden />
-                </Button>
-              </div>
-            ) : null}
+      {resumo ? (
+        <div className="shrink-0 border-b border-line bg-accent-soft px-3 py-2.5 md:px-5">
+          <p className="flex items-center gap-1.5 text-caption font-medium text-accent">
+            <Sparkles className="size-3.5" aria-hidden />
+            Resumo das últimas 48 horas
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-body text-ink">{resumo}</p>
+          <button type="button" onClick={() => setResumo(null)} className="mt-1 text-caption text-ink-secondary">
+            Fechar
+          </button>
+        </div>
+      ) : null}
 
-            <ul className="flex flex-col divide-y divide-line">
-              {group.participants.length === 0 ? (
-                <li className="py-6 text-center text-caption text-ink-secondary">
-                  A lista de participantes não veio nesta consulta.
-                </li>
-              ) : null}
-              {group.participants.map((p) => (
-                <li key={p.jid} className="flex items-center gap-2 py-2.5">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-label text-ink">
-                      {p.displayName || (p.phone ? formatPhone(p.phone) : "Participante")}
-                    </span>
-                    {p.displayName && p.phone ? (
-                      <span className="block truncate text-caption text-ink-secondary tabular">
-                        {formatPhone(p.phone)}
-                      </span>
-                    ) : null}
-                  </span>
-                  {p.isSuperAdmin ? (
-                    <Badge tone="accent">
-                      <Crown className="size-3" aria-hidden />
-                      Dono
-                    </Badge>
-                  ) : p.isAdmin ? (
-                    <Badge tone="info">
-                      <ShieldCheck className="size-3" aria-hidden />
-                      Admin
-                    </Badge>
-                  ) : null}
-                  {canManage && !p.isSuperAdmin ? (
-                    <div className="flex shrink-0 gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title={p.isAdmin ? "Rebaixar" : "Tornar administrador"}
-                        loading={busy}
-                        onClick={() =>
-                          agir(
-                            updateParticipantsAction({
-                              groupJid: group.jid,
-                              action: p.isAdmin ? "demote" : "promote",
-                              participants: [p.jid],
-                            }) as never,
-                            p.isAdmin ? "Não é mais administrador" : "Agora é administrador",
-                          )
-                        }
-                      >
-                        <ShieldCheck aria-hidden />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Remover do grupo"
-                        loading={busy}
-                        onClick={() => {
-                          if (!confirm(`Remover ${p.displayName || p.phone} do grupo?`)) return;
-                          agir(
-                            updateParticipantsAction({
-                              groupJid: group.jid,
-                              action: "remove",
-                              participants: [p.jid],
-                            }) as never,
-                            "Participante removido",
-                          );
-                        }}
-                      >
-                        <UserMinus aria-hidden />
-                      </Button>
-                    </div>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {aba === "conversa" ? (
+          <GroupThread jid={group.jid} messages={thread} onSent={() => void groupThreadAction(group.jid).then((r) => {
+            if (r.ok) setThread(r.data.messages as ThreadMessage[]);
+          })} />
+        ) : null}
+
+        {aba === "membros" ? (
+          <GroupMembers
+            group={group}
+            detail={detalhe}
+            loading={carregandoDetalhe}
+            canManage={canManage}
+            onUpdated={setDetalhe}
+          />
+        ) : null}
+
+        {aba === "ajustes" && detalhe ? (
+          <GroupSettings group={detalhe} canManage={canManage} onUpdated={setDetalhe} onLeft={onLeft} />
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** Conversa do grupo: quem falou aparece porque em grupo isso é metade da mensagem. */
+function GroupThread({
+  jid,
+  messages,
+  onSent,
+}: {
+  jid: string;
+  messages: ThreadMessage[];
+  onSent: () => void;
+}) {
+  const [texto, setTexto] = useState("");
+  const [enviando, startEnviando] = useTransition();
+  const fim = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fim.current?.scrollIntoView({ block: "end" });
+  }, [messages.length]);
+
+  function enviar() {
+    const corpo = texto.trim();
+    if (!corpo) return;
+    setTexto("");
+    startEnviando(async () => {
+      const resultado = await sendToGroupAction({ jid, body: corpo });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        setTexto(corpo);
+        return;
+      }
+      onSent();
+    });
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6">
+        {messages.length === 0 ? (
+          <p className="mx-auto max-w-[560px] rounded-card bg-surface-sunken px-4 py-6 text-center text-caption text-ink-secondary">
+            Nenhuma mensagem deste grupo chegou por aqui ainda. Elas aparecem conforme o grupo se movimenta.
+          </p>
         ) : (
-          <div className="flex flex-col gap-4">
-            <Field label="Nome do grupo">
-              <Input
-                defaultValue={group.name}
-                disabled={!canManage}
-                onBlur={(e) => {
-                  const valor = e.target.value.trim();
-                  if (!valor || valor === group.name) return;
-                  agir(updateGroupAction({ groupJid: group.jid, name: valor }) as never, "Nome atualizado");
-                }}
-              />
-            </Field>
-
-            <Field label="Descrição">
-              <Textarea
-                defaultValue={group.description ?? ""}
-                rows={4}
-                disabled={!canManage}
-                onBlur={(e) => {
-                  const valor = e.target.value.trim();
-                  if (valor === (group.description ?? "")) return;
-                  agir(updateGroupAction({ groupJid: group.jid, description: valor }) as never, "Descrição atualizada");
-                }}
-              />
-            </Field>
-
-            <div className="flex flex-col gap-1 border-t border-line pt-3">
-              <GroupToggle
-                label="Só administradores enviam mensagem"
-                hint="Use para avisos, quando o grupo não é para conversa."
-                checked={group.onlyAdminsSend}
-                disabled={!canManage || busy}
-                onChange={(v) =>
-                  agir(updateGroupAction({ groupJid: group.jid, onlyAdminsSend: v }) as never, "Permissão atualizada")
-                }
-              />
-              <GroupToggle
-                label="Só administradores editam o grupo"
-                hint="Nome, foto e descrição ficam travados para os demais."
-                checked={group.onlyAdminsEdit}
-                disabled={!canManage || busy}
-                onChange={(v) =>
-                  agir(updateGroupAction({ groupJid: group.jid, onlyAdminsEdit: v }) as never, "Permissão atualizada")
-                }
-              />
-              <GroupToggle
-                label="Aprovar quem entra pelo link"
-                hint="Cada pedido precisa de aprovação de um administrador."
-                checked={group.requiresApproval}
-                disabled={!canManage || busy}
-                onChange={(v) =>
-                  agir(updateGroupAction({ groupJid: group.jid, requiresApproval: v }) as never, "Permissão atualizada")
-                }
-              />
-            </div>
-
-            <div className="border-t border-line pt-3">
-              <p className="text-label text-ink">Link de convite</p>
-              {group.inviteLink ? (
-                <div className="mt-1.5 flex items-center gap-2 rounded-control bg-surface-sunken px-3 py-2">
-                  <input
-                    readOnly
-                    value={group.inviteLink}
-                    aria-label="Link de convite do grupo"
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="min-w-0 flex-1 truncate bg-transparent text-caption text-ink outline-none"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={async () => {
-                      const ok = await copyToClipboard(group.inviteLink ?? "");
-                      if (ok) {
-                        setCopiado(true);
-                        setTimeout(() => setCopiado(false), 1600);
-                        toast.success("Link copiado");
-                      } else {
-                        toast.error("Não consegui copiar. Selecione o link e copie manualmente.");
-                      }
-                    }}
+          <div className="mx-auto flex max-w-[680px] flex-col gap-2">
+            {messages.map((mensagem) => {
+              const nossa = mensagem.direction === "outbound";
+              return (
+                <div key={mensagem.id} className={cn("flex flex-col", nossa ? "items-end" : "items-start")}>
+                  <div
+                    className={cn(
+                      "max-w-[85%] rounded-card border px-3 py-2 text-body text-ink [overflow-wrap:anywhere]",
+                      nossa ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
+                    )}
                   >
-                    {copiado ? <Check aria-hidden /> : <Copy aria-hidden />}
-                  </Button>
+                    {!nossa && mensagem.senderName ? (
+                      <span className="mb-0.5 block text-caption font-medium text-accent">{mensagem.senderName}</span>
+                    ) : null}
+                    <span className="block whitespace-pre-wrap">
+                      {mensagem.audioTranscription || mensagem.body || `[${mensagem.messageType}]`}
+                    </span>
+                  </div>
+                  <span suppressHydrationWarning className="mt-0.5 px-1 text-meta text-ink-secondary">
+                    {format(new Date(mensagem.createdAt), "dd/MM HH:mm", { locale: ptBR })}
+                  </span>
                 </div>
-              ) : (
-                <p className="mt-1 text-caption text-ink-secondary">
-                  Este grupo não expôs link de convite. Normalmente é falta de permissão de administrador.
-                </p>
-              )}
-              {canManage ? (
-                <button
-                  type="button"
-                  className="mt-2 flex items-center gap-1.5 text-caption text-ink-secondary hover:text-ink"
-                  onClick={() => {
-                    if (!confirm("Gerar um link novo? Quem tiver o link antigo perde o acesso.")) return;
-                    startBusy(async () => {
-                      const result = await resetInviteAction(group.jid);
-                      if (!result.ok) {
-                        toast.error(result.error);
-                        return;
-                      }
-                      onChange({ ...group, inviteLink: result.data });
-                      toast.success("Link renovado");
-                    });
-                  }}
-                >
-                  <RotateCcw className="size-3.5" aria-hidden />
-                  Gerar link novo
-                </button>
-              ) : null}
-            </div>
-
-            {canManage ? (
-              <div className="border-t border-line pt-3">
-                <Button
-                  variant="ghost"
-                  size="md"
-                  className="text-danger"
-                  loading={busy}
-                  onClick={() => {
-                    if (!confirm(`Sair de "${group.name}"? Para voltar será preciso um novo convite.`)) return;
-                    startBusy(async () => {
-                      const result = await leaveGroupAction(group.jid);
-                      if (!result.ok) {
-                        toast.error(result.error);
-                        return;
-                      }
-                      toast.success("Você saiu do grupo");
-                      onLeave();
-                    });
-                  }}
-                >
-                  <LogOut aria-hidden />
-                  Sair do grupo
-                </Button>
-              </div>
-            ) : null}
+              );
+            })}
+            <div ref={fim} />
           </div>
         )}
       </div>
+
+      <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-2.5 md:px-6">
+        <div className="mx-auto flex max-w-[680px] items-end gap-2">
+          <Textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                enviar();
+              }
+            }}
+            rows={1}
+            placeholder="Mensagem para o grupo"
+            className="max-h-32 min-h-11 flex-1 resize-none"
+          />
+          <Button size="md" className="h-11 shrink-0" loading={enviando} disabled={!texto.trim()} onClick={enviar}>
+            <Send aria-hidden />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GroupMembers({
+  group,
+  detail,
+  loading,
+  canManage,
+  onUpdated,
+}: {
+  group: GroupItem;
+  detail: GroupDetail | null;
+  loading: boolean;
+  canManage: boolean;
+  onUpdated: (next: GroupDetail) => void;
+}) {
+  const [novo, setNovo] = useState("");
+  const [busy, startBusy] = useTransition();
+
+  function agir(acao: "add" | "remove" | "promote" | "demote", participants: string[], sucesso: string) {
+    startBusy(async () => {
+      const resultado = await updateParticipantsAction({ groupJid: group.jid, action: acao, participants });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      onUpdated(resultado.data as GroupDetail);
+      toast.success(sucesso);
+    });
+  }
+
+  if (loading) {
+    return (
+      <ul className="flex flex-col gap-1.5 p-4">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <li key={i} className="h-12 animate-pulse rounded-control bg-surface-sunken" />
+        ))}
+      </ul>
+    );
+  }
+
+  const participantes = detail?.participants ?? [];
+
+  return (
+    <div className="mx-auto w-full max-w-[720px] px-4 py-4">
+      {canManage ? (
+        <div className="mb-3 flex items-end gap-2">
+          <div className="flex-1">
+            <Field label="Adicionar pelo telefone" hint="Com país e DDD, por exemplo 5511999998888.">
+              <Input
+                value={novo}
+                onChange={(e) => setNovo(e.target.value)}
+                placeholder="5511999998888"
+                inputMode="numeric"
+              />
+            </Field>
+          </div>
+          <Button
+            size="md"
+            loading={busy}
+            disabled={novo.replace(/\D/g, "").length < 12}
+            onClick={() => {
+              agir("add", [novo.replace(/\D/g, "")], "Convite enviado");
+              setNovo("");
+            }}
+          >
+            <UserPlus aria-hidden />
+          </Button>
+        </div>
+      ) : null}
+
+      {participantes.length === 0 ? (
+        <p className="rounded-control bg-surface-sunken px-3 py-6 text-center text-caption text-ink-secondary">
+          A lista de participantes não veio nesta consulta.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {participantes.map((pessoa) => (
+            <li key={pessoa.jid} className="flex items-center gap-2 py-2.5">
+              <Avatar name={pessoa.displayName || pessoa.phone || "?"} size="md" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-label text-ink">
+                  {pessoa.displayName || (pessoa.phone ? formatPhone(pessoa.phone) : "Participante")}
+                </span>
+                {pessoa.displayName && pessoa.phone ? (
+                  <span className="block truncate text-caption text-ink-secondary tabular">
+                    {formatPhone(pessoa.phone)}
+                  </span>
+                ) : null}
+              </span>
+              {pessoa.isSuperAdmin ? (
+                <Badge tone="accent">
+                  <Crown className="size-3" aria-hidden />
+                  Dono
+                </Badge>
+              ) : pessoa.isAdmin ? (
+                <Badge tone="info">
+                  <ShieldCheck className="size-3" aria-hidden />
+                  Admin
+                </Badge>
+              ) : null}
+              {canManage && !pessoa.isSuperAdmin ? (
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={busy}
+                    title={pessoa.isAdmin ? "Rebaixar" : "Tornar administrador"}
+                    onClick={() =>
+                      agir(
+                        pessoa.isAdmin ? "demote" : "promote",
+                        [pessoa.jid],
+                        pessoa.isAdmin ? "Não é mais administrador" : "Agora é administrador",
+                      )
+                    }
+                  >
+                    <ShieldCheck aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={busy}
+                    title="Remover do grupo"
+                    onClick={() => {
+                      if (!confirm(`Remover ${pessoa.displayName || pessoa.phone} do grupo?`)) return;
+                      agir("remove", [pessoa.jid], "Participante removido");
+                    }}
+                  >
+                    <UserMinus aria-hidden />
+                  </Button>
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function GroupSettings({
+  group,
+  canManage,
+  onUpdated,
+  onLeft,
+}: {
+  group: GroupDetail;
+  canManage: boolean;
+  onUpdated: (next: GroupDetail) => void;
+  onLeft: () => void;
+}) {
+  const [busy, startBusy] = useTransition();
+  const [copiado, setCopiado] = useState(false);
+
+  function salvar(patch: Record<string, unknown>, sucesso: string) {
+    startBusy(async () => {
+      const resultado = await updateGroupAction({ groupJid: group.jid, ...patch });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      onUpdated(resultado.data as GroupDetail);
+      toast.success(sucesso);
+    });
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 px-4 py-4">
+      <Field label="Nome do grupo">
+        <Input
+          defaultValue={group.name}
+          disabled={!canManage}
+          onBlur={(e) => {
+            const valor = e.target.value.trim();
+            if (!valor || valor === group.name) return;
+            salvar({ name: valor }, "Nome atualizado");
+          }}
+        />
+      </Field>
+
+      <Field label="Descrição">
+        <Textarea
+          defaultValue={group.description ?? ""}
+          rows={4}
+          disabled={!canManage}
+          onBlur={(e) => {
+            const valor = e.target.value.trim();
+            if (valor === (group.description ?? "")) return;
+            salvar({ description: valor }, "Descrição atualizada");
+          }}
+        />
+      </Field>
+
+      <div className="flex flex-col gap-1 border-t border-line pt-3">
+        <GroupToggle
+          label="Só administradores enviam mensagem"
+          hint="Use para avisos, quando o grupo não é para conversa."
+          checked={group.onlyAdminsSend}
+          disabled={!canManage || busy}
+          onChange={(v) => salvar({ onlyAdminsSend: v }, "Permissão atualizada")}
+        />
+        <GroupToggle
+          label="Só administradores editam o grupo"
+          hint="Nome, foto e descrição ficam travados para os demais."
+          checked={group.onlyAdminsEdit}
+          disabled={!canManage || busy}
+          onChange={(v) => salvar({ onlyAdminsEdit: v }, "Permissão atualizada")}
+        />
+        <GroupToggle
+          label="Aprovar quem entra pelo link"
+          hint="Cada pedido precisa de aprovação de um administrador."
+          checked={group.requiresApproval}
+          disabled={!canManage || busy}
+          onChange={(v) => salvar({ requiresApproval: v }, "Permissão atualizada")}
+        />
+      </div>
+
+      <div className="border-t border-line pt-3">
+        <p className="text-label text-ink">Link de convite</p>
+        {group.inviteLink ? (
+          <div className="mt-1.5 flex items-center gap-2 rounded-control bg-surface-sunken px-3 py-2">
+            <input
+              readOnly
+              value={group.inviteLink}
+              aria-label="Link de convite do grupo"
+              onFocus={(e) => e.currentTarget.select()}
+              className="min-w-0 flex-1 truncate bg-transparent text-caption text-ink outline-none"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                const ok = await copyToClipboard(group.inviteLink ?? "");
+                if (!ok) {
+                  toast.error("Não consegui copiar. Selecione o link e copie manualmente.");
+                  return;
+                }
+                setCopiado(true);
+                setTimeout(() => setCopiado(false), 1600);
+                toast.success("Link copiado");
+              }}
+            >
+              {copiado ? <Check aria-hidden /> : <Copy aria-hidden />}
+            </Button>
+          </div>
+        ) : (
+          <p className="mt-1 text-caption text-ink-secondary">
+            Este grupo não expôs link de convite. Normalmente é falta de permissão de administrador.
+          </p>
+        )}
+        {canManage ? (
+          <button
+            type="button"
+            className="mt-2 flex items-center gap-1.5 text-caption text-ink-secondary hover:text-ink"
+            onClick={() => {
+              if (!confirm("Gerar um link novo? Quem tiver o link antigo perde o acesso.")) return;
+              startBusy(async () => {
+                const resultado = await resetInviteAction(group.jid);
+                if (!resultado.ok) {
+                  toast.error(resultado.error);
+                  return;
+                }
+                onUpdated({ ...group, inviteLink: resultado.data });
+                toast.success("Link renovado");
+              });
+            }}
+          >
+            <RotateCcw className="size-3.5" aria-hidden />
+            Gerar link novo
+          </button>
+        ) : null}
+      </div>
+
+      {canManage ? (
+        <div className="border-t border-line pt-3">
+          <Button
+            variant="ghost"
+            size="md"
+            className="text-danger"
+            loading={busy}
+            onClick={() => {
+              if (!confirm(`Sair de "${group.name}"? Para voltar será preciso um novo convite.`)) return;
+              startBusy(async () => {
+                const resultado = await leaveGroupAction(group.jid);
+                if (!resultado.ok) {
+                  toast.error(resultado.error);
+                  return;
+                }
+                toast.success("Você saiu do grupo");
+                onLeft();
+              });
+            }}
+          >
+            <LogOut aria-hidden />
+            Sair do grupo
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -624,8 +1080,8 @@ function GroupToggle({
   );
 }
 
-function CreateGroup({ onCreated }: { onCreated: (group: Group) => void }) {
-  const [name, setName] = useState("");
+function CreateGroup({ onCreated }: { onCreated: () => void }) {
+  const [nome, setNome] = useState("");
   const [numeros, setNumeros] = useState("");
   const [busy, startBusy] = useTransition();
 
@@ -641,12 +1097,9 @@ function CreateGroup({ onCreated }: { onCreated: (group: Group) => void }) {
       </p>
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto">
         <Field label="Nome do grupo">
-          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Clientes VIP" />
+          <Input value={nome} onChange={(e) => setNome(e.target.value)} maxLength={100} placeholder="Clientes VIP" />
         </Field>
-        <Field
-          label="Participantes"
-          hint="Um número por linha, com país e DDD. O WhatsApp exige pelo menos um para criar."
-        >
+        <Field label="Participantes" hint="Um número por linha, com país e DDD.">
           <Textarea
             value={numeros}
             onChange={(e) => setNumeros(e.target.value)}
@@ -660,16 +1113,16 @@ function CreateGroup({ onCreated }: { onCreated: (group: Group) => void }) {
         <Button
           size="md"
           loading={busy}
-          disabled={!name.trim() || lista.length === 0}
+          disabled={!nome.trim() || lista.length === 0}
           onClick={() =>
             startBusy(async () => {
-              const result = await createGroupAction({ name: name.trim(), participants: lista });
-              if (!result.ok) {
-                toast.error(result.error);
+              const resultado = await createGroupAction({ name: nome.trim(), participants: lista });
+              if (!resultado.ok) {
+                toast.error(resultado.error);
                 return;
               }
               toast.success("Grupo criado");
-              onCreated(result.data);
+              onCreated();
             })
           }
         >
@@ -684,7 +1137,7 @@ function CreateGroup({ onCreated }: { onCreated: (group: Group) => void }) {
   );
 }
 
-function JoinGroup({ onJoined }: { onJoined: (group: Group) => void }) {
+function JoinGroup({ onJoined }: { onJoined: () => void }) {
   const [codigo, setCodigo] = useState("");
   const [busy, startBusy] = useTransition();
 
@@ -693,11 +1146,7 @@ function JoinGroup({ onJoined }: { onJoined: (group: Group) => void }) {
       <p className="pb-3 text-caption text-ink-secondary">Cole o link ou o código do convite.</p>
       <div className="flex flex-1 flex-col gap-3">
         <Field label="Link ou código">
-          <Input
-            value={codigo}
-            onChange={(e) => setCodigo(e.target.value)}
-            placeholder="https://chat.whatsapp.com/…"
-          />
+          <Input value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="https://chat.whatsapp.com/…" />
         </Field>
         <Button
           size="md"
@@ -705,13 +1154,13 @@ function JoinGroup({ onJoined }: { onJoined: (group: Group) => void }) {
           disabled={codigo.trim().length < 4}
           onClick={() =>
             startBusy(async () => {
-              const result = await joinGroupAction(codigo.trim());
-              if (!result.ok) {
-                toast.error(result.error);
+              const resultado = await joinGroupAction(codigo.trim());
+              if (!resultado.ok) {
+                toast.error(resultado.error);
                 return;
               }
               toast.success("Você entrou no grupo");
-              onJoined(result.data);
+              onJoined();
             })
           }
         >

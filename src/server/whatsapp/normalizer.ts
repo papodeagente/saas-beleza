@@ -33,6 +33,8 @@ export type NormalizedMessage = {
   isGroup: boolean;
   phone: string | null;
   senderName: string | null;
+  /** Telefone de quem falou dentro do grupo; nulo em conversa de duas pessoas. */
+  senderPhone: string | null;
   kind: WaMessageKind;
   body: string;
   mediaUrl: string | null;
@@ -343,6 +345,11 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       fromMe,
       isGroup,
       phone: phoneFromJid(remoteJid),
+      senderPhone: isGroup
+        ? phoneFromJid(
+            firstString(get(msg, "sender_pn"), get(msg, "participant"), get(msg, "sender"), get(msg, "Sender")),
+          )
+        : null,
       senderName:
         firstString(
           get(msg, "senderName"),
