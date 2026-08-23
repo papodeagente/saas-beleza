@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Playfair_Display, Plus_Jakarta_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
@@ -16,11 +16,30 @@ const brand = Playfair_Display({
 });
 
 export const metadata: Metadata = {
+  applicationName: "Agenda de Unha",
   title: {
     default: "Agenda de Unha",
     template: "%s · Agenda de Unha",
   },
   description: "Gestão inteligente para manicures.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Agenda de Unha",
+  },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32", type: "image/x-icon" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#8744CD",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
