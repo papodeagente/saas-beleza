@@ -43,6 +43,11 @@ export type ConversationListItem = {
   lastMessageAt: Date | null;
   lastMessagePreview: string | null;
   lastMessageInbound: boolean;
+  /** Tipo da última mensagem, para a lista mostrar "Foto" no lugar de vazio. */
+  lastMessageType: string | null;
+  /** Situação de entrega da última mensagem de saída. */
+  lastMessageStatus: string | null;
+  lastMessageTranscription: string | null;
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
@@ -74,18 +79,35 @@ export async function listConversations(
   const tab = options.tab ?? "meus";
   const search = options.search?.trim();
 
+  /**
+   * A última mensagem de CADA conversa, uma consulta por linha exibida.
+   *
+   * A versão anterior usava `row_number() over (partition by ...)` sobre TODAS
+   * as mensagens da organização e descartava tudo menos a primeira de cada
+   * partição. Medido numa base de 230 mil mensagens: 1.425 ms na aba padrão,
+   * porque o Postgres re-executava a ordenação inteira uma vez por conversa
+   * atribuída (7,8 milhões de linhas ordenadas, 430 MB de arquivo temporário).
+   * Havia ainda a inversão perversa de que quanto MENOS conversas o atendente
+   * tinha, mais vezes a subconsulta rodava.
+   *
+   * O LATERAL lê só a ponta de cada conversa, pelo índice
+   * `messages_conversation_idx` que já existia. Mesma base: 1,4 ms.
+   *
+   * Traz também tipo, direção e status — é o que a lista precisa para mostrar
+   * "📷 Foto", "Você: …" e o tique de entrega de verdade, sem denormalizar nada.
+   */
   const lastMessage = db
     .select({
-      conversationId: messages.conversationId,
       body: messages.body,
       direction: messages.direction,
-      createdAt: messages.createdAt,
-      rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${messages.createdAt} desc)`.as(
-        "rank",
-      ),
+      messageType: messages.messageType,
+      status: messages.status,
+      audioTranscription: messages.audioTranscription,
     })
     .from(messages)
-    .where(eq(messages.organizationId, ctx.organizationId))
+    .where(eq(messages.conversationId, conversations.id))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(1)
     .as("last_message");
 
   // Alias porque a junção é por (organização, jid) e a mesma tabela pode voltar
@@ -115,6 +137,9 @@ export async function listConversations(
       lastMessageAt: conversations.lastMessageAt,
       lastMessagePreview: lastMessage.body,
       lastMessageInbound: sql<boolean>`${lastMessage.direction} = 'inbound'`,
+      lastMessageType: lastMessage.messageType,
+      lastMessageStatus: lastMessage.status,
+      lastMessageTranscription: lastMessage.audioTranscription,
       assignedUserId: conversations.assignedUserId,
       assignedUserName: assignee.name,
       lastAssignedUserName: previous.name,
@@ -136,7 +161,7 @@ export async function listConversations(
     .leftJoin(customers, eq(customers.id, conversations.customerId))
     .leftJoin(assignee, eq(assignee.id, conversations.assignedUserId))
     .leftJoin(previous, eq(previous.id, conversations.lastAssignedUserId))
-    .leftJoin(lastMessage, and(eq(lastMessage.conversationId, conversations.id), eq(lastMessage.rank, 1)))
+    .leftJoinLateral(lastMessage, sql`true`)
     .where(
       and(
         eq(conversations.organizationId, ctx.organizationId),
@@ -312,7 +337,13 @@ export async function getConversation(
     .from(messages)
     .leftJoin(sender, eq(sender.id, messages.senderUserId))
     .where(and(eq(messages.organizationId, ctx.organizationId), eq(messages.conversationId, conversationId)))
-    .orderBy(asc(messages.createdAt))
+    // `desc` e não `asc`: com `asc` o limite trazia as 200 mensagens MAIS
+    // ANTIGAS, então toda conversa acima disso congelava no histórico velho e a
+    // mensagem que a atendente acabava de enviar nunca aparecia — nem no
+    // recarregamento. O desempate por id importa porque dois inbounds podem
+    // cair no mesmo milissegundo, e sem ele o corte escolhe arbitrariamente
+    // qual sobrevive.
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(200);
 
   let context: ConversationContext | null = null;
@@ -388,7 +419,9 @@ export async function getConversation(
           ? `/api/foto-perfil?jid=${encodeURIComponent(conversation.remoteJid)}`
           : null,
     },
-    messages: rows,
+    // A consulta vem do mais novo para o mais velho (para o limite pegar a
+    // ponta certa da conversa); a tela lê de cima para baixo.
+    messages: rows.reverse(),
     context,
   };
 }

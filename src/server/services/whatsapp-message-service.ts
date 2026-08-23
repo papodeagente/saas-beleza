@@ -386,7 +386,18 @@ async function loadForAction(organizationId: number, conversationId: number, mes
       audioTranscription: messages.audioTranscription,
     })
     .from(messages)
-    .where(and(eq(messages.id, messageId), eq(messages.organizationId, organizationId)))
+    // `conversationId` no filtro não é redundante: sem ele, um par (conversa,
+    // mensagem) forjado deixa reagir, apagar ou transcrever mensagem de OUTRA
+    // conversa da mesma clínica — e a reação sai no chat errado, porque ela é
+    // enviada para o remoteJid da conversa passada usando o id da mensagem
+    // alheia. A checagem por organização sozinha não pega isso.
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.organizationId, organizationId),
+      ),
+    )
     .limit(1);
   if (!message) throw new Error("Mensagem não encontrada.");
 

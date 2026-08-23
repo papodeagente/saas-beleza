@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, customers } from "@/db/schema";
 import { canonicalBrPhone, formatBrPhone } from "@/server/whatsapp/phone";
@@ -193,7 +193,16 @@ export async function clearUnread(organizationId: number, conversationId: number
   await db
     .update(conversations)
     .set({ unreadCount: 0 })
-    .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)));
+    // `gt(unreadCount, 0)` não é microtimização: sem ele, a leitura periódica
+    // do inbox gravava uma versão nova da linha a cada dez segundos por aba
+    // aberta, sem mudar nada — só trabalho para o autovacuum.
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.organizationId, organizationId),
+        gt(conversations.unreadCount, 0),
+      ),
+    );
 }
 
 export const _internals = { isPlaceholderName, resolveCustomer, sqlHelper: sql };

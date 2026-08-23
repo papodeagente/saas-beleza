@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { requireSession } from "@/server/auth";
 import { countByTab, type InboxTab, listConversations } from "@/server/services/inbox-service";
 import { getConnection } from "@/server/services/whatsapp-connection-service";
@@ -15,6 +16,12 @@ export default async function InboxPage({
   searchParams: Promise<{ conversa?: string; aba?: string }>;
 }) {
   const ctx = await requireSession();
+  // O menu já declara minRole "staff" para o Inbox (app-shell.tsx), mas a
+  // página nunca cobrou isso: bastava digitar /inbox na URL para uma
+  // profissional ler todas as conversas da clínica e responder por elas.
+  // Mesmo critério que /grupos já aplica.
+  if (ctx.role === "professional") redirect("/hoje");
+
   const params = await searchParams;
 
   const requestedTab = TABS.find((t) => t === params.aba);

@@ -177,6 +177,7 @@ export function InboxView({
   const [, startSwitching] = useTransition();
   const [acting, startActing] = useTransition();
   const threadRef = useRef<HTMLDivElement>(null);
+  const listReqRef = useRef(0);
   const requestRef = useRef<number | null>(null);
 
   const activeId = selectedId ?? initialDetail?.conversationId ?? null;
@@ -199,10 +200,28 @@ export function InboxView({
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [detail?.conversationId, detail?.messages.length, conversationDrafts.length]);
 
+  /**
+   * Recarrega a lista.
+   *
+   * A guarda de sequência não é preciosismo: sem ela, a resposta de uma
+   * requisição antiga chegando depois de uma nova reescreve a lista com o
+   * filtro errado. Foi reproduzido — clicar numa aba logo após a varredura
+   * disparar deixava as conversas da aba anterior na tela por dez segundos, e
+   * clicar numa delas abria conversa que não pertencia ao filtro.
+   */
   const refreshList = useCallback(
     async (nextTab: Tab, term: string) => {
-      const rows = await listConversationsAction({ tab: nextTab, search: term || undefined });
-      setList(rows as ConversationItem[]);
+      const meu = (listReqRef.current += 1);
+      const resultado = await listConversationsAction({ tab: nextTab, search: term || undefined });
+      if (listReqRef.current !== meu) return;
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      setList(resultado.rows as ConversationItem[]);
+      // Os contadores viajam junto: antes eles vinham só no carregamento da
+      // página e "Fila 3" continuava 3 enquanto chegavam mais dez.
+      setTabCounts(resultado.counts);
     },
     [],
   );
@@ -214,7 +233,7 @@ export function InboxView({
       if (document.hidden) return;
       await refreshList(tab, search);
       if (activeId) {
-        const loaded = await loadConversationAction(activeId);
+        const loaded = await loadConversationAction(activeId, { markRead: false });
         if (loaded) setCache((prev) => ({ ...prev, [activeId]: loaded }));
       }
     }, POLL_MS);
@@ -242,6 +261,10 @@ export function InboxView({
   function open(id: number) {
     setSelectedId(id);
     syncUrl(id);
+    // Pelo mesmo motivo da `key` do Composer: o alvo de resposta é estado desta
+    // tela e sobreviveria à troca, fazendo a mensagem sair citando a fala de
+    // outra cliente.
+    setReply(null);
     // Abrir zera o não lido; refletir na hora evita o contador fantasma.
     setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
     requestRef.current = id;
@@ -284,7 +307,10 @@ export function InboxView({
         return;
       }
       await reload(conversationId);
-      setTabCounts((prev) => ({ ...prev }));
+      // `refreshList` já traz os contadores do servidor. O que havia aqui era
+      // `setTabCounts((prev) => ({ ...prev }))`: um objeto novo com os MESMOS
+      // valores, ou seja, nada. Assumir uma conversa não mexia no número.
+      await refreshList(tab, search);
       toast.success(
         action === "assumir"
           ? "Conversa assumida"
@@ -638,7 +664,12 @@ export function InboxView({
             </div>
 
             <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-2 shadow-sticky md:px-6 md:py-3">
+              {/* A `key` não é detalhe: sem ela o Composer NÃO desmonta ao
+                  trocar para uma conversa já carregada, e o texto digitado
+                  para uma cliente aparece na conversa de outra. Numa clínica
+                  isso é dado de uma paciente indo para outra. */}
               <Composer
+                key={detail.conversationId}
                 conversationId={detail.conversationId}
                 disabled={!detail.hasWhatsapp}
                 reply={reply}

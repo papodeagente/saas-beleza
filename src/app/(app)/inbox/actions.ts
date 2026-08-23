@@ -5,11 +5,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/db";
 import { conversations } from "@/db/schema";
-import { requireSession } from "@/server/auth";
+import { requireRole, requireSession } from "@/server/auth";
 import { clearUnread } from "@/server/services/conversation-resolver";
 import {
   type ConversationDetail,
   type InboxTab,
+  countByTab,
   getConversation,
   listConversations,
 } from "@/server/services/inbox-service";
@@ -22,6 +23,39 @@ import {
   sendFromInbox,
   transcribeAudio,
 } from "@/server/services/whatsapp-message-service";
+
+/**
+ * Traduz a exceção para uma frase que a atendente consegue usar.
+ *
+ * Devolver `error.message` cru punha três coisas na cara dela: o JSON dos
+ * issues do Zod, a palavra "NEXT_REDIRECT" (que é o throw de controle do Next
+ * quando a assinatura vence) e "FORBIDDEN". Nenhuma delas diz o que fazer.
+ *
+ * O redirect é RE-LANÇADO de propósito: engoli-lo transforma "sua assinatura
+ * venceu, veja os planos" num toast vermelho sem saída.
+ */
+function mensagemDeErro(error: unknown, padrao: string): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "digest" in error &&
+    String((error as { digest?: unknown }).digest).startsWith("NEXT_REDIRECT")
+  ) {
+    throw error;
+  }
+  if (error instanceof z.ZodError) return error.issues[0]?.message ?? padrao;
+  if (error instanceof Error && error.message === "FORBIDDEN") {
+    return "Seu acesso não permite esta ação. Fale com a gestão.";
+  }
+  if (error instanceof Error && error.message === "UNAUTHENTICATED") {
+    return "Sua sessão expirou. Entre de novo.";
+  }
+  if (error instanceof Error && error.message.includes("conexão")) {
+    return "Conecte o WhatsApp em Configurações antes de responder.";
+  }
+  console.error(error);
+  return padrao;
+}
 
 export type InboxResult = { ok: true } | { ok: false; error: string };
 
@@ -119,13 +153,20 @@ const idSchema = z.number().int().positive();
  * É o que permite trocar de conversa sem recarregar a rota: a lista já está na
  * tela, só as mensagens e o contexto viajam.
  */
-export async function loadConversationAction(input: unknown): Promise<InboxDetail | null> {
+export async function loadConversationAction(
+  input: unknown,
+  options: { markRead?: boolean } = {},
+): Promise<InboxDetail | null> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const conversationId = idSchema.parse(input);
     const detail = await getConversation(ctx, conversationId);
     if (!detail) return null;
-    await clearUnread(ctx.organizationId, conversationId);
+    // A leitura periódica passa `markRead: false`. Zerar o não lido a cada dez
+    // segundos escrevia à toa e, pior, destruía a fronteira de onde a atendente
+    // tinha parado de ler antes de ela poder ser desenhada.
+    if (options.markRead !== false) await clearUnread(ctx.organizationId, conversationId);
     return serialize(detail);
   } catch (error) {
     console.error(error);
@@ -133,16 +174,46 @@ export async function loadConversationAction(input: unknown): Promise<InboxDetai
   }
 }
 
-/** Recarrega a lista sem sair da rota — usado pela troca de aba e pela busca. */
+/**
+ * Recarrega a lista sem sair da rota — usado pela troca de aba, pela busca e
+ * pela leitura periódica.
+ *
+ * Devolve os contadores junto porque eles congelavam: a tela só os recebia no
+ * carregamento da página, então "Fila 3" continuava 3 enquanto chegavam mais
+ * dez. A contagem é uma consulta só, medida em 0,37 ms com 22 mil conversas.
+ *
+ * O try/catch não é zelo: esta é a única action chamada de dentro de um
+ * callback de intervalo. Uma rejeição ali vira erro não tratado e o inbox para
+ * de atualizar em silêncio; no caminho da troca de aba, derruba a tela inteira.
+ */
+export type InboxListResult =
+  | { ok: true; rows: SerializedConversation[]; counts: Awaited<ReturnType<typeof countByTab>> }
+  | { ok: false; error: string };
+
+type SerializedConversation = Omit<
+  Awaited<ReturnType<typeof listConversations>>[number],
+  "lastMessageAt"
+> & { lastMessageAt: string | null };
+
 export async function listConversationsAction(input: {
   tab: InboxTab;
   search?: string;
-}): Promise<
-  Array<Omit<Awaited<ReturnType<typeof listConversations>>[number], "lastMessageAt"> & { lastMessageAt: string | null }>
-> {
-  const ctx = await requireSession();
-  const rows = await listConversations(ctx, { tab: input.tab, search: input.search });
-  return rows.map((row) => ({ ...row, lastMessageAt: row.lastMessageAt?.toISOString() ?? null }));
+}): Promise<InboxListResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const [rows, counts] = await Promise.all([
+      listConversations(ctx, { tab: input.tab, search: input.search }),
+      countByTab(ctx),
+    ]);
+    return {
+      ok: true,
+      rows: rows.map((row) => ({ ...row, lastMessageAt: row.lastMessageAt?.toISOString() ?? null })),
+      counts,
+    };
+  } catch (error) {
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível atualizar a lista.") };
+  }
 }
 
 const sendSchema = z.object({
@@ -162,6 +233,7 @@ const sendSchema = z.object({
 export async function sendMessageAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = sendSchema.parse(input);
 
     const [conversation] = await db
@@ -187,14 +259,7 @@ export async function sendMessageAction(input: unknown): Promise<InboxResult> {
     revalidatePath("/inbox");
     return { ok: true };
   } catch (error) {
-    console.error(error);
-    const message =
-      error instanceof Error && error.message.includes("conexão")
-        ? "Conecte o WhatsApp em Configurações antes de responder."
-        : error instanceof Error
-          ? error.message
-          : "Não foi possível enviar a mensagem.";
-    return { ok: false, error: message };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível enviar a mensagem.") };
   }
 }
 
@@ -212,6 +277,7 @@ const assignSchema = z.object({
 export async function updateAssignmentAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = assignSchema.parse(input);
 
     const patch =
@@ -250,6 +316,7 @@ const pauseSchema = z.object({ conversationId: idSchema, paused: z.boolean() });
 export async function setAiPauseAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = pauseSchema.parse(input);
 
     const result = await db
@@ -294,6 +361,7 @@ const mediaSchema = z.object({
 export async function sendMediaAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = mediaSchema.parse(input);
 
     const [cabecalho, base64] = data.dataUrl.split(",", 2);
@@ -318,8 +386,7 @@ export async function sendMediaAction(input: unknown): Promise<InboxResult> {
     revalidatePath("/inbox");
     return { ok: true };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível enviar o arquivo." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível enviar o arquivo.") };
   }
 }
 
@@ -333,13 +400,13 @@ const reactSchema = z.object({
 export async function reactAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = reactSchema.parse(input);
     await reactFromInbox(ctx.organizationId, data.conversationId, data.messageId, data.emoji);
     revalidatePath("/inbox");
     return { ok: true };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível reagir." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível reagir.") };
   }
 }
 
@@ -349,13 +416,13 @@ const messageSchema = z.object({ conversationId: idSchema, messageId: idSchema }
 export async function deleteMessageAction(input: unknown): Promise<InboxResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = messageSchema.parse(input);
     await deleteFromInbox(ctx.organizationId, data.conversationId, data.messageId);
     revalidatePath("/inbox");
     return { ok: true };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível apagar." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível apagar.") };
   }
 }
 
@@ -371,13 +438,13 @@ export async function loadMediaAction(
 ): Promise<{ ok: true; url: string | null } | { ok: false; error: string }> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = messageSchema.parse(input);
     const url = await fetchMediaUrl(ctx.organizationId, data.conversationId, data.messageId);
     revalidatePath("/inbox");
     return { ok: true, url };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível carregar a mídia." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível carregar a mídia.") };
   }
 }
 
@@ -386,13 +453,13 @@ export async function transcribeAction(
 ): Promise<{ ok: true; text: string | null } | { ok: false; error: string }> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = messageSchema.parse(input);
     const text = await transcribeAudio(ctx.organizationId, data.conversationId, data.messageId);
     revalidatePath("/inbox");
     return { ok: true, text };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível transcrever." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível transcrever.") };
   }
 }
 
@@ -405,6 +472,7 @@ const presenceSchema = z.object({
 export async function presenceAction(input: unknown): Promise<void> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const data = presenceSchema.parse(input);
     await notifyPresence(ctx.organizationId, data.conversationId, data.presence);
   } catch {
@@ -432,6 +500,7 @@ export type SyncPhotosResult =
 export async function syncPhotosAction(): Promise<SyncPhotosResult> {
   try {
     const ctx = await requireSession();
+    requireRole(ctx, "staff");
     const r = await syncProfilePictures(ctx);
 
     if (r.buscadas === 0) return { ok: true, mensagem: "As fotos já estão atualizadas." };
