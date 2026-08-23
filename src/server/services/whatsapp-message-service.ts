@@ -232,6 +232,34 @@ export async function sendMessageToConversation(
     .set({ lastMessageAt: now, lastOutboundAt: now, unreadCount: 0 })
     .where(eq(conversations.id, conversationId));
 
+  // A mídia enviada chegou como base64 e não deve ocupar megabytes no banco.
+  // Recuperar o link do provedor agora mantém foto, vídeo e áudio visíveis
+  // depois do reload. Voz aproveita a mesma chamada para ser transcrita.
+  if (options.media && !options.media.url.startsWith("http")) {
+    try {
+      const isAudio = ["audio", "myaudio", "ptt"].includes(options.media.type);
+      const apiKey = isAudio ? process.env.OPENAI_API_KEY : undefined;
+      const downloaded = await downloadMessageMedia(credentials, result.messageId, {
+        returnLink: true,
+        transcribe: Boolean(apiKey),
+        openaiApiKey: apiKey,
+      });
+      if (downloaded.url || downloaded.transcription) {
+        await db
+          .update(messages)
+          .set({
+            ...(downloaded.url ? { mediaUrl: downloaded.url } : {}),
+            ...(downloaded.transcription ? { audioTranscription: downloaded.transcription } : {}),
+          })
+          .where(and(eq(messages.organizationId, organizationId), eq(messages.externalId, result.messageId)));
+      }
+    } catch (error) {
+      // O WhatsApp já aceitou a mensagem; falha de enriquecimento não pode ser
+      // apresentada como falha de envio.
+      console.warn("[whatsapp] mídia enviada sem prévia persistida:", error instanceof Error ? error.message : error);
+    }
+  }
+
   // Melhor esforço: marcar lido no aparelho é conveniência, não pode derrubar o envio.
   void markChatRead(credentials, conversation.remoteJid).catch(() => {});
 

@@ -112,6 +112,31 @@ export type PublicSlot = {
   resourceId: number | null;
 };
 
+export type PublicAvailableDay = { dateISO: string; slotCount: number };
+
+/** Dias que realmente têm pelo menos um horário, para a cliente não precisar
+ * abrir datas vazias uma por uma. */
+export async function getPublicAvailableDays(
+  slug: string,
+  input: { serviceId: number; dateISOs: string[]; branchId?: number },
+): Promise<PublicAvailableDay[]> {
+  const org = await getPublicOrganization(slug);
+  if (!org || !org.services.some((service) => service.id === input.serviceId)) return [];
+
+  const rows = await Promise.all(
+    input.dateISOs.map(async (dateISO) => {
+      const slots = await getAvailableSlots(org.ctx, {
+        serviceId: input.serviceId,
+        dateISO,
+        branchId: input.branchId,
+      });
+      const uniqueTimes = new Set(slots.map((slot) => slot.start.toISOString()));
+      return { dateISO, slotCount: uniqueTimes.size };
+    }),
+  );
+  return rows.filter((row) => row.slotCount > 0);
+}
+
 export async function getPublicSlots(
   slug: string,
   input: { serviceId: number; dateISO: string; professionalId?: number; branchId?: number },

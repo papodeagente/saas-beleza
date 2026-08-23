@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, DoorOpen, UserRound, Users } from "lucide-react";
+import { Building2, DoorOpen, Plus, Trash2, UserRound, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { type TimeRange, validateDayRanges } from "@/domain/working-hours";
 import {
   createBranchAction,
   createMemberAction,
@@ -106,16 +107,18 @@ function ResourceSheet({ branches, pending, error, close, submit }: SheetProps &
 
 function ProfessionalSheet({ branches, services, pending, error, close, submit }: SheetProps & { branches: Option[]; services: Option[] }) {
   const [name, setName] = useState(""); const [specialty, setSpecialty] = useState(""); const [branchId, setBranchId] = useState(branches[0]?.id ?? 0);
-  const [commissionPct, setCommission] = useState(0); const [color, setColor] = useState("#9157CD"); const [weekdays, setWeekdays] = useState<number[]>([1,2,3,4,5]);
-  const [startTime, setStart] = useState("08:00"); const [endTime, setEnd] = useState("18:00"); const [serviceIds, setServiceIds] = useState<number[]>([]);
-  return <Sheet open onOpenChange={(v) => !v && close()}><SheetContent title="Novo profissional" description="Cria o atendente e sua grade semanal na unidade." footer={<Actions pending={pending} disabled={!name.trim() || !weekdays.length} label="Cadastrar profissional" close={close} />}>
-    <form className="space-y-4 px-5 py-4" onSubmit={(e) => { e.preventDefault(); submit(() => createProfessionalAction({ name, specialty, branchId, commissionPct, color, weekdays, startTime, endTime, serviceIds }), "Profissional cadastrado"); }}>
+  const [commissionPct, setCommission] = useState(0); const [color, setColor] = useState("#9157CD"); const [serviceIds, setServiceIds] = useState<number[]>([]);
+  const [week, setWeek] = useState<Record<number, TimeRange[]>>(() => Object.fromEntries(DAYS.map(([id]) => [id, id >= 1 && id <= 5 ? [{ startTime: "08:00", endTime: "12:00" }, { startTime: "14:00", endTime: "18:00" }] : []])));
+  const ranges = DAYS.flatMap(([weekday]) => (week[weekday] ?? []).map((range) => ({ weekday, ...range })));
+  const scheduleError = DAYS.map(([weekday]) => validateDayRanges(week[weekday] ?? [])).find(Boolean) ?? null;
+  const updateDay = (weekday: number, next: TimeRange[]) => setWeek((current) => ({ ...current, [weekday]: next }));
+  return <Sheet open onOpenChange={(v) => !v && close()}><SheetContent title="Novo profissional" description="Cria o atendente e sua grade semanal na unidade, inclusive com pausas." footer={<Actions pending={pending} disabled={!name.trim() || !ranges.length || Boolean(scheduleError)} label="Cadastrar profissional" close={close} />}>
+    <form className="space-y-4 px-5 py-4" onSubmit={(e) => { e.preventDefault(); submit(() => createProfessionalAction({ name, specialty, branchId, commissionPct, color, ranges, serviceIds }), "Profissional cadastrado"); }}>
       <button id="cadastro-submit" type="submit" hidden />
       <Field label="Nome" htmlFor="professional-name"><Input id="professional-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome e sobrenome" /></Field>
       <div className="grid gap-4 sm:grid-cols-2"><Field label="Especialidade" htmlFor="professional-specialty" optional><Input id="professional-specialty" value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Ex.: Nail designer" /></Field><Field label="Unidade" htmlFor="professional-branch"><Select id="professional-branch" value={branchId} onChange={(e) => setBranchId(Number(e.target.value))}>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field></div>
       <div className="grid gap-4 sm:grid-cols-2"><Field label="Comissão (%)" htmlFor="professional-commission"><Input id="professional-commission" type="number" min="0" max="100" step="0.1" value={commissionPct} onChange={(e) => setCommission(Number(e.target.value))} /></Field><Field label="Cor na agenda" htmlFor="professional-color"><Input id="professional-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} /></Field></div>
-      <fieldset><legend className="mb-1.5 text-label text-ink">Dias de atendimento</legend><div className="flex flex-wrap gap-2">{DAYS.map(([id,label]) => <label key={id} className="flex items-center gap-1.5 rounded-pill border border-line px-2.5 py-1.5 text-caption"><input type="checkbox" checked={weekdays.includes(id)} onChange={(e) => setWeekdays(e.target.checked ? [...weekdays,id] : weekdays.filter((d) => d !== id))} />{label}</label>)}</div></fieldset>
-      <div className="grid grid-cols-2 gap-4"><Field label="Início" htmlFor="professional-start"><Input id="professional-start" type="time" value={startTime} onChange={(e) => setStart(e.target.value)} /></Field><Field label="Fim" htmlFor="professional-end"><Input id="professional-end" type="time" value={endTime} onChange={(e) => setEnd(e.target.value)} /></Field></div>
+      <fieldset><legend className="text-label text-ink">Horários de atendimento</legend><p className="mb-2 text-caption text-ink-secondary">Adicione mais de um período no mesmo dia para almoço, faculdade ou outros intervalos.</p><div className="divide-y divide-line rounded-card border border-line">{DAYS.map(([weekday,label]) => { const dayRanges = week[weekday] ?? []; return <div key={weekday} className="p-3"><div className="flex items-center justify-between"><span className="text-label text-ink">{label}</span><Button type="button" variant="ghost" size="sm" onClick={() => updateDay(weekday, [...dayRanges, { startTime: dayRanges.at(-1)?.endTime ?? "08:00", endTime: dayRanges.length ? "18:00" : "12:00" }])}><Plus />Período</Button></div>{dayRanges.length ? dayRanges.map((range,index) => <div key={index} className="mt-2 flex items-center gap-2"><Input aria-label={`Início ${label} período ${index + 1}`} type="time" value={range.startTime} onChange={(e) => updateDay(weekday, dayRanges.map((item,i) => i === index ? { ...item, startTime: e.target.value } : item))} /><span className="text-caption text-ink-tertiary">até</span><Input aria-label={`Fim ${label} período ${index + 1}`} type="time" value={range.endTime} onChange={(e) => updateDay(weekday, dayRanges.map((item,i) => i === index ? { ...item, endTime: e.target.value } : item))} /><Button type="button" variant="ghost" size="icon" aria-label={`Remover período de ${label}`} onClick={() => updateDay(weekday, dayRanges.filter((_,i) => i !== index))}><Trash2 /></Button></div>) : <p className="mt-1 text-caption text-ink-tertiary">Não atende</p>}</div>; })}</div>{scheduleError ? <p className="mt-1.5 text-caption text-danger">{scheduleError}</p> : null}</fieldset>
       <fieldset><legend className="mb-1.5 text-label text-ink">Serviços que realiza</legend>{services.length ? <Checks options={services} values={serviceIds} onChange={setServiceIds} /> : <p className="text-caption text-ink-secondary">Nenhum serviço cadastrado. Você poderá vinculá-lo ao criar o serviço.</p>}</fieldset>
       <ErrorMessage result={error} />
     </form>

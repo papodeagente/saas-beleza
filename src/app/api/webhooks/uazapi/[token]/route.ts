@@ -8,6 +8,7 @@ import {
   applyStatusUpdate,
   ingestMessage,
   markMessageDeleted,
+  transcribeAudio,
 } from "@/server/services/whatsapp-message-service";
 import { normalizeUazapiWebhook } from "@/server/whatsapp/normalizer";
 
@@ -79,6 +80,11 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     if (event.kind === "message") {
       const result = await ingestMessage(connection, event.message);
       if (result.isNew && result.isInbound) {
+        if (event.message.kind === "audio" && result.messageId && process.env.OPENAI_API_KEY) {
+          await transcribeAudio(connection.organizationId, result.conversationId, result.messageId).catch((error) => {
+            console.warn("[uazapi webhook] áudio recebido sem transcrição:", error instanceof Error ? error.message : error);
+          });
+        }
         // Nunca bloqueia o webhook: o turno do agente roda em background.
         const { enqueueAgentTurn } = await import("@/server/queues/agent-turn-queue");
         await enqueueAgentTurn({

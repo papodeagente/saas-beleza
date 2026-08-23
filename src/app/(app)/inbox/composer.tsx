@@ -1,6 +1,6 @@
 "use client";
 
-import { Mic, MicOff, Paperclip, Send, Smile, Trash2, X } from "lucide-react";
+import { FileText, Mic, MicOff, Paperclip, Send, Smile, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -52,10 +52,25 @@ function lerArquivo(file: File): Promise<string> {
   });
 }
 
-function tipoDoArquivo(file: File): "image" | "video" | "document" {
+type MidiaPendente = {
+  dataUrl: string;
+  previewUrl: string;
+  kind: "image" | "video" | "document" | "audio" | "ptt";
+  fileName: string;
+  mimeType: string;
+  size: number;
+};
+
+function tipoDoArquivo(file: File): MidiaPendente["kind"] {
   if (file.type.startsWith("image/")) return "image";
   if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
   return "document";
+}
+
+function tamanhoLegivel(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
 }
 
 export function Composer({
@@ -81,6 +96,7 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const [emojiAberto, setEmojiAberto] = useState(false);
   const [gravando, setGravando] = useState(false);
+  const [midia, setMidia] = useState<MidiaPendente | null>(null);
   /**
    * O microfone só existe em contexto seguro (HTTPS ou localhost). Servido por
    * HTTP puro, `navigator.mediaDevices` sequer é definido — e um botão que
@@ -118,6 +134,12 @@ export function Composer({
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (midia?.previewUrl) URL.revokeObjectURL(midia.previewUrl);
+    };
+  }, [midia]);
+
   function avisarDigitando() {
     const agora = Date.now();
     // Um aviso a cada três segundos basta para manter o "digitando" aceso.
@@ -148,7 +170,7 @@ export function Composer({
     }
   }
 
-  async function enviarArquivo(file: File) {
+  async function prepararArquivo(file: File) {
     if (file.size > 10 * 1024 * 1024) {
       toast.error("Arquivo muito grande. O limite é 10 MB.");
       return;
@@ -160,13 +182,31 @@ export function Composer({
       toast.error("Não consegui ler o arquivo. Tente de novo.");
       return;
     }
+    setMidia({
+      dataUrl,
+      previewUrl: URL.createObjectURL(file),
+      kind: tipoDoArquivo(file),
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      size: file.size,
+    });
+    setEmojiAberto(false);
+  }
+
+  function descartarMidia() {
+    setMidia(null);
+  }
+
+  function enviarMidia() {
+    if (!midia) return;
+    const selecionada = midia;
     startEnviando(async () => {
       try {
         const result = await sendMediaAction({
           conversationId,
-          dataUrl,
-          kind: tipoDoArquivo(file),
-          fileName: file.name,
+          dataUrl: selecionada.dataUrl,
+          kind: selecionada.kind,
+          fileName: selecionada.fileName,
           caption: draft.trim() || undefined,
           replyToExternalId: reply?.externalId ?? undefined,
         });
@@ -177,6 +217,7 @@ export function Composer({
         // A legenda só sai da caixa depois da confirmação: ela viaja junto com
         // o anexo e não tem bolha otimista para segurá-la.
         setDraft("");
+        setMidia(null);
         onClearReply();
         onSent();
       } catch (erro) {
@@ -238,28 +279,13 @@ export function Composer({
         return;
       }
 
-      startEnviando(async () => {
-        try {
-          const result = await sendMediaAction({
-            conversationId,
-            dataUrl,
-            // `ptt` é a mensagem de voz que toca direto na conversa.
-            kind: "ptt",
-            fileName: "audio.ogg",
-            replyToExternalId: reply?.externalId ?? undefined,
-          });
-          if (!result.ok) {
-            toast.error(result.error);
-            return;
-          }
-          onClearReply();
-          onSent();
-        } catch (erro) {
-          // Sem isto, uma rejeição aqui vira erro não tratado dentro do
-          // callback do MediaRecorder: a gravação some e nada é dito.
-          console.error(erro);
-          toast.error("Não foi possível enviar a mensagem de voz. Grave de novo.");
-        }
+      setMidia({
+        dataUrl,
+        previewUrl: URL.createObjectURL(blob),
+        kind: "ptt",
+        fileName: "Mensagem de voz",
+        mimeType: blob.type,
+        size: blob.size,
       });
     };
     rec.stop();
@@ -289,6 +315,41 @@ export function Composer({
         </div>
       ) : null}
 
+      {midia ? (
+        <div className="overflow-hidden rounded-card border border-line bg-surface-raised shadow-card">
+          <div className="flex items-center justify-between border-b border-line px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-label text-ink">{midia.fileName}</p>
+              <p className="text-caption text-ink-secondary">{tamanhoLegivel(midia.size)} · confira antes de enviar</p>
+            </div>
+            <button type="button" onClick={descartarMidia} aria-label="Remover anexo" className="rounded-full p-2 text-ink-secondary hover:bg-surface-sunken hover:text-ink">
+              <X className="size-4" aria-hidden />
+            </button>
+          </div>
+          <div className="flex min-h-28 items-center justify-center bg-surface-sunken p-3">
+            {midia.kind === "image" ? (
+              <img src={midia.previewUrl} alt="Pré-visualização do anexo" className="max-h-[360px] max-w-full rounded-control object-contain" />
+            ) : midia.kind === "video" ? (
+              <video controls src={midia.previewUrl} className="max-h-[360px] max-w-full rounded-control" />
+            ) : midia.kind === "audio" || midia.kind === "ptt" ? (
+              <div className="flex w-full max-w-md items-center gap-3 rounded-card bg-surface-raised p-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Mic className="size-5" aria-hidden /></span>
+                <audio controls src={midia.previewUrl} className="h-10 min-w-0 flex-1" />
+              </div>
+            ) : (
+              <div className="flex max-w-md items-center gap-3 rounded-card bg-surface-raised p-4">
+                <FileText className="size-9 shrink-0 text-accent" aria-hidden />
+                <div className="min-w-0"><p className="truncate text-label text-ink">{midia.fileName}</p><p className="text-caption text-ink-secondary">Documento pronto para envio</p></div>
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 px-3 py-2">
+            <Button variant="ghost" size="sm" onClick={descartarMidia}>Cancelar</Button>
+            <Button size="sm" onClick={enviarMidia} loading={enviando}><Send aria-hidden />Enviar</Button>
+          </div>
+        </div>
+      ) : null}
+
       {gravando ? (
         <div className="flex items-center gap-3 rounded-control bg-danger-soft px-3 py-2">
           <span className="size-2.5 animate-pulse rounded-full bg-danger" aria-hidden />
@@ -301,7 +362,7 @@ export function Composer({
           </Button>
           <Button size="sm" onClick={() => pararGravacao(true)}>
             <Send aria-hidden />
-            Enviar
+            Concluir
           </Button>
         </div>
       ) : (
@@ -355,11 +416,11 @@ export function Composer({
             ref={inputArquivo}
             type="file"
             hidden
-            accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx"
+            accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx"
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.target.value = "";
-              if (file) void enviarArquivo(file);
+              if (file) void prepararArquivo(file);
             }}
           />
 
@@ -373,7 +434,8 @@ export function Composer({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                enviarTexto();
+                if (midia) enviarMidia();
+                else enviarTexto();
               }
             }}
             onFocus={() => setEmojiAberto(false)}
@@ -382,7 +444,7 @@ export function Composer({
             className="max-h-32 min-h-11 flex-1 resize-none"
           />
 
-          {draft.trim() ? (
+          {midia ? null : draft.trim() ? (
             <Button size="md" onClick={enviarTexto} loading={enviando} className="h-11 shrink-0">
               <Send aria-hidden />
               <span className="hidden sm:inline">Enviar</span>

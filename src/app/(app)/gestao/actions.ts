@@ -3,6 +3,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { validateDayRanges } from "@/domain/working-hours";
 import { db } from "@/db";
 import {
   branches,
@@ -84,17 +85,20 @@ const professionalSchema = z.object({
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida."),
   commissionPct: z.number().min(0).max(100),
   branchId: z.number().int().positive(),
-  weekdays: z.array(z.number().int().min(0).max(6)).min(1, "Selecione ao menos um dia."),
-  startTime: z.string().regex(/^\d{2}:\d{2}$/, "Horário inicial inválido."),
-  endTime: z.string().regex(/^\d{2}:\d{2}$/, "Horário final inválido."),
+  ranges: z.array(z.object({
+    weekday: z.number().int().min(0).max(6),
+    startTime: z.string(),
+    endTime: z.string(),
+  })).min(1, "Cadastre ao menos um período de atendimento.").max(42),
   serviceIds: z.array(z.number().int().positive()),
 });
 
 export async function createProfessionalAction(input: unknown): Promise<CadastroResult> {
   const parsed = professionalSchema.safeParse(input);
   if (!parsed.success) return validationError(parsed);
-  if (parsed.data.startTime >= parsed.data.endTime) {
-    return { ok: false, error: "O horário final precisa ser depois do inicial.", field: "endTime" };
+  for (let weekday = 0; weekday <= 6; weekday++) {
+    const message = validateDayRanges(parsed.data.ranges.filter((range) => range.weekday === weekday));
+    if (message) return { ok: false, error: message, field: "ranges" };
   }
   try {
     const ctx = await requireSession();
@@ -124,13 +128,13 @@ export async function createProfessionalAction(input: unknown): Promise<Cadastro
         color: parsed.data.color,
         commissionBps: Math.round(parsed.data.commissionPct * 100),
       }).returning({ id: professionals.id });
-      await tx.insert(professionalWorkingHours).values(parsed.data.weekdays.map((weekday) => ({
+      await tx.insert(professionalWorkingHours).values(parsed.data.ranges.map((range) => ({
         organizationId: ctx.organizationId,
         professionalId: professional.id,
         branchId: parsed.data.branchId,
-        weekday,
-        startTime: parsed.data.startTime,
-        endTime: parsed.data.endTime,
+        weekday: range.weekday,
+        startTime: range.startTime,
+        endTime: range.endTime,
       })));
       if (validServices.length) {
         await tx.insert(professionalServices).values(validServices.map((service) => ({

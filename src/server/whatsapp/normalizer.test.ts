@@ -121,6 +121,22 @@ describe("normalizeUazapiWebhook", () => {
     expect(event).toMatchObject({ kind: "status", externalIds: ["ABC"], status: "delivered" });
   });
 
+  it("converte os ACKs numéricos em entregue e lido", () => {
+    expect(
+      normalizeUazapiWebhook({
+        EventType: "messages_update",
+        event: { key: { id: "NUM3" }, ack: 3 },
+      }),
+    ).toMatchObject({ kind: "status", externalIds: ["NUM3"], status: "delivered" });
+
+    expect(
+      normalizeUazapiWebhook({
+        EventType: "messages_update",
+        event: { key: { id: "NUM4" }, ack: 4 },
+      }),
+    ).toMatchObject({ kind: "status", externalIds: ["NUM4"], status: "read" });
+  });
+
 it("reconhece o QR de pareamento e o entrega pronto para exibir", () => {
     const event = normalizeUazapiWebhook({
       EventType: "qrcode",

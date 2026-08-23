@@ -316,7 +316,6 @@ export function MessageBubble({
                 <MediaPlaceholder
                   conversationId={conversationId}
                   messageId={message.id}
-                  outbound={outbound}
                   icon={ImageIcon}
                   label="Foto"
                   onLoaded={onChanged}
@@ -332,7 +331,6 @@ export function MessageBubble({
                 <MediaPlaceholder
                   conversationId={conversationId}
                   messageId={message.id}
-                  outbound={outbound}
                   icon={Mic}
                   label="Mensagem de voz"
                   onLoaded={onChanged}
@@ -354,7 +352,6 @@ export function MessageBubble({
                 <MediaPlaceholder
                   conversationId={conversationId}
                   messageId={message.id}
-                  outbound={outbound}
                   icon={Video}
                   label="Vídeo"
                   onLoaded={onChanged}
@@ -387,34 +384,40 @@ export function MessageBubble({
             {/* Áudio transcrito aparece como texto: é o que a atendente precisa
                 ler para responder sem ouvir tudo de novo. */}
             {message.audioTranscription ? (
-              <span className="whitespace-pre-wrap italic">{message.audioTranscription}</span>
+              <span className="mt-1 block rounded-control bg-surface-sunken/70 px-2.5 py-2">
+                <span className="mb-0.5 flex items-center gap-1 text-meta font-medium text-accent">
+                  <Bot className="size-3" aria-hidden />
+                  Transcrição por IA
+                </span>
+                <span className="block whitespace-pre-wrap text-caption text-ink-secondary">
+                  {message.audioTranscription}
+                </span>
+              </span>
             ) : corpo ? (
               <span className="whitespace-pre-wrap">{corpo}</span>
             ) : null}
 
             {/*
-              Horário e tique DENTRO da bolha, como em qualquer aplicativo de
-              mensagem. Devolve uma linha inteira por mensagem e conserta um
+              Horário e tique DENTRO de cada bolha, como no WhatsApp. Isso
+              também evita que áudios agrupados escondam sua confirmação e conserta um
               desalinhamento real: como irmão do bloco que o menu de ações
               empurrava, o horário flutuava dezenas de pixels fora da bolha.
 
               É `float` de propósito: assim ele entra no fluxo do texto e a
               última linha se encurta em vez de passar por baixo dele.
             */}
-            {ultimaDoGrupo ? (
-              <span
-                data-meta
-                className={cn(
-                  "float-right mt-1 ml-2 flex items-center gap-1 text-meta whitespace-nowrap",
-                  message.status === "failed" && outbound ? "text-danger" : "text-ink-secondary",
-                )}
-              >
-                <span suppressHydrationWarning className="tabular">
-                  {format(new Date(message.createdAt), "HH:mm", { locale: ptBR })}
-                </span>
-                {outbound ? <DeliveryTick status={message.status} /> : null}
+            <span
+              data-meta
+              className={cn(
+                "float-right mt-1 ml-2 flex items-center gap-1 text-meta whitespace-nowrap",
+                message.status === "failed" && outbound ? "text-danger" : "text-ink-secondary",
+              )}
+            >
+              <span suppressHydrationWarning className="tabular">
+                {format(new Date(message.createdAt), "HH:mm", { locale: ptBR })}
               </span>
-            ) : null}
+              {outbound ? <DeliveryTick status={message.status} /> : null}
+            </span>
           </div>
 
           {message.reactions && message.reactions.length > 0 ? (
@@ -439,51 +442,60 @@ export function MessageBubble({
  * Mídia sem link.
  *
  * Acontece nos dois sentidos: o que enviamos vai em base64 e não deixa URL, e o
- * que chega nem sempre traz o link no webhook. Em vez de bolha vazia, mostra o
- * que é e — quando faz sentido buscar — oferece carregar.
+ * que chega nem sempre traz o link no webhook. A primeira tentativa é
+ * automática, como no WhatsApp Web; se o provedor não entregar, fica um botão
+ * de nova tentativa no lugar de uma bolha vazia.
  */
 function MediaPlaceholder({
   conversationId,
   messageId,
-  outbound,
   icon: Icon,
   label,
   onLoaded,
 }: {
   conversationId: number;
   messageId: number;
-  outbound: boolean;
   icon: typeof ImageIcon;
   label: string;
   onLoaded: () => void;
 }) {
   const [carregando, startCarregando] = useTransition();
+  const [falhou, setFalhou] = useState(false);
+  const tentou = useRef(false);
+
+  function carregar(mostrarErro: boolean) {
+    startCarregando(async () => {
+      const result = await loadMediaAction({ conversationId, messageId });
+      if (!result.ok || !result.url) {
+        setFalhou(true);
+        if (mostrarErro) toast.error(result.ok ? "A mídia não está mais disponível no WhatsApp." : result.error);
+        return;
+      }
+      setFalhou(false);
+      onLoaded();
+    });
+  }
+
+  useEffect(() => {
+    if (tentou.current) return;
+    tentou.current = true;
+    carregar(false);
+    // A mensagem identifica a mídia. `onLoaded` pode mudar a cada render do
+    // inbox e não deve disparar downloads repetidos.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId, messageId]);
 
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap text-caption text-ink-secondary">
       <Icon className="size-3.5 shrink-0" aria-hidden />
       {label}
-      {!outbound ? (
+      {carregando ? <span>carregando…</span> : falhou ? (
         <button
           type="button"
-          disabled={carregando}
           className="text-accent disabled:opacity-60"
-          onClick={() =>
-            startCarregando(async () => {
-              const result = await loadMediaAction({ conversationId, messageId });
-              if (!result.ok) {
-                toast.error(result.error);
-                return;
-              }
-              if (!result.url) {
-                toast.error("A mídia não está mais disponível no WhatsApp.");
-                return;
-              }
-              onLoaded();
-            })
-          }
+          onClick={() => carregar(true)}
         >
-          {carregando ? "carregando…" : "carregar"}
+          tentar novamente
         </button>
       ) : null}
     </span>

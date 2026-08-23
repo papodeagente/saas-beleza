@@ -7,6 +7,7 @@ import { DomainError } from "@/server/services/appointment-service";
 import {
   type PublicSlot,
   createPublicBooking,
+  getPublicAvailableDays,
   getPublicOrganization,
   getPublicSlots,
 } from "@/server/services/public-booking-service";
@@ -27,6 +28,18 @@ export async function publicSlotsAction(input: unknown): Promise<PublicSlot[]> {
     professionalId: data.professionalId,
     branchId: data.branchId,
   });
+}
+
+const daysSchema = z.object({
+  slug: z.string().min(1),
+  serviceId: z.number().int().positive(),
+  dateISOs: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(31),
+  branchId: z.number().int().positive().optional(),
+});
+
+export async function publicAvailableDaysAction(input: unknown) {
+  const data = daysSchema.parse(input);
+  return getPublicAvailableDays(data.slug, data);
 }
 
 const bookingSchema = z.object({

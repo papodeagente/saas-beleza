@@ -11,7 +11,7 @@
  * Módulo puro: sem banco, sem rede, testável isoladamente.
  */
 
-import { asArray, asString, firstString, get, type Json } from "./json";
+import { asArray, asNumber, asString, firstString, get, type Json } from "./json";
 import { digitsOnly, isGroupJid, isLidJid, isLikelyLid, phoneFromJid } from "./phone";
 
 export type WaMessageKind =
@@ -167,6 +167,8 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       get(body, "messageids"),
       get(body, "messageIds"),
       get(body, "ids"),
+      get(raw, "MessageIDs"),
+      get(raw, "messageIds"),
     ];
     let externalIds: string[] = [];
     for (const source of idSources) {
@@ -183,6 +185,8 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
         get(body, "id"),
         get(raw, "messageid"),
         get(raw, "id"),
+        get(body, "key", "id"),
+        get(raw, "key", "id"),
       );
       if (single) externalIds = [single];
     }
@@ -192,13 +196,18 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       get(body, "status"),
       get(body, "update"),
       get(raw, "status"),
+      get(body, "ack"),
+      get(raw, "ack"),
     ).toLowerCase();
+    const numericStatus = rawStatus
+      ? Number(rawStatus)
+      : (asNumber(get(body, "ack")) ?? asNumber(get(raw, "ack")) ?? Number.NaN);
     const status =
-      rawStatus.includes("read") || rawStatus.includes("played")
+      rawStatus.includes("read") || rawStatus.includes("played") || numericStatus >= 4
         ? "read"
-        : rawStatus.includes("deliver")
+        : rawStatus.includes("deliver") || numericStatus === 3
           ? "delivered"
-          : rawStatus.includes("error") || rawStatus.includes("fail")
+          : rawStatus.includes("error") || rawStatus.includes("fail") || numericStatus === 0
             ? "failed"
             : "sent";
     if (externalIds.length === 0) return { kind: "ignored", reason: "status_sem_id" };

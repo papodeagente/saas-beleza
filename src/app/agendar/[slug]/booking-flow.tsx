@@ -3,7 +3,7 @@
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowLeft, CalendarCheck, Check, ChevronRight, Clock, MapPin, ShieldCheck } from "lucide-react";
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand";
 import {
   type BookingConfirmation,
+  publicAvailableDaysAction,
   publicBookingAction,
   publicSlotsAction,
 } from "./actions";
@@ -29,7 +30,7 @@ type Service = {
 
 type Branch = { id: number; name: string; address: string | null };
 
-type Step = "service" | "branch" | "time" | "identify" | "done";
+type Step = "service" | "branch" | "day" | "time" | "identify" | "done";
 
 /** Abreviação de 3 letras: o nome por extenso vaza do chip de data. */
 const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
@@ -50,6 +51,8 @@ export function BookingFlow({
   const [branch, setBranch] = useState<Branch | null>(branches.length === 1 ? branches[0] : null);
   const [day, setDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<PublicSlot[] | null>(null);
+  const [availableDays, setAvailableDays] = useState<Array<{ dateISO: string; slotCount: number }> | null>(null);
+  const [loadingDays, startDaysTransition] = useTransition();
   const [loadingSlots, startSlotsTransition] = useTransition();
   const [slot, setSlot] = useState<PublicSlot | null>(null);
 
@@ -62,7 +65,23 @@ export function BookingFlow({
   const [pending, startTransition] = useTransition();
 
   // Próximos 14 dias — escolher data não deve exigir abrir um calendário
-  const days = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i));
+  const days = useMemo(() => Array.from({ length: 21 }, (_, i) => addDays(new Date(), i)), []);
+
+  function loadDays(next: { service: Service | null; branch: Branch | null }) {
+    setAvailableDays(null);
+    setSlot(null);
+    setSlots(null);
+    if (!next.service) return;
+    startDaysTransition(async () => {
+      const rows = await publicAvailableDaysAction({
+        slug,
+        serviceId: next.service!.id,
+        branchId: next.branch?.id,
+        dateISOs: days.map((date) => format(date, "yyyy-MM-dd")),
+      });
+      setAvailableDays(rows);
+    });
+  }
 
   /**
    * Carregar horários é sempre consequência de uma escolha do cliente
@@ -92,18 +111,19 @@ export function BookingFlow({
       setStep("branch");
       return;
     }
-    setStep("time");
-    loadSlots({ service: value, branch, day });
+    setStep("day");
+    loadDays({ service: value, branch });
   }
 
   function chooseBranch(value: Branch) {
     setBranch(value);
-    setStep("time");
-    loadSlots({ service, branch: value, day });
+    setStep("day");
+    loadDays({ service, branch: value });
   }
 
   function chooseDay(value: string) {
     setDay(value);
+    setStep("time");
     loadSlots({ service, branch, day: value });
   }
 
@@ -201,10 +221,12 @@ export function BookingFlow({
               setStep(
                 step === "branch"
                   ? "service"
-                  : step === "time"
+                  : step === "day"
                     ? branches.length > 1
                       ? "branch"
                       : "service"
+                    : step === "time"
+                      ? "day"
                     : "time",
               )
             }
@@ -221,8 +243,10 @@ export function BookingFlow({
             ? "O que você quer fazer?"
             : step === "branch"
               ? "Em qual unidade?"
-              : step === "time"
-                ? "Escolha o melhor horário"
+              : step === "day"
+                ? "Escolha o dia"
+                : step === "time"
+                  ? "Agora escolha o horário"
                 : "Só falta você se identificar"}
         </h1>
         {service && step !== "service" ? (
@@ -308,48 +332,37 @@ export function BookingFlow({
         </ul>
       ) : null}
 
-      {/* 3. Data e horário */}
+      {/* 3. Dia — só aparecem datas que realmente têm agenda livre. */}
+      {step === "day" ? (
+        <div className="mt-6">
+          <p className="mb-4 text-body text-ink-secondary">Mostramos somente os dias com horários disponíveis nas próximas três semanas.</p>
+          {loadingDays ? (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">{Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+          ) : availableDays?.length ? (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {availableDays.map((available) => {
+                const date = days.find((item) => format(item, "yyyy-MM-dd") === available.dateISO)!;
+                return (
+                  <button key={available.dateISO} type="button" onClick={() => chooseDay(available.dateISO)} className="flex min-h-20 flex-col items-center justify-center rounded-card border border-line bg-surface-raised px-2 py-3 text-ink shadow-card transition-[border-color,transform] hover:-translate-y-0.5 hover:border-accent/45">
+                    <span className="text-meta uppercase tracking-[0.06em] text-ink-secondary">{WEEKDAY_SHORT[date.getDay()]}</span>
+                    <span className="text-title tabular">{format(date, "d")}</span>
+                    <span className="text-meta text-accent">{format(date, "MMM", { locale: ptBR })}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <Card className="px-4 py-6 text-center"><p className="text-body text-ink">Nenhum dia livre nas próximas três semanas</p><p className="mt-1 text-caption text-ink-secondary">Entre em contato para consultar encaixes ou uma data mais distante.</p></Card>
+          )}
+        </div>
+      ) : null}
+
+      {/* 4. Horário do dia escolhido */}
       {step === "time" ? (
         <div className="mt-6">
-          <div className="relative -mx-5">
-            <div className="overflow-x-auto px-5 pb-1">
-              <div className="flex gap-1.5">
-                {days.map((date) => {
-                  const iso = format(date, "yyyy-MM-dd");
-                  const active = iso === day;
-                  return (
-                    <button
-                      key={iso}
-                      type="button"
-                      onClick={() => chooseDay(iso)}
-                      aria-pressed={active}
-                      aria-label={format(date, "EEEE, d 'de' MMMM", { locale: ptBR })}
-                      className={cn(
-                        "flex min-w-[64px] shrink-0 flex-col items-center rounded-card border px-3 py-2 transition-colors duration-[120ms]",
-                        active
-                          ? "border-accent bg-accent text-white shadow-[0_8px_20px_rgb(116_55_183/0.22)]"
-                          : "border-line bg-surface-raised text-ink hover:border-line-strong",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "text-meta uppercase tracking-[0.06em]",
-                          active ? "text-white/90" : "text-ink-secondary",
-                        )}
-                      >
-                        {WEEKDAY_SHORT[date.getDay()]}
-                      </span>
-                      <span className="text-title tabular">{format(date, "d")}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            {/* Máscara: sinaliza que a fileira de dias continua */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-surface to-transparent"
-            />
+          <div className="mb-5 flex items-center justify-between rounded-card border border-line bg-surface-sunken px-4 py-3">
+            <div><p className="text-meta uppercase tracking-[0.06em] text-ink-secondary">Dia escolhido</p><p className="text-label text-ink">{dayLabel}</p></div>
+            <Button variant="ghost" size="sm" onClick={() => setStep("day")}>Trocar dia</Button>
           </div>
 
           <p role="status" aria-live="polite" className="sr-only">
@@ -525,7 +538,7 @@ function BookingAside({
     { key: "time", label: "Data e hora" },
     { key: "identify", label: "Seus dados" },
   ];
-  const current = step === "branch" ? 0 : step === "time" ? 1 : step === "identify" ? 2 : 0;
+  const current = step === "branch" ? 0 : step === "day" || step === "time" ? 1 : step === "identify" ? 2 : 0;
 
   return (
     <aside className="relative overflow-hidden bg-brand px-5 py-6 text-white sm:px-10 lg:px-9 lg:py-10">
