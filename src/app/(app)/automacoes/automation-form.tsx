@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -37,10 +37,11 @@ type Trigger = keyof typeof PRESETS;
 
 export function AutomationForm() {
   const [trigger, setTrigger] = useState<Trigger>("before_appointment");
+  const [state, formAction, pending] = useActionState(createAutomationAction, { ok: false, message: "" });
   const preset = PRESETS[trigger];
   // A chave recria os campos quando o gatilho muda, aplicando o modelo sugerido.
   return (
-    <form action={createAutomationAction} className="space-y-4">
+    <form action={formAction} className="space-y-4">
       <Field label="Quando enviar" htmlFor="trigger">
         <Select id="trigger" name="trigger" value={trigger} onChange={(event) => setTrigger(event.target.value as Trigger)}>
           <option value="before_appointment">X dias antes do agendamento</option>
@@ -72,10 +73,14 @@ export function AutomationForm() {
           <Textarea id="messageTemplate" name="messageTemplate" rows={4} defaultValue={preset.message} required maxLength={1500} />
         </Field>
       </div>
+      {state.message ? (
+        <p role="status" className={state.ok ? "text-caption text-positive" : "text-caption text-danger"}>
+          {state.message}
+        </p>
+      ) : null}
       <div className="flex justify-end">
-        <Button type="submit">Criar automação</Button>
+        <Button type="submit" loading={pending}>Criar automação</Button>
       </div>
     </form>
   );
 }
-
