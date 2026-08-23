@@ -1163,7 +1163,7 @@ function ContactPanel({
       <div>
         <div className="mb-1.5 flex items-center justify-between">
           <span className="text-meta font-medium tracking-wide text-ink-secondary uppercase">
-            Agendamentos ({context.nextAppointments.length})
+            Agendamentos ({context.appointmentsCount})
           </span>
           <Link
             href={`/agenda?novo=1&cliente=${context.customerId}`}
@@ -1176,7 +1176,7 @@ function ContactPanel({
 
         {context.nextAppointments.length === 0 ? (
           <p className="rounded-control bg-surface-sunken px-2.5 py-3 text-center text-caption text-ink-secondary">
-            Sem horário marcado.
+            Nenhum agendamento registrado.
           </p>
         ) : (
           <ul className="flex flex-col gap-1.5">

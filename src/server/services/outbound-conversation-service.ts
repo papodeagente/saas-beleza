@@ -75,6 +75,8 @@ export type StartConversationInput = {
   /** Nome para o cadastro novo. Obrigatório no caminho do número digitado. */
   name?: string | null;
   body: string;
+  /** Envio operacional sem usuário humano (automações e confirmações). */
+  automated?: boolean;
 };
 
 /**
@@ -384,6 +386,9 @@ export async function startOutboundConversation(
   const destinatario = await resolverDestinatario(ctx, input);
   if (!destinatario.ok) return destinatario;
   const variants = brPhoneVariants(destinatario.phone);
+  const sendOptions = input.automated
+    ? ({ sender: "system", senderUserId: null } as const)
+    : ({ sender: "user", senderUserId: ctx.userId || null } as const);
 
   /**
    * (3) Conversa que já existe, ANTES de qualquer chamada externa.
@@ -398,8 +403,7 @@ export async function startOutboundConversation(
     const marcaExistente = await ultimaMensagemId(existente.id);
     try {
       await sendMessageToConversation(ctx.organizationId, existente.id, body, {
-        sender: "user",
-        senderUserId: ctx.userId,
+        ...sendOptions,
       });
     } catch (error) {
       console.error("[conversa ativa] falha ao enviar em conversa existente", error);
@@ -407,12 +411,12 @@ export async function startOutboundConversation(
       // gravada, ela saiu, e mandar "tente de novo" faria a cliente receber
       // duas vezes.
       if ((await ultimaMensagemId(existente.id)) !== marcaExistente) {
-        await assumirConversa(ctx, existente.id);
+        if (!input.automated) await assumirConversa(ctx, existente.id);
         return falha("ENVIO_FALHOU", AVISO_MENSAGEM_JA_SAIU);
       }
       return falha("ENVIO_FALHOU", mensagemDeFalhaNoEnvio(error));
     }
-    await assumirConversa(ctx, existente.id);
+    if (!input.automated) await assumirConversa(ctx, existente.id);
     return {
       ok: true,
       conversationId: existente.id,
@@ -504,7 +508,7 @@ export async function startOutboundConversation(
   // A marca de origem é gravada antes do envio: é neste instante que a conta
   // gastou uma conversa nova, e o limite de vazão precisa enxergá-la mesmo se o
   // processo morrer no meio do envio.
-  if (resolvida.created) {
+  if (resolvida.created && !input.automated) {
     await db
       .update(conversations)
       .set({ startedByUserId: ctx.userId })
@@ -515,8 +519,7 @@ export async function startOutboundConversation(
   const marca = await ultimaMensagemId(resolvida.conversationId);
   try {
     await sendMessageToConversation(ctx.organizationId, resolvida.conversationId, body, {
-      sender: "user",
-      senderUserId: ctx.userId,
+      ...sendOptions,
     });
   } catch (error) {
     console.error("[conversa ativa] falha ao enviar a primeira mensagem", error);
@@ -530,7 +533,7 @@ export async function startOutboundConversation(
      * saiu, senão a atendente reescreve e a cliente recebe duas vezes.
      */
     if ((await ultimaMensagemId(resolvida.conversationId)) !== marca) {
-      await assumirConversa(ctx, resolvida.conversationId);
+      if (!input.automated) await assumirConversa(ctx, resolvida.conversationId);
       return falha("ENVIO_FALHOU", AVISO_MENSAGEM_JA_SAIU);
     }
 
@@ -551,7 +554,7 @@ export async function startOutboundConversation(
   }
 
   // (8) A conversa nasce COM DONO: quem escreveu.
-  await assumirConversa(ctx, resolvida.conversationId);
+  if (!input.automated) await assumirConversa(ctx, resolvida.conversationId);
 
   return {
     ok: true,

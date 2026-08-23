@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { whatsappConnections, whatsappWebhookEvents } from "@/db/schema";
@@ -65,9 +65,17 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     .onConflictDoNothing({ target: [whatsappWebhookEvents.connectionId, whatsappWebhookEvents.dedupeKey] })
     .returning({ id: whatsappWebhookEvents.id });
 
-  // Sem linha nova: já processamos este evento antes.
+  let logId = logged?.id ?? null;
+  // Uma falha anterior não pode transformar a reentrega em falso sucesso.
+  // Só descartamos o evento quando ele realmente terminou sem erro.
   if (!logged && dedupeKey) {
-    return NextResponse.json({ ok: true, duplicate: true });
+    const [existing] = await db
+      .select({ id: whatsappWebhookEvents.id, processedAt: whatsappWebhookEvents.processedAt, error: whatsappWebhookEvents.error })
+      .from(whatsappWebhookEvents)
+      .where(and(eq(whatsappWebhookEvents.connectionId, connection.id), eq(whatsappWebhookEvents.dedupeKey, dedupeKey)))
+      .limit(1);
+    if (existing?.processedAt && !existing.error) return NextResponse.json({ ok: true, duplicate: true });
+    logId = existing?.id ?? null;
   }
 
   // Sinal de vida da conexão: prova que o webhook está mesmo apontado para cá.
@@ -140,24 +148,24 @@ export async function POST(request: Request, context: { params: Promise<{ token:
         .where(eq(whatsappConnections.id, connection.id));
     }
 
-    if (logged) {
+    if (logId) {
       await db
         .update(whatsappWebhookEvents)
-        .set({ processedAt: new Date() })
-        .where(eq(whatsappWebhookEvents.id, logged.id));
+        .set({ processedAt: new Date(), error: null })
+        .where(eq(whatsappWebhookEvents.id, logId));
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error("[uazapi webhook] falha ao processar:", detail);
-    if (logged) {
+    if (logId) {
       await db
         .update(whatsappWebhookEvents)
-        .set({ error: detail.slice(0, 1000), processedAt: new Date() })
-        .where(eq(whatsappWebhookEvents.id, logged.id))
+        .set({ error: detail.slice(0, 1000), processedAt: null })
+        .where(eq(whatsappWebhookEvents.id, logId))
         .catch(() => {});
     }
-    return NextResponse.json({ ok: true, processed: false });
+    return NextResponse.json({ ok: false, processed: false }, { status: 503 });
   }
 }
 

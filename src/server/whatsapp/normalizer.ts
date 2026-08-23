@@ -109,6 +109,10 @@ function toDate(value: Json): Date {
   return new Date(n > 1e12 ? n : n * 1000);
 }
 
+function trueLike(value: Json): boolean {
+  return value === true || value === 1 || (typeof value === "string" && ["true", "1", "yes"].includes(value.toLowerCase()));
+}
+
 export function normalizeUazapiWebhook(raw: Json): WaEvent {
   if (!raw || typeof raw !== "object") return { kind: "ignored", reason: "payload_vazio" };
 
@@ -218,10 +222,17 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
     eventName === "messages" ||
     eventName === "message" ||
     eventName === "messages.upsert" ||
+    eventName === "messages_upsert" ||
+    eventName === "message.received" ||
+    eventName === "message.sent" ||
     (!eventName && (get(body, "messageid") || get(body, "chatid")));
   if (!isMessageEvent) return { kind: "ignored", reason: `evento_nao_suportado:${eventName || "?"}` };
 
-  const msg: Json = Array.isArray(body) ? body[0] : body;
+  const nestedMessages = asArray(get(body, "messages"));
+  const nestedMessage = get(body, "message");
+  const msg: Json = Array.isArray(body)
+    ? body[0]
+    : nestedMessages[0] ?? (nestedMessage && typeof nestedMessage === "object" ? nestedMessage : body);
   if (!msg || typeof msg !== "object") return { kind: "ignored", reason: "mensagem_vazia" };
 
   let remoteJid = firstString(
@@ -238,10 +249,10 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
   if (!remoteJid) return { kind: "ignored", reason: "sem_remote_jid" };
 
   const fromMe =
-    get(msg, "fromMe") === true ||
-    get(msg, "from_me") === true ||
-    get(msg, "IsFromMe") === true ||
-    get(msg, "key", "fromMe") === true;
+    trueLike(get(msg, "fromMe")) ||
+    trueLike(get(msg, "from_me")) ||
+    trueLike(get(msg, "IsFromMe")) ||
+    trueLike(get(msg, "key", "fromMe"));
   const isGroup = isGroupJid(remoteJid);
 
   /**

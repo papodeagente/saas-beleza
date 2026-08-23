@@ -234,7 +234,7 @@ export async function dispatchAppointmentCreatedAutomations(ctx: TenantContext, 
       .returning({ id: automationDispatches.id });
     if (!claimed) continue;
 
-    const result = await startOutboundConversation(ctx, { customerId: candidate.customerId, body: message });
+    const result = await startOutboundConversation(ctx, { customerId: candidate.customerId, body: message, automated: true });
     await db
       .update(automationDispatches)
       .set(result.ok
@@ -305,7 +305,7 @@ export async function dispatchDueAutomations(now = new Date()) {
         skipped += 1;
         continue;
       }
-      const result = await startOutboundConversation(ctx, { customerId: candidate.customerId, body: message });
+      const result = await startOutboundConversation(ctx, { customerId: candidate.customerId, body: message, automated: true });
       if (result.ok) {
         await db.update(automationDispatches).set({ status: "sent", sentAt: new Date() }).where(eq(automationDispatches.id, claimed.id));
         sent += 1;

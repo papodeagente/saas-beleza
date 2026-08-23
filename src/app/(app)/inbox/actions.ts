@@ -102,6 +102,7 @@ export type InboxDetail = {
     lastVisitAt: string | null;
     stage: "novo" | "ativo" | "recorrente" | "sumido";
     tags: string[];
+    appointmentsCount: number;
     nextAppointments: Array<{
       id: number;
       startsAt: string;

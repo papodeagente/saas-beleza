@@ -41,6 +41,23 @@ describe("normalizeUazapiWebhook", () => {
     expect(event.kind).toBe("message");
   });
 
+  it("desembrulha messages e reconhece mensagem enviada pelo celular", () => {
+    const event = normalizeUazapiWebhook({
+      event: "messages_upsert",
+      data: {
+        messages: [{
+          key: { id: "CEL1", remoteJid: "5592985621979@s.whatsapp.net", fromMe: "true" },
+          messageType: "Conversation",
+          text: "respondi pelo aparelho",
+        }],
+      },
+    });
+    expect(event).toMatchObject({
+      kind: "message",
+      message: { externalId: "CEL1", fromMe: true, body: "respondi pelo aparelho" },
+    });
+  });
+
   it("troca o chat opaco pelo telefone real quando ele vem em sender_pn", () => {
     const event = normalizeUazapiWebhook({
       EventType: "messages",

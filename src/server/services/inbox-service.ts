@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import {
@@ -9,6 +9,7 @@ import {
   customerTags,
   customers,
   messages,
+  payments,
   professionals,
   services,
   users,
@@ -17,6 +18,7 @@ import {
 import type { TenantContext } from "@/server/auth";
 import { whichHavePictures } from "@/server/services/profile-picture-service";
 import { formatBrPhone } from "@/server/whatsapp/phone";
+import { brPhoneVariants } from "@/server/services/outbound-conversation-service";
 
 /**
  * Inbox: a conversa e o contexto do cliente na mesma tela.
@@ -235,6 +237,7 @@ export type ConversationContext = {
   /** Derivado do histórico, não digitado: é o que resume a relação num olhar. */
   stage: "novo" | "ativo" | "recorrente" | "sumido";
   tags: string[];
+  appointmentsCount: number;
   nextAppointments: Array<{
     id: number;
     startsAt: Date;
@@ -363,7 +366,20 @@ export async function getConversation(
       .where(eq(customers.id, conversation.customerId))
       .limit(1);
 
-    const proximos = await db
+    // Cadastros antigos podem guardar o mesmo WhatsApp com/sem DDI e com/sem
+    // nono dígito. O Inbox precisa mostrar a relação inteira, mesmo antes de a
+    // gestão decidir mesclar as fichas duplicadas.
+    const variants = brPhoneVariants(conversation.phone);
+    const related = variants.length
+      ? await db
+          .select({ id: customers.id })
+          .from(customers)
+          .where(and(eq(customers.organizationId, ctx.organizationId), inArray(customers.phone, variants)))
+      : [];
+    const customerIds = [...new Set([conversation.customerId, ...related.map((row) => row.id)])];
+
+    const [allAppointments, appointmentMetrics, paymentMetrics] = await Promise.all([
+      db
       .select({
         id: appointments.id,
         startsAt: appointments.startsAt,
@@ -377,12 +393,23 @@ export async function getConversation(
       .where(
         and(
           eq(appointments.organizationId, ctx.organizationId),
-          eq(appointments.customerId, conversation.customerId),
-          gte(appointments.startsAt, new Date()),
+          inArray(appointments.customerId, customerIds),
         ),
       )
-      .orderBy(asc(appointments.startsAt))
-      .limit(4);
+      .orderBy(desc(appointments.startsAt)),
+      db
+        .select({
+          visitsCount: sql<number>`count(*) filter (where ${appointments.status} = 'completed')::int`.mapWith(Number),
+          noShowCount: sql<number>`count(*) filter (where ${appointments.status} = 'no_show')::int`.mapWith(Number),
+          lastVisitAt: sql<Date | null>`max(${appointments.startsAt}) filter (where ${appointments.status} = 'completed')`,
+        })
+        .from(appointments)
+        .where(and(eq(appointments.organizationId, ctx.organizationId), inArray(appointments.customerId, customerIds))),
+      db
+        .select({ totalSpentCents: sql<number>`coalesce(sum(${payments.amountCents}), 0)::int`.mapWith(Number) })
+        .from(payments)
+        .where(and(eq(payments.organizationId, ctx.organizationId), inArray(payments.customerId, customerIds))),
+    ]);
 
     const tags = await db
       .select({ name: customerTags.name })
@@ -392,11 +419,16 @@ export async function getConversation(
       .limit(8);
 
     if (customer) {
+      const metrics = appointmentMetrics[0] ?? { visitsCount: 0, noShowCount: 0, lastVisitAt: null };
+      const totalSpentCents = paymentMetrics[0]?.totalSpentCents ?? 0;
       context = {
         ...customer,
-        stage: customerStage(customer.visitsCount, customer.lastVisitAt),
+        ...metrics,
+        totalSpentCents,
+        stage: customerStage(metrics.visitsCount, metrics.lastVisitAt),
         tags: tags.map((t) => t.name),
-        nextAppointments: proximos,
+        appointmentsCount: allAppointments.length,
+        nextAppointments: allAppointments,
       };
     }
   }

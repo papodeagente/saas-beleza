@@ -6,6 +6,7 @@ import type { TenantContext } from "@/server/auth";
 import type { NormalizedMessage, WaMessageKind } from "@/server/whatsapp/normalizer";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { resolveConversation } from "@/server/services/conversation-resolver";
+import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
   deleteMessage,
   downloadMessageMedia,
@@ -231,6 +232,11 @@ export async function sendMessageToConversation(
     .update(conversations)
     .set({ lastMessageAt: now, lastOutboundAt: now, unreadCount: 0 })
     .where(eq(conversations.id, conversationId));
+
+  // O eco do webhook é deduplicado pelo id externo e, portanto, não publica
+  // outro evento. Publicar aqui é o que faz automações e envios da IA surgirem
+  // instantaneamente em todas as abas abertas do Inbox.
+  await publishInboxEvent(organizationId, { type: "message", conversationId });
 
   // A mídia enviada chegou como base64 e não deve ocupar megabytes no banco.
   // Recuperar o link do provedor agora mantém foto, vídeo e áudio visíveis
