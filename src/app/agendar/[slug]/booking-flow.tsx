@@ -2,7 +2,7 @@
 
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowLeft, Check, ChevronRight, Clock, MapPin } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Check, ChevronRight, Clock, MapPin, ShieldCheck, Sparkles } from "lucide-react";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -154,39 +154,44 @@ export function BookingFlow({
 
   if (step === "done" && confirmation) {
     return (
-      <main className="mx-auto flex min-h-dvh max-w-[440px] flex-col justify-center px-5 py-12">
-        <div className="flex size-11 items-center justify-center rounded-full bg-positive-soft">
-          <Check className="size-5 text-positive" aria-hidden />
+      <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,#f1e5fb_0,transparent_36%),var(--color-surface)] px-5 py-10 sm:py-16">
+        <div className="mx-auto max-w-[560px] overflow-hidden rounded-overlay bg-surface-raised shadow-[0_28px_80px_rgb(67_35_88/0.16)]">
+          <div className="bg-brand px-7 py-8 text-white sm:px-10">
+            <div className="flex size-12 items-center justify-center rounded-pill bg-white/16 ring-1 ring-white/25">
+              <Check className="size-6" aria-hidden />
+            </div>
+            <p className="mt-6 text-eyebrow text-white/75">Tudo certo</p>
+            <h1 className="mt-2 text-display text-white">Seu horário está reservado</h1>
+            <p className="mt-2 text-body text-white/80">{organizationName} espera por você.</p>
+          </div>
+          <div className="px-7 py-7 sm:px-10">
+            <dl className="divide-y divide-line rounded-card border border-line">
+              <Detail label="Serviço" value={confirmation.serviceName} />
+              <Detail label="Quando" value={confirmation.whenLabel.charAt(0).toUpperCase() + confirmation.whenLabel.slice(1)} />
+              <Detail label="Com" value={confirmation.professionalName} />
+              <Detail label="Onde" value={confirmation.branchName} hint={confirmation.branchAddress ?? undefined} />
+            </dl>
+            <p className="mt-5 text-caption text-ink-secondary">
+              Para remarcar ou cancelar, fale diretamente com a recepção.
+            </p>
+            <Footer />
+          </div>
         </div>
-        <h1 className="mt-5 text-display text-ink">Agendamento confirmado</h1>
-        <p className="mt-2 text-body text-ink-secondary">
-          Guarde os dados abaixo — não enviamos mensagem de confirmação. Se precisar remarcar ou
-          cancelar, fale com a recepção da {organizationName}.
-        </p>
-
-        <Card className="mt-7">
-          <dl className="divide-y divide-line">
-            <Detail label="Serviço" value={confirmation.serviceName} />
-            <Detail
-              label="Quando"
-              value={confirmation.whenLabel.charAt(0).toUpperCase() + confirmation.whenLabel.slice(1)}
-            />
-            <Detail label="Com" value={confirmation.professionalName} />
-            <Detail
-              label="Onde"
-              value={confirmation.branchName}
-              hint={confirmation.branchAddress ?? undefined}
-            />
-          </dl>
-        </Card>
-
-        <Footer />
       </main>
     );
   }
 
   return (
-    <main className="mx-auto min-h-dvh max-w-[440px] px-5 pb-28 pt-6 sm:pt-14">
+    <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,#eee0f9_0,transparent_34%),var(--color-surface)] lg:p-6">
+      <div className="mx-auto grid min-h-dvh max-w-[1120px] overflow-hidden bg-surface-raised shadow-[0_30px_90px_rgb(67_35_88/0.14)] lg:min-h-[calc(100dvh-48px)] lg:grid-cols-[360px_minmax(0,1fr)] lg:rounded-overlay">
+        <BookingAside
+          organizationName={organizationName}
+          step={step}
+          service={service}
+          branch={branch}
+          slot={slot}
+        />
+        <div className="min-w-0 px-5 pb-28 pt-7 sm:px-10 sm:pt-10 lg:px-14 lg:pb-12 lg:pt-12">
       <header>
         {step !== "service" ? (
           <button
@@ -209,7 +214,7 @@ export function BookingFlow({
           </button>
         ) : null}
 
-        <p className="text-section">{organizationName}</p>
+        <p className="text-eyebrow text-accent">Agendamento online</p>
         <h1 className="mt-1.5 text-display text-ink">
           {step === "service"
             ? "O que você quer fazer?"
@@ -243,27 +248,28 @@ export function BookingFlow({
           {groupByCategory(services).map(([category, list]) => (
             <section key={category ?? "sem-categoria"}>
               {category ? <h2 className="mb-2 text-section">{category}</h2> : null}
-              <Card>
-                <ul className="divide-y divide-line">
+              <ul className="grid gap-3 sm:grid-cols-2">
                   {list.map((item) => (
-                    <li key={item.id}>
+                    <li key={item.id} className="min-w-0">
                       <button
                         type="button"
                         onClick={() => chooseService(item)}
-                        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:bg-surface-sunken sm:hover:bg-surface-sunken"
+                        className="group flex h-full min-h-[104px] w-full items-center gap-3 rounded-card border border-line bg-surface-raised px-4 py-4 text-left shadow-card transition-[border-color,box-shadow,transform] duration-200 active:scale-[0.99] sm:hover:-translate-y-0.5 sm:hover:border-accent/35 sm:hover:shadow-[var(--shadow-card-hover)]"
                       >
                         <span className="min-w-0 flex-1">
-                          <span className="block text-label text-ink">{item.name}</span>
+                          <span className="block text-card text-ink">{item.name}</span>
+                          {item.description ? <span className="mt-1 line-clamp-2 block text-caption text-ink-secondary">{item.description}</span> : null}
                           <span className="mt-1 block text-caption text-ink-secondary">
                             {item.durationMin} min · <span className="tabular">{formatBRL(item.priceCents)}</span>
                           </span>
                         </span>
-                        <ChevronRight className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-pill bg-accent-soft text-accent transition-colors group-hover:bg-accent group-hover:text-white">
+                          <ChevronRight className="size-4" aria-hidden />
+                        </span>
                       </button>
                     </li>
                   ))}
-                </ul>
-              </Card>
+              </ul>
             </section>
           ))}
           {services.length === 0 ? (
@@ -279,14 +285,13 @@ export function BookingFlow({
 
       {/* 2. Unidade */}
       {step === "branch" ? (
-        <Card className="mt-7">
-          <ul className="divide-y divide-line">
+        <ul className="mt-7 grid gap-3">
             {branches.map((item) => (
               <li key={item.id}>
                 <button
                   type="button"
                   onClick={() => chooseBranch(item)}
-                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:bg-surface-sunken sm:hover:bg-surface-sunken"
+                  className="flex w-full items-center gap-4 rounded-card border border-line bg-surface-raised px-4 py-4 text-left shadow-card transition-[border-color,box-shadow] hover:border-accent/35 hover:shadow-[var(--shadow-card-hover)]"
                 >
                   <MapPin className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
                   <span className="min-w-0 flex-1">
@@ -299,8 +304,7 @@ export function BookingFlow({
                 </button>
               </li>
             ))}
-          </ul>
-        </Card>
+        </ul>
       ) : null}
 
       {/* 3. Data e horário */}
@@ -322,7 +326,7 @@ export function BookingFlow({
                       className={cn(
                         "flex min-w-[64px] shrink-0 flex-col items-center rounded-card border px-3 py-2 transition-colors duration-[120ms]",
                         active
-                          ? "border-ink bg-ink text-white"
+                          ? "border-accent bg-accent text-white shadow-[0_8px_20px_rgb(116_55_183/0.22)]"
                           : "border-line bg-surface-raised text-ink hover:border-line-strong",
                       )}
                     >
@@ -382,8 +386,8 @@ export function BookingFlow({
           </div>
 
           {slot ? (
-            <div className="fixed inset-x-0 bottom-0 border-t border-line bg-surface-raised/95 px-5 py-3 shadow-sticky backdrop-blur">
-              <div className="mx-auto flex max-w-[440px] items-center justify-between gap-3">
+            <div className="fixed inset-x-0 bottom-0 border-t border-line bg-surface-raised/95 px-5 py-3 shadow-sticky backdrop-blur lg:sticky lg:-mx-14 lg:mt-8 lg:px-14">
+              <div className="mx-auto flex max-w-[620px] items-center justify-between gap-3">
                 <span className="text-caption text-ink-secondary">
                   {format(new Date(slot.startsAt), "d 'de' MMM", { locale: ptBR })} às{" "}
                   <span className="text-label text-ink tabular">{slot.label}</span>
@@ -400,8 +404,12 @@ export function BookingFlow({
       {/* 4. Identificação */}
       {step === "identify" && slot ? (
         <div className="mt-7 space-y-4">
-          <Card className="px-4 py-3">
-            <p className="text-body text-ink">
+          <Card className="flex gap-3 border border-accent/15 bg-accent-soft/60 px-4 py-4 shadow-none">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-pill bg-surface-raised text-accent shadow-card">
+              <CalendarCheck className="size-4" aria-hidden />
+            </span>
+            <div>
+            <p className="text-body font-semibold text-ink">
               {format(new Date(slot.startsAt), "EEEE, d 'de' MMMM", { locale: ptBR }).replace(
                 /^./,
                 (c) => c.toUpperCase(),
@@ -412,6 +420,7 @@ export function BookingFlow({
               Com {slot.professionalName}
               {branch ? ` · ${branch.name}` : ""}
             </p>
+            </div>
           </Card>
 
           <Field label="Seu nome" htmlFor="nome">
@@ -491,7 +500,84 @@ export function BookingFlow({
       ) : null}
 
       <Footer />
+        </div>
+      </div>
     </main>
+  );
+}
+
+function BookingAside({
+  organizationName,
+  step,
+  service,
+  branch,
+  slot,
+}: {
+  organizationName: string;
+  step: Step;
+  service: Service | null;
+  branch: Branch | null;
+  slot: PublicSlot | null;
+}) {
+  const steps: Array<{ key: Step; label: string }> = [
+    { key: "service", label: "Serviço" },
+    { key: "time", label: "Data e hora" },
+    { key: "identify", label: "Seus dados" },
+  ];
+  const current = step === "branch" ? 0 : step === "time" ? 1 : step === "identify" ? 2 : 0;
+
+  return (
+    <aside className="relative overflow-hidden bg-brand px-5 py-6 text-white sm:px-10 lg:px-9 lg:py-10">
+      <div aria-hidden className="absolute -right-20 -top-20 size-64 rounded-pill border border-white/10" />
+      <div aria-hidden className="absolute -bottom-24 -left-20 size-72 rounded-pill bg-white/5" />
+      <div className="relative flex items-center gap-3 lg:block">
+        <span className="flex size-10 items-center justify-center rounded-pill bg-white/14 ring-1 ring-white/20">
+          <Sparkles className="size-5" aria-hidden />
+        </span>
+        <div className="min-w-0 lg:mt-6">
+          <p className="truncate text-title text-white">{organizationName}</p>
+          <p className="mt-0.5 text-caption text-white/70">Cuidado no seu tempo</p>
+        </div>
+      </div>
+
+      <div className="relative mt-6 hidden lg:block">
+        <p className="max-w-[260px] text-display text-white">Reserve um momento só para você.</p>
+        <p className="mt-3 max-w-[260px] text-body text-white/72">Escolha o serviço e o melhor horário. Leva menos de dois minutos.</p>
+      </div>
+
+      <ol className="relative mt-6 grid grid-cols-3 gap-2 lg:mt-10 lg:block lg:space-y-5">
+        {steps.map((item, index) => {
+          const active = current === index;
+          const complete = current > index;
+          return (
+            <li key={item.key} className="flex items-center gap-3">
+              <span className={cn(
+                "flex size-7 shrink-0 items-center justify-center rounded-pill border text-meta font-semibold transition-colors",
+                active ? "border-white bg-white text-accent" : complete ? "border-white/40 bg-white/15 text-white" : "border-white/25 text-white/65",
+              )}>
+                {complete ? <Check className="size-3.5" aria-hidden /> : index + 1}
+              </span>
+              <span className={cn("hidden text-label lg:block", active ? "font-semibold text-white" : "text-white/65")}>{item.label}</span>
+            </li>
+          );
+        })}
+      </ol>
+
+      {service ? (
+        <div className="relative mt-10 hidden rounded-card border border-white/15 bg-white/8 p-4 backdrop-blur lg:block">
+          <p className="text-meta font-semibold uppercase tracking-[0.1em] text-white/60">Sua escolha</p>
+          <p className="mt-2 text-card text-white">{service.name}</p>
+          <p className="mt-1 text-caption text-white/70">{service.durationMin} min · {formatBRL(service.priceCents)}</p>
+          {slot ? <p className="mt-3 border-t border-white/15 pt-3 text-label text-white">{slot.label} · {slot.professionalName}</p> : null}
+          {branch ? <p className="mt-1 text-caption text-white/65">{branch.name}</p> : null}
+        </div>
+      ) : null}
+
+      <div className="relative mt-8 hidden items-center gap-2 text-caption text-white/65 lg:flex">
+        <ShieldCheck className="size-4" aria-hidden />
+        Seus dados ficam protegidos
+      </div>
+    </aside>
   );
 }
 

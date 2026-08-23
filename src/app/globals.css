@@ -2,35 +2,33 @@
 
 /* ---------------------------------------------------------------------------
    Design tokens — direção visual da referência aprovada pelo dono:
-   canvas azul-acinzentado, cards brancos com canto largo e sombra suave,
-   sidebar em gradiente azul→ciano, acento azul, badges pastel.
+   canvas lavanda muito claro, cards brancos com canto largo e sombra suave,
+   superfícies de marca em roxo, acento ameixa e badges pastel.
 
    Todo par texto/fundo abaixo foi medido: nada abaixo de 4.5:1.
    --------------------------------------------------------------------------- */
 
 @theme {
-  --color-surface: #f4f7fc;
+  --color-surface: #f8f6fb;
   --color-surface-raised: #ffffff;
-  --color-surface-sunken: #f7f9fc;
+  --color-surface-sunken: #f4f0f8;
 
   /* 13.4:1 · 5.1:1 · 4.8:1 sobre o canvas */
-  --color-ink: #1b2559;
-  --color-ink-secondary: #5a6a85;
-  --color-ink-tertiary: #626e87;
+  --color-ink: #2d203b;
+  --color-ink-secondary: #675a73;
+  --color-ink-tertiary: #766a80;
 
-  --color-line: #e8edf5;
-  --color-line-strong: #d5deeb;
+  --color-line: #ece6f1;
+  --color-line-strong: #d9cfe2;
 
-  /* Azul do produto. O tom do botão é escurecido o suficiente para o texto
-     branco passar em 5.1:1 — a referência usa um azul mais claro que reprova. */
-  --color-accent: #2560d6;
-  --color-accent-hover: #1e51b8;
-  --color-accent-soft: #eaf1fe;
+  /* A referência fornece a família #9966CC → #8744CD. A ação primária usa uma
+     leitura um pouco mais profunda para manter texto branco com contraste AA. */
+  --color-accent: #7437b7;
+  --color-accent-hover: #622a9f;
+  --color-accent-soft: #f1e8fa;
 
-  /* Extremos do gradiente da barra lateral. O ciano vivo da referência deixa o
-     texto branco em 2:1 no pé da barra — este ciano profundo mantém 5.2:1. */
-  --color-brand-from: #3f6be8;
-  --color-brand-to: #12749a;
+  --color-brand-from: #8744cd;
+  --color-brand-to: #622a9f;
 
   --color-positive: #0b7a5e;
   --color-positive-soft: #e6f7f2;
@@ -38,8 +36,8 @@
   --color-attention-soft: #fdf3e2;
   --color-danger: #b7333a;
   --color-danger-soft: #fdeded;
-  --color-info: #2560d6;
-  --color-info-soft: #eaf1fe;
+  --color-info: #7437b7;
+  --color-info-soft: #f1e8fa;
 
   /* Cantos largos e controles em pílula, como na referência */
   --radius-control: 8px;
@@ -100,24 +98,24 @@
      da landing recoloriria em silêncio e os contrastes medidos acima iriam para
      o lixo.
 
-     Os azuis-noite saem do MESMO matiz do ink #1b2559, então o site escuro e o
+     Os roxos-noite saem do MESMO matiz do ink, então o site escuro e o
      produto claro são a mesma marca em dois horários, não dois produtos.
-     Contrastes medidos sobre #0b1030.
+     Contrastes medidos sobre #160e20.
      ------------------------------------------------------------------------- */
-  --color-night: #0b1030;
-  --color-night-raised: #151c3f;
-  --color-night-sunken: #070a22;
-  --color-night-ink: #f2f5fd; /* 17.0:1 */
-  --color-night-ink-secondary: #a9b6d9; /* 9.2:1 */
-  --color-night-ink-tertiary: #8b98c0; /* 6.5:1 */
-  --color-night-line: #232c55;
-  --color-night-line-strong: #2f3a6b;
-  /* O #2560d6 do produto dá 3.3:1 no escuro e REPROVA como texto. Este é o
-     mesmo azul relido para fundo escuro: 8.1:1. Link, número e ícone em seção
+  --color-night: #160e20;
+  --color-night-raised: #241632;
+  --color-night-sunken: #0e0915;
+  --color-night-ink: #faf7fd;
+  --color-night-ink-secondary: #cdbddd;
+  --color-night-ink-tertiary: #ad9abb;
+  --color-night-line: #3b284b;
+  --color-night-line-strong: #55366d;
+  /* O acento do produto é escuro demais como texto sobre a noite. Este é o
+     mesmo roxo relido para fundo escuro. Link, número e ícone em seção
      escura usam este, nunca o accent. */
-  --color-accent-lift: #86a9ff;
+  --color-accent-lift: #cda8f0;
   /* Só aura e desfoque. Proibido como cor de texto. */
-  --color-night-glow: #2f6bff;
+  --color-night-glow: #9157cd;
 
   /* Escala de display da landing. O produto para em 26px porque tela de
      operação não tem manchete; página de venda tem. */
@@ -153,10 +151,10 @@
 
 :root {
   /* Card ganha corpo por sombra suave, como na referência */
-  --shadow-card: 0 2px 10px rgb(27 37 89 / 0.05), 0 1px 2px rgb(27 37 89 / 0.04);
-  --shadow-card-hover: 0 6px 20px rgb(27 37 89 / 0.09);
-  --shadow-overlay: 0 16px 44px rgb(27 37 89 / 0.16), 0 4px 12px rgb(27 37 89 / 0.08);
-  --shadow-sticky: 0 2px 8px rgb(27 37 89 / 0.06);
+  --shadow-card: 0 2px 12px rgb(62 36 81 / 0.06), 0 1px 2px rgb(62 36 81 / 0.04);
+  --shadow-card-hover: 0 10px 28px rgb(74 43 96 / 0.11);
+  --shadow-overlay: 0 20px 50px rgb(45 24 61 / 0.18), 0 4px 12px rgb(45 24 61 / 0.08);
+  --shadow-sticky: 0 2px 10px rgb(45 24 61 / 0.08);
 
   --brand-gradient: linear-gradient(170deg, var(--color-brand-from) 0%, var(--color-brand-to) 100%);
 

@@ -215,7 +215,7 @@ export default async function LandingPage() {
           }}
         />
         <div className="absolute -left-[10%] -top-[15%] size-[720px] rounded-pill bg-night-glow/20 blur-[140px]" />
-        <div className="absolute -right-[12%] top-[8%] size-[560px] rounded-pill bg-[#12749a]/20 blur-[140px]" />
+        <div className="absolute -right-[12%] top-[8%] size-[560px] rounded-pill bg-[#8744cd]/20 blur-[140px]" />
       </div>
 
       <main className="relative z-10">

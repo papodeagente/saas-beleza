@@ -1,6 +1,6 @@
 # Design System
 
-**Direção:** dashboard clínico claro e confiável, na linguagem visual da referência aprovada pelo dono do produto — canvas azul-acinzentado, cards brancos de canto largo com sombra suave, barra lateral em gradiente azul→ciano, acento azul e badges pastel.
+**Direção:** produto claro, acolhedor e sofisticado — canvas lavanda quase branco, cards brancos de canto largo, superfícies de marca em gradiente roxo e badges pastel. A cor transmite criatividade sem tornar a interface feminina de forma estereotipada.
 
 O produto é usado 8h por dia por recepcionistas. Toda decisão abaixo serve a dois objetivos: **hierarquia** (o que importa se destaca sozinho) e **legibilidade medida** (nenhum par texto/fundo abaixo de 4.5:1 — os números estão anotados).
 
@@ -10,22 +10,22 @@ O produto é usado 8h por dia por recepcionistas. Toda decisão abaixo serve a d
 
 | Token | Valor | Uso |
 |---|---|---|
-| `--color-surface` | `#F4F7FC` | canvas da aplicação |
+| `--color-surface` | `#F8F6FB` | canvas da aplicação |
 | `--color-surface-raised` | `#FFFFFF` | card, lista, painel |
 | `--color-surface-sunken` | `#F7F9FC` | well, campo desabilitado |
-| `--color-ink` | `#1B2559` | texto principal — 13.4:1 |
-| `--color-ink-secondary` | `#5A6A85` | todo texto secundário — 5.1:1 |
-| `--color-ink-tertiary` | `#626E87` | ícone, placeholder, separador — 4.8:1 |
-| `--color-line` | `#E8EDF5` | borda hairline |
-| `--color-line-strong` | `#D5DEEB` | borda de campo, divisor forte |
-| `--color-accent` | `#2560D6` | ação primária, seleção, link |
-| `--color-accent-soft` | `#EAF1FE` | fundo de seleção e badge de acento |
-| `--color-brand-from` / `--color-brand-to` | `#3F6BE8` → `#12749A` | gradiente da barra lateral |
+| `--color-ink` | `#2D203B` | texto principal |
+| `--color-ink-secondary` | `#675A73` | todo texto secundário |
+| `--color-ink-tertiary` | `#766A80` | ícone, placeholder, separador |
+| `--color-line` | `#ECE6F1` | borda hairline |
+| `--color-line-strong` | `#D9CFE2` | borda de campo, divisor forte |
+| `--color-accent` | `#7437B7` | ação primária, seleção, link |
+| `--color-accent-soft` | `#F1E8FA` | fundo de seleção e badge de acento |
+| `--color-brand-from` / `--color-brand-to` | `#8744CD` → `#622A9F` | gradiente de marca |
 
 Status, sempre em par sólido/soft (todos ≥ 4.7:1):
 `positive #0B7A5E / #E6F7F2` · `attention #8A5A07 / #FDF3E2` · `danger #B7333A / #FDEDED` · `info #2560D6 / #EAF1FE`
 
-**Duas correções deliberadas à referência.** O azul dela é mais claro e deixa o texto branco do botão em ~3.9:1; o nosso é escurecido até 5.6:1. O ciano vivo do fim do gradiente deixa o texto branco do pé da barra em 2:1; o nosso ciano profundo mantém 5.2:1. A interpolação linear garante que nenhum ponto intermediário do gradiente fique abaixo de 4.7:1.
+**Correção deliberada à referência.** Os roxos da imagem orientam a identidade; ações pequenas usam uma leitura mais profunda para garantir contraste AA com texto branco.
 
 Cor **indica** (ação, status, seleção, atenção), nunca decora. Gráfico sem semântica de status é monocromático. Cor de identidade cadastrada (profissional) passa por `identityTint` de `src/lib/color.ts`, que escurece o texto só o necessário para cruzar 4.5:1 — cor livre não tem garantia de contraste.
 
@@ -60,7 +60,7 @@ Números que se alinham em coluna usam `tabular`.
 
 ## 4. Componentes (`src/components/ui`)
 
-`Button` (primary azul / secondary contornado azul / ghost / danger; em pílula, com `loading`) · `Input` / `Textarea` / `Field` (erro associado por `aria-describedby`) · `Select` nativo estilizado · `Badge` pastel em pílula · `Avatar` (iniciais com contraste garantido) · `Card` / `CardHeader` / `CardList` / `DataRow` · `Metric` / `MetricRow` (um card por número) · `Sheet` e `Dialog` · `EmptyState` (`size="sm"` para estado rotineiro) · `Skeleton`.
+`Button` (primary roxo / secondary contornado / ghost / danger; em pílula, com `loading`) · `Input` / `Textarea` / `Field` (erro associado por `aria-describedby`) · `Select` nativo estilizado · `Badge` pastel em pílula · `Avatar` (iniciais com contraste garantido) · `Card` / `CardHeader` / `CardList` / `DataRow` · `Metric` / `MetricRow` (um card por número) · `Sheet` e `Dialog` · `EmptyState` (`size="sm"` para estado rotineiro) · `Skeleton`.
 
 Do shell: `PageHeader` (barra branca, título grande, ações à direita), `PageBody`, `SectionLabel`.
 
@@ -84,10 +84,10 @@ As duas convivem sem conflito por causa de uma regra única: **a landing só adi
 
 | | Produto | Landing |
 |---|---|---|
-| Chão | `--color-surface` `#f4f7fc` | `--color-night` `#0b1030` |
-| Texto | `--color-ink` `#1b2559` | `--color-night-ink` `#f2f5fd` |
-| Azul de texto | `--color-accent` `#2560d6` | `--color-accent-lift` `#86a9ff` |
+| Chão | `--color-surface` `#f8f6fb` | `--color-night` `#160e20` |
+| Texto | `--color-ink` `#2d203b` | `--color-night-ink` `#faf7fd` |
+| Roxo de texto | `--color-accent` `#7437b7` | `--color-accent-lift` `#cda8f0` |
 
-O azul-noite é derivado do `ink` do produto (mesmo matiz), então as duas superfícies são a mesma marca em dois horários. **`--color-accent` reprova como texto sobre o escuro (3,3:1); use `--color-accent-lift` (8,1:1).** Confundir os dois é o erro mais provável de quem for mexer aqui, porque "o azul do app" tem o mesmo nome nos dois lugares.
+O roxo-noite é derivado do `ink` do produto, então as duas superfícies são a mesma marca em dois horários. Em fundo escuro, use `--color-accent-lift` para texto e ícones.
 
 Três regras escopadas por `[data-surface="night"]` vivem em `globals.css` **dentro de `@layer base`** (fora dela venceriam as utilities do Tailwind): o chão via `body:has()`, a cor das bordas e o anel de foco. `src/lib/design-tokens.test.ts` falha se alguém redefinir um token do produto sob escopo ou esquecer de registrar uma escala nova no tailwind-merge.
