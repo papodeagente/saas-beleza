@@ -144,6 +144,58 @@ it("reconhece o QR de pareamento e o entrega pronto para exibir", () => {
     expect(event.qrCode).toBe("data:image/png;base64,AAAA");
   });
 
+  it("lê mensagem de grupo no formato real: corpo em `message`, chat na raiz", () => {
+    // Formato observado em produção: a mensagem vem em `message`, o chat vem
+    // fora dela, e quem falou tem nome próprio dentro do grupo.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      instanceName: "Bruno Barbosa - Teste",
+      chat: { wa_chatid: "120363294948429479@g.us", wa_isGroup: true, wa_name: "MANADA MACEIÓ" },
+      message: {
+        messageid: "3A990FEDB28B9627622E",
+        chatid: "120363294948429479@g.us",
+        isGroup: true,
+        fromMe: false,
+        messageType: "Conversation",
+        text: "bom dia a todos",
+        sender: "169548649083108@lid",
+        senderName: "Huyldon Cunha",
+        sender_pn: "558287643339@s.whatsapp.net",
+        groupName: "MANADA MACEIÓ",
+      },
+    });
+
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.remoteJid).toBe("120363294948429479@g.us");
+    expect(event.message.isGroup).toBe(true);
+    // O título da conversa é o grupo; quem falou é atributo da mensagem.
+    expect(event.message.groupName).toBe("MANADA MACEIÓ");
+    expect(event.message.senderName).toBe("Huyldon Cunha");
+    expect(event.message.senderPhone).toBe("558287643339");
+    expect(event.message.body).toBe("bom dia a todos");
+  });
+
+  it("não atribui remetente de grupo a uma conversa de duas pessoas", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      instanceName: "c",
+      chat: { wa_chatid: "558481282118@s.whatsapp.net", wa_isGroup: false, wa_name: "Alexandry" },
+      message: {
+        messageid: "M2",
+        chatid: "558481282118@s.whatsapp.net",
+        isGroup: false,
+        fromMe: false,
+        messageType: "Conversation",
+        text: "oi",
+        senderName: "Alexandry",
+        sender_pn: "558481282118@s.whatsapp.net",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.groupName).toBeNull();
+    expect(event.message.senderPhone).toBeNull();
+  });
+
     it("ignora o que não sabe tratar, em vez de inventar mensagem", () => {
     expect(normalizeUazapiWebhook({ EventType: "presence", instance: { name: "c" } }).kind).toBe("ignored");
     expect(normalizeUazapiWebhook(null).kind).toBe("ignored");

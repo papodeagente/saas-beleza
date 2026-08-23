@@ -62,7 +62,9 @@ export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMe
     connectionId: connection.id,
     remoteJid: msg.remoteJid,
     phone: msg.phone,
-    contactName: msg.fromMe ? null : msg.senderName,
+    // Em grupo o título é o nome do grupo; usar quem falou faria a conversa
+    // trocar de nome a cada mensagem.
+    contactName: msg.isGroup ? msg.groupName : msg.fromMe ? null : msg.senderName,
     isGroup: msg.isGroup,
   });
 

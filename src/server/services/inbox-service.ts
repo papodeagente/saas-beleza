@@ -114,6 +114,9 @@ export async function listConversations(
     .where(
       and(
         eq(conversations.organizationId, ctx.organizationId),
+        // Grupo não é atendimento: tem caixa própria, com classificação em vez
+        // de fila. Misturar os dois enche a fila de clientes com ruído.
+        eq(conversations.isGroup, false),
         tabFilter(ctx, tab),
         search
           ? or(
@@ -144,7 +147,7 @@ export async function countByTab(ctx: TenantContext): Promise<InboxCounts> {
       todos: sql<number>`count(*) filter (where ${conversations.status} = 'open')::int`,
     })
     .from(conversations)
-    .where(eq(conversations.organizationId, ctx.organizationId));
+    .where(and(eq(conversations.organizationId, ctx.organizationId), eq(conversations.isGroup, false)));
   return row ?? { meus: 0, fila: 0, todos: 0 };
 }
 

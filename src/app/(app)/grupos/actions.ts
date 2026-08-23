@@ -5,6 +5,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole, requireSession } from "@/server/auth";
 import {
+  cancelScheduled,
+  listScheduledForGroup,
+  scheduleGroupMessage,
+} from "@/server/services/scheduled-group-messages";
+import {
   classifyGroup,
   getGroupThread,
   listGroupInbox,
@@ -391,5 +396,102 @@ export async function summarizeGroupAction(
         ? "Falta a chave do provedor de IA no servidor para gerar resumos."
         : mensagem,
     };
+  }
+}
+
+// ── Mensagens programadas ─────────────────────────────────────────────────
+
+const agendarSchema = z.object({
+  jid: z.string().trim().endsWith("@g.us"),
+  groupName: z.string().trim().max(120).optional(),
+  body: z.string().trim().max(4000).default(""),
+  mentionAll: z.boolean().default(false),
+  /** Data e hora local, no formato do campo do navegador. */
+  scheduledFor: z.string().min(10),
+  media: z
+    .object({
+      kind: z.enum(["image", "video", "document", "ptt"]),
+      dataUrl: z.string().startsWith("data:").max(8_000_000),
+      fileName: z.string().trim().max(200).optional(),
+    })
+    .nullable()
+    .default(null),
+});
+
+export async function scheduleGroupMessageAction(input: unknown): Promise<GroupResult<true>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const data = agendarSchema.parse(input);
+
+    const quando = new Date(data.scheduledFor);
+    if (Number.isNaN(quando.getTime())) return { ok: false, error: "Data inválida." };
+
+    await scheduleGroupMessage(ctx, {
+      groupJid: data.jid,
+      groupName: data.groupName ?? null,
+      body: data.body,
+      mentionAll: data.mentionAll,
+      scheduledFor: quando,
+      media: data.media,
+    });
+    revalidatePath("/grupos");
+    return { ok: true, data: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+export type ScheduledView = {
+  id: number;
+  body: string;
+  mediaKind: string | null;
+  mediaFileName: string | null;
+  hasMedia: boolean;
+  mentionAll: boolean;
+  scheduledFor: string;
+  status: "pending" | "sent" | "failed" | "cancelled";
+  sentAt: string | null;
+  error: string | null;
+};
+
+export async function listScheduledAction(jid: unknown): Promise<GroupResult<ScheduledView[]>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const alvo = jidSchema.parse(jid);
+    const itens = await listScheduledForGroup(ctx, alvo);
+    return {
+      ok: true,
+      data: itens.map((i) => ({
+        id: i.id,
+        body: i.body,
+        mediaKind: i.mediaKind,
+        mediaFileName: i.mediaFileName,
+        hasMedia: i.hasMedia,
+        mentionAll: i.mentionAll,
+        scheduledFor: i.scheduledFor.toISOString(),
+        status: i.status,
+        sentAt: i.sentAt?.toISOString() ?? null,
+        error: i.error,
+      })),
+    };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+export async function cancelScheduledAction(id: unknown): Promise<GroupResult<true>> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    await cancelScheduled(ctx, z.number().int().positive().parse(id));
+    revalidatePath("/grupos");
+    return { ok: true, data: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
   }
 }

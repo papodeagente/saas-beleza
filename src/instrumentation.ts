@@ -19,4 +19,8 @@ export async function register() {
 
   const { startAgentWorker } = await import("@/server/queues/agent-worker");
   startAgentWorker();
+
+  // Mensagens programadas não dependem de Redis: a hora está na linha do banco.
+  const { startScheduledMessagesWorker } = await import("@/server/queues/scheduled-messages-worker");
+  startScheduledMessagesWorker();
 }

@@ -31,6 +31,7 @@ function message(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage 
     phone: "5511955550001",
     senderName: "Cliente Teste",
     senderPhone: null,
+    groupName: null,
     kind: "text",
     body: "oi",
     mediaUrl: null,

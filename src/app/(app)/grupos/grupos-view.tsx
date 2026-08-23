@@ -3,6 +3,7 @@
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
+  CalendarClock,
   Check,
   Copy,
   Crown,
@@ -11,6 +12,7 @@ import {
   LogOut,
   Megaphone,
   MessageSquare,
+  Paperclip,
   Pin,
   Plus,
   Radar,
@@ -24,6 +26,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
@@ -44,8 +47,12 @@ import {
   groupThreadAction,
   joinGroupAction,
   leaveGroupAction,
+  cancelScheduledAction,
   listGroupInboxAction,
+  listScheduledAction,
   pinGroupAction,
+  scheduleGroupMessageAction,
+  type ScheduledView,
   resetInviteAction,
   sendToGroupAction,
   summarizeGroupAction,
@@ -453,7 +460,7 @@ function GroupRow({
   );
 }
 
-type Aba = "conversa" | "membros" | "ajustes";
+type Aba = "conversa" | "membros" | "programadas" | "ajustes";
 
 /**
  * O grupo aberto.
@@ -480,6 +487,7 @@ function GroupWorkspace({
   const [thread, setThread] = useState<ThreadMessage[]>([]);
   const [resumo, setResumo] = useState<string | null>(null);
   const [carregandoDetalhe, setCarregandoDetalhe] = useState(true);
+  const [agendadas, setAgendadas] = useState(0);
   const [resumindo, startResumindo] = useTransition();
   const [classificando, startClassificando] = useTransition();
 
@@ -597,6 +605,7 @@ function GroupWorkspace({
             [
               ["conversa", "Conversa"],
               ["membros", `Membros (${detalhe?.participantCount ?? group.participantCount})`],
+              ["programadas", agendadas > 0 ? `Programadas (${agendadas})` : "Programadas"],
               ["ajustes", "Ajustes"],
             ] as Array<[Aba, string]>
           ).map(([id, rotulo]) => (
@@ -646,6 +655,14 @@ function GroupWorkspace({
             loading={carregandoDetalhe}
             canManage={canManage}
             onUpdated={setDetalhe}
+          />
+        ) : null}
+
+        {aba === "programadas" ? (
+          <ScheduledPanel
+            group={group}
+            participantCount={detalhe?.participantCount ?? group.participantCount}
+            onCountChange={setAgendadas}
           />
         ) : null}
 
@@ -1167,6 +1184,275 @@ function JoinGroup({ onJoined }: { onJoined: () => void }) {
           Entrar
         </Button>
       </div>
+    </div>
+  );
+}
+
+const MEDIA_ROTULO: Record<string, string> = {
+  image: "Foto",
+  video: "Vídeo",
+  audio: "Áudio",
+  document: "Arquivo",
+};
+
+/** O tipo do anexo sai do próprio arquivo; ninguém deveria ter que escolher. */
+function tipoDoArquivo(file: File): "image" | "video" | "ptt" | "document" {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "ptt";
+  return "document";
+}
+
+function lerArquivo(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(String(leitor.result));
+    leitor.onerror = () => reject(new Error("Não consegui ler o arquivo."));
+    leitor.readAsDataURL(file);
+  });
+}
+
+/** Data e hora local no formato que o campo do navegador entende. */
+function paraCampoLocal(data: Date): string {
+  const deslocado = new Date(data.getTime() - data.getTimezoneOffset() * 60_000);
+  return deslocado.toISOString().slice(0, 16);
+}
+
+/**
+ * Mensagens programadas do grupo.
+ *
+ * O caso real é o aviso que precisa sair numa hora específica — promoção que
+ * abre, lembrete de véspera, recado de fim de expediente — e que ninguém quer
+ * depender de lembrar de mandar. Marcar todos existe porque em grupo grande a
+ * mensagem sem menção passa despercebida.
+ */
+function ScheduledPanel({
+  group,
+  participantCount,
+  onCountChange,
+}: {
+  group: GroupItem;
+  participantCount: number;
+  onCountChange: (quantidade: number) => void;
+}) {
+  const [itens, setItens] = useState<ScheduledView[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [texto, setTexto] = useState("");
+  const [marcarTodos, setMarcarTodos] = useState(false);
+  const [arquivo, setArquivo] = useState<{ file: File; kind: string } | null>(null);
+  const [quando, setQuando] = useState(() => paraCampoLocal(new Date(Date.now() + 3_600_000)));
+  const [salvando, startSalvando] = useTransition();
+  const inputArquivo = useRef<HTMLInputElement>(null);
+
+  const recarregar = useCallback(async () => {
+    const resultado = await listScheduledAction(group.jid);
+    setCarregando(false);
+    if (!resultado.ok) {
+      toast.error(resultado.error);
+      return;
+    }
+    setItens(resultado.data);
+    onCountChange(resultado.data.filter((i) => i.status === "pending").length);
+  }, [group.jid, onCountChange]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => void recarregar(), 0);
+    return () => clearTimeout(timer);
+  }, [recarregar]);
+
+  function agendar() {
+    startSalvando(async () => {
+      const media = arquivo
+        ? {
+            kind: arquivo.kind as "image" | "video" | "document" | "ptt",
+            dataUrl: await lerArquivo(arquivo.file),
+            fileName: arquivo.file.name,
+          }
+        : null;
+
+      const resultado = await scheduleGroupMessageAction({
+        jid: group.jid,
+        groupName: group.name,
+        body: texto.trim(),
+        mentionAll: marcarTodos,
+        scheduledFor: quando,
+        media,
+      });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      toast.success("Mensagem programada");
+      setTexto("");
+      setArquivo(null);
+      setMarcarTodos(false);
+      void recarregar();
+    });
+  }
+
+  const pendentes = itens.filter((i) => i.status === "pending");
+  const passadas = itens.filter((i) => i.status !== "pending");
+
+  return (
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-4 py-4">
+      <div className="flex flex-col gap-3 rounded-card border border-line bg-surface-raised p-4">
+        <p className="text-card text-ink">Programar mensagem</p>
+
+        <Textarea
+          value={texto}
+          onChange={(e) => setTexto(e.target.value)}
+          rows={4}
+          maxLength={4000}
+          placeholder="O que deve ser enviado neste grupo"
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => inputArquivo.current?.click()}>
+            <Paperclip aria-hidden />
+            {arquivo ? "Trocar arquivo" : "Foto, vídeo, áudio ou arquivo"}
+          </Button>
+          <input
+            ref={inputArquivo}
+            type="file"
+            hidden
+            accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              if (file.size > 5 * 1024 * 1024) {
+                toast.error("Arquivo muito grande para agendar. O limite é 5 MB.");
+                return;
+              }
+              setArquivo({ file, kind: tipoDoArquivo(file) });
+            }}
+          />
+          {arquivo ? (
+            <span className="flex items-center gap-1.5 rounded-control bg-surface-sunken px-2 py-1 text-caption text-ink">
+              {MEDIA_ROTULO[arquivo.kind === "ptt" ? "audio" : arquivo.kind]} · {arquivo.file.name}
+              <button type="button" onClick={() => setArquivo(null)} aria-label="Remover arquivo">
+                <X className="size-3.5" aria-hidden />
+              </button>
+            </span>
+          ) : null}
+        </div>
+
+        <label className="flex cursor-pointer items-start justify-between gap-3 border-t border-line pt-3">
+          <span className="min-w-0">
+            <span className="block text-label text-ink">Marcar todos</span>
+            <span className="block text-caption text-ink-secondary">
+              Notifica {participantCount > 0 ? `as ${participantCount} pessoas` : "todo mundo"} do grupo. A lista é lida
+              na hora do envio, então quem entrar até lá também é marcado.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={marcarTodos}
+            onChange={(e) => setMarcarTodos(e.target.checked)}
+            className="mt-1 size-5 shrink-0 accent-[var(--accent)]"
+          />
+        </label>
+
+        <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3">
+          <div className="min-w-[220px] flex-1">
+            <Field label="Enviar em" hint="Horário do seu computador.">
+              <Input type="datetime-local" value={quando} onChange={(e) => setQuando(e.target.value)} />
+            </Field>
+          </div>
+          <Button
+            size="md"
+            className="h-11"
+            loading={salvando}
+            disabled={!texto.trim() && !arquivo}
+            onClick={agendar}
+          >
+            <CalendarClock aria-hidden />
+            Programar
+          </Button>
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-meta font-medium tracking-wide text-ink-secondary uppercase">
+          Na fila ({pendentes.length})
+        </p>
+        {carregando ? (
+          <div className="h-16 animate-pulse rounded-card bg-surface-sunken" />
+        ) : pendentes.length === 0 ? (
+          <p className="rounded-control bg-surface-sunken px-3 py-4 text-center text-caption text-ink-secondary">
+            Nada programado para este grupo.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {pendentes.map((item) => (
+              <li key={item.id} className="rounded-card border border-line bg-surface-raised p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-label text-ink tabular">
+                      {format(new Date(item.scheduledFor), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                    </p>
+                    {item.body ? (
+                      <p className="mt-0.5 line-clamp-3 text-caption text-ink-secondary">{item.body}</p>
+                    ) : null}
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {item.hasMedia ? (
+                        <Badge tone="neutral">
+                          <Paperclip className="size-3" aria-hidden />
+                          {MEDIA_ROTULO[item.mediaKind ?? "document"] ?? "Arquivo"}
+                        </Badge>
+                      ) : null}
+                      {item.mentionAll ? <Badge tone="info">Marca todos</Badge> : null}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      if (!confirm("Cancelar este envio?")) return;
+                      const resultado = await cancelScheduledAction(item.id);
+                      if (!resultado.ok) {
+                        toast.error(resultado.error);
+                        return;
+                      }
+                      toast.success("Envio cancelado");
+                      void recarregar();
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {passadas.length > 0 ? (
+        <div>
+          <p className="mb-2 text-meta font-medium tracking-wide text-ink-secondary uppercase">Histórico</p>
+          <ul className="flex flex-col gap-1.5">
+            {passadas.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-start justify-between gap-2 rounded-control border border-line px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-caption text-ink">{item.body || "(só arquivo)"}</p>
+                  <p className="text-meta text-ink-secondary tabular">
+                    {format(new Date(item.scheduledFor), "dd/MM HH:mm", { locale: ptBR })}
+                  </p>
+                  {item.error ? <p className="mt-0.5 text-meta text-danger">{item.error}</p> : null}
+                </div>
+                <Badge
+                  tone={item.status === "sent" ? "positive" : item.status === "failed" ? "danger" : "neutral"}
+                >
+                  {item.status === "sent" ? "Enviada" : item.status === "failed" ? "Falhou" : "Cancelada"}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -81,6 +81,12 @@ export const waMessageStatus = pgEnum("wa_message_status", [
  */
 export const aiAgentStatus = pgEnum("ai_agent_status", ["off", "testing", "active"]);
 export const aiActionResult = pgEnum("ai_action_result", ["ok", "error", "blocked"]);
+export const scheduledMessageStatus = pgEnum("scheduled_message_status", [
+  "pending",
+  "sent",
+  "failed",
+  "cancelled",
+]);
 /**
  * Como o grupo é tratado pela clínica. Com centenas de grupos, é o que separa
  * o que merece atenção do que é só ruído.
@@ -640,6 +646,47 @@ export const whatsappGroups = pgTable(
   (t) => [
     uniqueIndex("wa_groups_org_jid_unique").on(t.organizationId, t.jid),
     index("wa_groups_org_classification_idx").on(t.organizationId, t.classification),
+  ],
+);
+
+/**
+ * Mensagem programada para um grupo.
+ *
+ * O arquivo é guardado aqui em base64 porque não há storage: uma foto de
+ * celular são poucos megabytes e o banco aguenta, enquanto montar storage só
+ * para isso seria uma peça de infraestrutura a mais para manter. O teto é
+ * menor que o do envio imediato justamente por isso.
+ *
+ * O envio é decidido por varredura periódica, não por um temporizador em
+ * memória: assim uma reinicialização do servidor não engole o agendamento.
+ */
+export const scheduledGroupMessages = pgTable(
+  "scheduled_group_messages",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    groupJid: text("group_jid").notNull(),
+    groupName: text("group_name"),
+    body: text("body").notNull().default(""),
+    mediaKind: waMessageType("media_kind"),
+    /** Arquivo em data URI. Nulo quando é só texto. */
+    mediaData: text("media_data"),
+    mediaFileName: text("media_file_name"),
+    /** Marca todo mundo do grupo no envio. */
+    mentionAll: boolean("mention_all").notNull().default(false),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+    status: scheduledMessageStatus("status").notNull().default("pending"),
+    createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("scheduled_group_org_idx").on(t.organizationId, t.groupJid, t.scheduledFor),
+    // Índice da varredura: só o que está pendente e já venceu importa.
+    index("scheduled_group_due_idx").on(t.status, t.scheduledFor),
   ],
 );
 

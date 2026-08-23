@@ -35,6 +35,8 @@ export type NormalizedMessage = {
   senderName: string | null;
   /** Telefone de quem falou dentro do grupo; nulo em conversa de duas pessoas. */
   senderPhone: string | null;
+  /** Nome do grupo. Em grupo, o título da conversa é ele, não quem falou. */
+  groupName: string | null;
   kind: WaMessageKind;
   body: string;
   mediaUrl: string | null;
@@ -221,6 +223,8 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
     get(msg, "Chat", "wa_chatid"),
     get(msg, "chat", "wa_chatid"),
     get(msg, "key", "remoteJid"),
+    // O formato real põe o chat FORA da mensagem, na raiz do payload.
+    get(raw, "chat", "wa_chatid"),
   );
   if (!remoteJid) return { kind: "ignored", reason: "sem_remote_jid" };
 
@@ -345,6 +349,9 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       fromMe,
       isGroup,
       phone: phoneFromJid(remoteJid),
+      groupName: isGroup
+        ? firstString(get(msg, "groupName"), get(raw, "chat", "wa_name"), get(raw, "chat", "name")) || null
+        : null,
       senderPhone: isGroup
         ? phoneFromJid(
             firstString(get(msg, "sender_pn"), get(msg, "participant"), get(msg, "sender"), get(msg, "Sender")),
