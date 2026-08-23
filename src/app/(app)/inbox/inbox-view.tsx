@@ -14,6 +14,8 @@ import {
   Inbox as InboxIcon,
   MessageSquare,
   Mic,
+  PanelRightClose,
+  PanelRightOpen,
   Pause,
   Play,
   TriangleAlert,
@@ -22,7 +24,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -131,6 +133,23 @@ export function InboxView({
   const [drafts, setDrafts] = useState<Draft[]>([]);
   // Mensagem que está sendo respondida — some assim que o envio conclui.
   const [reply, setReply] = useState<ReplyTarget>(null);
+  /**
+   * A ficha do cliente ocupa uma coluna inteira. Em tela larga ela cabe junto
+   * com lista e conversa; abaixo disso, competir por espaço deixa a conversa
+   * estreita demais para ler e escrever, então ela começa fechada e vira um
+   * clique.
+   */
+  const fichaCabe = useSyncExternalStore(
+    (aoMudar) => {
+      const consulta = window.matchMedia("(min-width: 1536px)");
+      consulta.addEventListener("change", aoMudar);
+      return () => consulta.removeEventListener("change", aoMudar);
+    },
+    () => window.matchMedia("(min-width: 1536px)").matches,
+    () => true,
+  );
+  const [fichaAberta, setFichaAberta] = useState<boolean | null>(null);
+  const mostrarFicha = fichaAberta ?? fichaCabe;
   const [, startSending] = useTransition();
   const [, startSwitching] = useTransition();
   const [acting, startActing] = useTransition();
@@ -262,7 +281,8 @@ export function InboxView({
   const mine = detail?.assignedUserId === currentUserId;
 
   return (
-    <div className="flex h-[calc(100dvh_-_56px_-_env(safe-area-inset-bottom))] md:h-dvh">
+    // Altura útil: no celular desconta a barra inferior, no desktop a do topo.
+    <div className="flex h-[calc(100dvh_-_56px_-_env(safe-area-inset-bottom))] md:h-[calc(100dvh_-_var(--topbar-h,56px))]">
       {/* Lista de conversas */}
       <aside
         aria-label="Conversas"
@@ -455,6 +475,18 @@ export function InboxView({
                   <span className="hidden sm:inline">{detail.aiPaused ? "Retomar IA" : "Pausar IA"}</span>
                 </Button>
 
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="hidden h-11 lg:inline-flex md:h-8"
+                  aria-pressed={mostrarFicha}
+                  title={mostrarFicha ? "Esconder a ficha do cliente" : "Mostrar a ficha do cliente"}
+                  onClick={() => setFichaAberta(!mostrarFicha)}
+                >
+                  {mostrarFicha ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+                  <span className="hidden xl:inline">Ficha</span>
+                </Button>
+
                 {detail.status === "closed" ? (
                   <Button variant="secondary" size="sm" className="h-11 md:h-8" loading={acting} onClick={() => assignment("reabrir")}>
                     Reabrir
@@ -594,7 +626,10 @@ export function InboxView({
       {detail ? (
         <aside
           aria-label="Contexto do cliente"
-          className="hidden w-[var(--rail-width)] shrink-0 overflow-y-auto border-l border-line px-4 py-4 lg:block"
+          className={cn(
+            "w-[var(--rail-width)] shrink-0 overflow-y-auto border-l border-line px-4 py-4",
+            mostrarFicha ? "hidden lg:block" : "hidden",
+          )}
         >
           <ContextPanel context={detail.context} />
         </aside>
@@ -742,12 +777,14 @@ function MessageBubble({
           className={cn(
             // O bordeaux é reservado para ação e seleção: uma conversa inteira de
             // bolhas em accent-soft gasta o acento e some com a hierarquia.
-            "max-w-[80%] rounded-card border px-3 py-2 text-body text-ink",
+            // `break-words` não basta: um token colado sem espaço só quebra com
+            // `anywhere`, e sem isso ele vaza da bolha e atravessa a coluna vizinha.
+            "max-w-[80%] rounded-card border px-3 py-2 text-body text-ink [overflow-wrap:anywhere]",
             outbound ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
           )}
         >
           {quoted ? (
-            <span className="mb-1.5 block border-l-2 border-accent pl-2 text-caption text-ink-secondary">
+            <span className="mb-1.5 block border-l-2 border-accent pl-2 text-caption text-ink-secondary [overflow-wrap:anywhere]">
               <span className="block font-medium text-accent">
                 {quoted.direction === "outbound" ? "Você" : "Cliente"}
               </span>
@@ -798,8 +835,8 @@ function MessageBubble({
 
           {MediaIcon && message.messageType !== "text" && !["image", "audio", "video"].includes(message.messageType) ? (
             <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
-              <MediaIcon className="size-3.5" aria-hidden />
-              {message.mediaFileName || "Arquivo"}
+              <MediaIcon className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{message.mediaFileName || "Arquivo"}</span>
               {message.mediaUrl ? (
                 <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">
                   abrir
@@ -865,7 +902,7 @@ function MediaPlaceholder({
   const [carregando, startCarregando] = useTransition();
 
   return (
-    <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
+    <span className="mb-1 flex items-center gap-1.5 whitespace-nowrap text-caption text-ink-secondary">
       <Mic className="size-3.5 shrink-0" aria-hidden />
       {label}
       {!outbound ? (

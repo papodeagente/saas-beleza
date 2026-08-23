@@ -206,7 +206,7 @@ export function AgendaView({
   }
 
   return (
-    <div className="flex flex-col md:h-dvh">
+    <div className="flex flex-col md:h-[calc(100dvh_-_var(--topbar-h,56px))]">
       <PageHeader
         title={title}
         description={description}
