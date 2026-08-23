@@ -32,7 +32,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <AppShell
       user={{ name: ctx.userName, email: ctx.userEmail, role: ctx.role }}
-      organization={{ name: ctx.organizationName }}
       signals={signals}
       isPlatformAdmin={platformAdmin}
     >

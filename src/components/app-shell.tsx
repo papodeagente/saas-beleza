@@ -69,13 +69,11 @@ const RANK: Record<Role, number> = { professional: 0, staff: 1, admin: 2, owner:
 export function AppShell({
   children,
   user,
-  organization,
   signals,
   isPlatformAdmin = false,
 }: {
   children: React.ReactNode;
   user: { name: string; email: string; role: Role };
-  organization: { name: string };
   signals: Signal[];
   /**
    * Vem do servidor (`platform_admins`), nunca do papel na clínica. Esconder o
@@ -118,12 +116,8 @@ export function AppShell({
         aria-label="Navegação principal"
         className="bg-brand sticky top-0 z-40 hidden h-[56px] shrink-0 items-center gap-4 px-4 md:flex"
       >
-        {/* Marca do produto — separada da clínica atendida */}
-        <Link href="/hoje" className="flex shrink-0 items-center gap-3">
+        <Link href="/hoje" className="flex shrink-0 items-center">
           <BrandLogo compact className="text-white" iconClassName="size-7" />
-          <span className="hidden max-w-[160px] truncate text-caption text-white/70 lg:block">
-            {organization.name}
-          </span>
         </Link>
 
         <ul className="flex min-w-0 flex-1 items-center gap-0.5">
