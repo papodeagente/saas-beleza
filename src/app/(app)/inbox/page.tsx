@@ -58,7 +58,10 @@ export default async function InboxPage({
       }))}
       counts={counts}
       initialDetail={initialDetail}
-      initialSelectedId={selectedId}
+      // Sem detalhe não há o que abrir: repassar um id que o servidor não
+      // devolveu (?conversa= apagada ou de outra conta) deixava a conversa
+      // num esqueleto pulsando para sempre — no celular, sem botão de voltar.
+      initialSelectedId={initialDetail ? selectedId : null}
       initialTab={tab}
       currentUserId={ctx.userId}
       assignees={assignees}

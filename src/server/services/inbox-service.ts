@@ -213,7 +213,12 @@ export async function listConversations(
           ? or(
               ilike(customers.name, `%${search}%`),
               ilike(conversations.contactName, `%${search}%`),
-              ilike(conversations.phone, `%${search.replace(/\D/g, "")}%`),
+              // Só entra quando a busca TEM dígitos: "Eliseu" virava a máscara
+              // `%%`, que casa com qualquer telefone — a busca por nome
+              // devolvia a caixa inteira em vez da pessoa procurada.
+              search.replace(/\D/g, "")
+                ? ilike(conversations.phone, `%${search.replace(/\D/g, "")}%`)
+                : undefined,
             )
           : undefined,
       ),

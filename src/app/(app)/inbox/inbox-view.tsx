@@ -592,13 +592,21 @@ export function InboxView({
    */
   const prefetchRef = useRef<Set<number>>(new Set());
   const prefetch = useCallback(
-    (id: number) => {
-      if (cacheRef.current[id] || prefetchRef.current.has(id)) return;
+    (id: number): Promise<void> => {
+      // `requestRef` cobre a conversa que um clique já está carregando:
+      // aquecer atrás do open() só enfileiraria uma segunda leitura idêntica.
+      if (cacheRef.current[id] || prefetchRef.current.has(id) || requestRef.current === id) {
+        return Promise.resolve();
+      }
       prefetchRef.current.add(id);
-      void loadConversationAction(id, { markRead: false })
+      return loadConversationAction(id, { markRead: false })
         .then((loaded) => {
           if (loaded) guardarConversaRef.current(id, loaded);
         })
+        // Aquecer é melhor esforço: rede caída aqui não pode virar erro não
+        // tratado — o clique de verdade tem o próprio tratamento, e a
+        // varredura periódica repara o que faltar.
+        .catch(() => undefined)
         .finally(() => prefetchRef.current.delete(id));
     },
     [],
@@ -607,10 +615,22 @@ export function InboxView({
   /** O primeiro alvo de toque é o topo da lista: chega aquecido. */
   useEffect(() => {
     const primeiras = list.slice(0, 6).map((c) => c.id);
-    const timer = setTimeout(() => {
-      for (const id of primeiras) prefetch(id);
+    let cancelado = false;
+    const timer = setTimeout(async () => {
+      // UMA de cada vez, de propósito: as server actions saem do cliente numa
+      // fila única e sequencial. Despachar as seis de uma vez punha ~2,5s de
+      // aquecimento NA FRENTE do clique da atendente — medido: 3,5s de
+      // esqueleto num toque dado durante o aquecimento. Em série, o clique
+      // espera no máximo a leitura que já estiver no ar.
+      for (const id of primeiras) {
+        if (cancelado) return;
+        await prefetch(id);
+      }
     }, 350);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelado = true;
+      clearTimeout(timer);
+    };
   }, [list, prefetch]);
 
   /**
@@ -622,13 +642,17 @@ export function InboxView({
     const last = lastProviderSyncRef.current;
     if (last && last.conversationId === id && Date.now() - last.at < FALLBACK_POLL_MS) return;
     lastProviderSyncRef.current = { conversationId: id, at: Date.now() };
-    void syncConversationHistoryAction(id).then((r) => {
-      if (r.imported > 0 && activeIdRef.current === id) {
-        void loadConversationAction(id, { markRead: false }).then((loaded) => {
-          if (loaded && activeIdRef.current === id) guardarConversaRef.current(id, loaded);
-        });
-      }
-    });
+    void syncConversationHistoryAction(id)
+      .then((r) => {
+        if (r.imported > 0 && activeIdRef.current === id) {
+          return loadConversationAction(id, { markRead: false }).then((loaded) => {
+            if (loaded && activeIdRef.current === id) guardarConversaRef.current(id, loaded);
+          });
+        }
+      })
+      // Segundo plano de verdade: rede caída aqui virava rejeição não tratada
+      // no console. A varredura de 30s tenta de novo sozinha.
+      .catch(() => undefined);
   }, []);
 
   function open(id: number, { marcarLida = true }: { marcarLida?: boolean } = {}) {
@@ -648,7 +672,15 @@ export function InboxView({
       const loaded = await loadConversationAction(id, { markRead: marcarLida });
       if (requestRef.current !== id) return;
       if (loaded) guardarConversa(id, loaded);
-      else if (!jaAquecida) toast.error("Não foi possível abrir a conversa.");
+      else if (!jaAquecida) {
+        // Sem detalhe e sem cache não há o que desenhar: sem este recuo o
+        // esqueleto ficava pulsando para sempre — no celular sem nem botão de
+        // voltar — porque a varredura periódica não repara conversa que o
+        // servidor não devolve (id apagado, por exemplo).
+        toast.error("Não foi possível abrir a conversa.");
+        setSelectedId(null);
+        syncUrl(null);
+      }
     });
     sincronizarHistoricoEmFundo(id);
   }
@@ -1543,6 +1575,32 @@ function ConversationRow({
   const daCasa = !conversation.lastMessageInbound;
   const PreviaIcon = MEDIA_ICON[conversation.lastMessageType ?? "text"];
 
+  /**
+   * Pousar de verdade, não atravessar: o mouse a caminho de outra linha
+   * disparava um aquecimento por linha cruzada, e como as server actions saem
+   * numa fila única, o clique no destino esperava a fila inteira (medido:
+   * 2,5s de esqueleto depois de varrer seis linhas frias). O respiro de 120ms
+   * só aquece onde o ponteiro parou; no celular, o dedo que rola a lista
+   * cancela no primeiro movimento.
+   */
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armarPrefetch = () => {
+    if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+    prefetchTimer.current = setTimeout(onPrefetch, 120);
+  };
+  const desarmarPrefetch = () => {
+    if (prefetchTimer.current) {
+      clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  };
+  useEffect(
+    () => () => {
+      if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+    },
+    [],
+  );
+
   return (
     <div
       className={cn(
@@ -1554,9 +1612,17 @@ function ConversationRow({
     >
       <button
         type="button"
-        onClick={onOpen}
-        onMouseEnter={onPrefetch}
-        onTouchStart={onPrefetch}
+        onClick={() => {
+          // O clique carrega por conta própria; um aquecimento armado atrás
+          // dele seria uma segunda leitura idêntica na fila.
+          desarmarPrefetch();
+          onOpen();
+        }}
+        onMouseEnter={armarPrefetch}
+        onMouseLeave={desarmarPrefetch}
+        onTouchStart={armarPrefetch}
+        onTouchMove={desarmarPrefetch}
+        onTouchEnd={desarmarPrefetch}
         aria-current={active ? "true" : undefined}
         className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-1 pl-[9px] text-left"
       >
