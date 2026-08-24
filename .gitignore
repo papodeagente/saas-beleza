@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 .env.local
+
+# Saída intermediária de scripts/gerar-icones.ts — os ícones finais são versionados
+# em src/app/ e public/, estes SVGs são só o passo do meio.
+scripts/icones-gerados/

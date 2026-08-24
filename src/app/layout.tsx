@@ -29,8 +29,11 @@ export const metadata: Metadata = {
     title: "Agenda de Unha",
   },
   icons: {
+    // Sem entrada para o /favicon.ico aqui: `src/app/favicon.ico` é convenção
+    // de arquivo do App Router e o Next já emite o <link> dele sozinho, com
+    // hash de conteúdo. Declarar de novo produzia duas tags para o mesmo
+    // arquivo, uma delas anunciando tamanhos errados.
     icon: [
-      { url: "/favicon.ico", sizes: "16x16 32x32", type: "image/x-icon" },
       { url: "/icon.svg", type: "image/svg+xml" },
       { url: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
     ],
