@@ -1,6 +1,5 @@
-import IORedis from "ioredis";
 import { getSession } from "@/server/auth";
-import { getLocalInboxBus, inboxChannel } from "@/server/services/inbox-events";
+import { subscribeInbox } from "@/server/services/inbox-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,11 +9,11 @@ const encoder = new TextEncoder();
 /**
  * Canal autenticado de eventos do Inbox (Server-Sent Events).
  *
- * Duas fontes, mesma semântica: com REDIS_URL o canal atravessa instâncias
- * (produção); sem, ele assina o barramento em processo — que num servidor
- * único entrega o mesmo resultado. Responder 503 na ausência de Redis, como
- * era antes, deixava o desenvolvimento sem tempo real nenhum e escondia
- * regressões do caminho vivo até o deploy.
+ * A rota não sabe de onde o evento vem: `subscribeInbox` entrega o Redis
+ * compartilhado quando há REDIS_URL e o barramento em processo quando não há.
+ * Antes, esta rota abria uma conexão IORedis POR ABA e respondia 503 sem
+ * Redis — vinte telas abertas eram vinte conexões, e o ambiente sem Redis
+ * ficava sem tempo real nenhum, em silêncio.
  */
 export async function GET(request: Request) {
   const ctx = await getSession();
@@ -22,68 +21,42 @@ export async function GET(request: Request) {
     return new Response("Não autorizado", { status: 401 });
   }
 
-  const channel = inboxChannel(ctx.organizationId);
-  const redisUrl = process.env.REDIS_URL;
+  if (!process.env.REDIS_URL && process.env.NODE_ENV === "production") {
+    // Em produção a ausência de Redis é defeito de configuração, não modo de
+    // operação: sem ela o tempo real não atravessa instâncias e degrada para
+    // a varredura de trinta segundos sem ninguém perceber.
+    console.error("[inbox realtime] REDIS_URL ausente em produção — tempo real degradado.");
+  }
 
-  let subscriber: IORedis | null = null;
-  let localHandler: ((payload: string) => void) | null = null;
+  let unsubscribe: (() => void) | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let closed = false;
 
-  const close = async () => {
+  const close = () => {
     if (closed) return;
     closed = true;
     if (heartbeat) clearInterval(heartbeat);
-    if (localHandler) {
-      getLocalInboxBus().off(channel, localHandler);
-      localHandler = null;
-    }
-    const current = subscriber;
-    subscriber = null;
-    if (current) {
-      current.removeAllListeners();
-      await current.quit().catch(() => current.disconnect());
-    }
+    unsubscribe?.();
+    unsubscribe = null;
   };
 
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
+    start(controller) {
       const send = (chunk: string) => {
         if (!closed) controller.enqueue(encoder.encode(chunk));
       };
 
-      try {
-        if (redisUrl) {
-          subscriber = new IORedis(redisUrl, {
-            maxRetriesPerRequest: null,
-            enableReadyCheck: false,
-          });
-          subscriber.on("message", (_channel, message) => {
-            send(`data: ${message}\n\n`);
-          });
-          subscriber.on("error", (error) => {
-            console.warn("[inbox realtime] conexão de leitura:", error.message);
-          });
-          await subscriber.subscribe(channel);
-        } else {
-          localHandler = (payload: string) => send(`data: ${payload}\n\n`);
-          getLocalInboxBus().on(channel, localHandler);
-        }
+      unsubscribe = subscribeInbox(ctx.organizationId, (payload) => send(`data: ${payload}\n\n`));
 
-        // Confirma a conexão e faz o cliente sincronizar uma vez, fechando a
-        // pequena janela entre o HTML inicial e a assinatura do canal.
-        send(`event: ready\ndata: {}\n\n`);
-        heartbeat = setInterval(() => send(`: heartbeat\n\n`), 20_000);
-      } catch (error) {
-        console.error("[inbox realtime] assinatura falhou:", error);
-        controller.error(error);
-        await close();
-      }
+      // Confirma a conexão e faz o cliente sincronizar uma vez, fechando a
+      // pequena janela entre o HTML inicial e a assinatura do canal.
+      send(`event: ready\ndata: {}\n\n`);
+      heartbeat = setInterval(() => send(`: heartbeat\n\n`), 20_000);
 
-      request.signal.addEventListener("abort", () => void close(), { once: true });
+      request.signal.addEventListener("abort", close, { once: true });
     },
     cancel() {
-      return close();
+      close();
     },
   });
 

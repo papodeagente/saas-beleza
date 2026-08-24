@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { conversations, organizationMembers } from "@/db/schema";
 import { requireRole, requireSession } from "@/server/auth";
+import { markConversationReadOnWhatsapp } from "@/server/services/whatsapp-read-receipts";
 import { clearUnread } from "@/server/services/conversation-resolver";
 import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
@@ -201,6 +202,16 @@ export async function loadConversationAction(
       options.markRead !== false ? clearUnread(ctx.organizationId, conversationId) : null,
     ]);
     if (!detail) return null;
+
+    // Confirmação de leitura no WhatsApp da cliente (os dois tiques azuis).
+    // Fora do `await`: é uma viagem à rede externa e não pode entrar no
+    // caminho que pinta a conversa — foi exatamente esse tipo de chamada em
+    // série que deixou a troca de tela em 1,3s. Falhar aqui não é erro de
+    // leitura, então o resultado é descartado de propósito.
+    if (options.markRead !== false) {
+      void markConversationReadOnWhatsapp(ctx.organizationId, conversationId);
+    }
+
     return serialize(detail);
   } catch (error) {
     console.error(error);

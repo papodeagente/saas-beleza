@@ -1,5 +1,6 @@
 import "server-only";
 import { EventEmitter } from "node:events";
+import IORedis from "ioredis";
 import { getRedis } from "@/server/queues/redis";
 
 export type InboxEvent = {
@@ -61,4 +62,63 @@ export async function publishInboxEvent(
     return;
   }
   getLocalInboxBus().emit(inboxChannel(organizationId), payload);
+}
+
+/**
+ * Assinante ÚNICO por processo, com distribuição em memória.
+ *
+ * A rota SSE abria uma conexão IORedis POR ABA: dez atendentes com duas telas
+ * cada eram vinte conexões ao Redis para receber exatamente os mesmos eventos.
+ * Aqui existe uma conexão só, que escuta todos os canais de organização por
+ * padrão de nome e reparte localmente para quem estiver ouvindo.
+ *
+ * Guardado em globalThis pelo mesmo motivo do barramento local: em
+ * desenvolvimento o módulo recarrega a cada edição, e cada recarga abriria
+ * outra conexão órfã.
+ */
+declare global {
+  var __inboxRedisSub: { client: IORedis; bus: EventEmitter } | undefined;
+}
+
+function getSharedRedisSubscriber(url: string): { bus: EventEmitter } | null {
+  if (globalThis.__inboxRedisSub) return globalThis.__inboxRedisSub;
+  try {
+    const client = new IORedis(url, { maxRetriesPerRequest: null, enableReadyCheck: false });
+    const bus = new EventEmitter();
+    bus.setMaxListeners(500);
+    client.on("error", (error) => {
+      console.warn("[inbox realtime] assinante compartilhado:", error.message);
+    });
+    client.on("pmessage", (_pattern, channel, message) => bus.emit(channel, message));
+    // `psubscribe` e não uma assinatura por organização: o processo atende
+    // várias contas e reassinar a cada aba nova traria de volta o custo que
+    // esta função existe para eliminar.
+    void client.psubscribe("inbox:events:*");
+    globalThis.__inboxRedisSub = { client, bus };
+    return globalThis.__inboxRedisSub;
+  } catch (error) {
+    console.warn(
+      "[inbox realtime] assinante compartilhado não subiu:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+/**
+ * Onde a rota SSE escuta, sem precisar saber se veio do Redis ou daqui de
+ * dentro. Devolve a função que cancela a escuta.
+ */
+export function subscribeInbox(
+  organizationId: number,
+  onEvent: (payload: string) => void,
+): () => void {
+  const channel = inboxChannel(organizationId);
+  const url = process.env.REDIS_URL;
+  const bus = url ? getSharedRedisSubscriber(url)?.bus : getLocalInboxBus();
+  if (!bus) return () => {};
+  bus.on(channel, onEvent);
+  return () => {
+    bus.off(channel, onEvent);
+  };
 }

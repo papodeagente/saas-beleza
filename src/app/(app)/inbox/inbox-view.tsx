@@ -477,7 +477,24 @@ export function InboxView({
 
     const events = new EventSource("/api/inbox/events");
     events.addEventListener("ready", () => void sync());
-    events.onmessage = () => void sync();
+    events.onmessage = (evento) => {
+      // O evento diz QUAL conversa mudou. Sem olhar isso, uma mensagem
+      // chegando numa conversa fechada fazia toda aba recarregar a conversa
+      // aberta inteira além da lista — 51 KB por evento, multiplicado por
+      // cada atendente com a tela aberta. Agora a conversa só é relida quando
+      // é ela que mudou; a lista sempre, porque a prévia e a ordem mudam.
+      let alvo: number | undefined;
+      try {
+        alvo = (JSON.parse(evento.data) as { conversationId?: number }).conversationId;
+      } catch {
+        alvo = undefined;
+      }
+      if (alvo != null && activeIdRef.current != null && alvo !== activeIdRef.current) {
+        void refreshListRef.current(tabRef.current, searchRef.current);
+        return;
+      }
+      void sync();
+    };
 
     const onVisible = () => {
       if (!document.hidden) void sync();
