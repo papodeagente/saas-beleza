@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
@@ -7,12 +7,16 @@ import { normalizeUazapiWebhook, type NormalizedMessage, type WaMessageKind } fr
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { resolveConversation } from "@/server/services/conversation-resolver";
 import { publishInboxEvent } from "@/server/services/inbox-events";
+import { getRedis } from "@/server/queues/redis";
+import type { Json } from "@/server/whatsapp/json";
 import {
   deleteMessage,
   downloadMessageMedia,
+  findChats,
   findMessages,
   markChatRead,
   reactToMessage,
+  requestMessageHistory,
   sendMedia,
   sendPresence,
   sendText,
@@ -55,10 +59,15 @@ export type IngestResult = {
   messageId: number | null;
   customerId: number | null;
   isNew: boolean;
+  isUpdated: boolean;
   isInbound: boolean;
 };
 
-export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMessage): Promise<IngestResult> {
+export async function ingestMessage(
+  connection: ConnectionRow,
+  msg: NormalizedMessage,
+  options: { historical?: boolean } = {},
+): Promise<IngestResult> {
   const { conversationId, customerId } = await resolveConversation({
     organizationId: connection.organizationId,
     connectionId: connection.id,
@@ -98,13 +107,65 @@ export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMe
 
   const isNew = inserted.length > 0;
   if (!isNew) {
-    return { conversationId, messageId: null, customerId, isNew: false, isInbound: !msg.fromMe };
+    const [existing] = await db
+      .select({
+        id: messages.id,
+        body: messages.body,
+        messageType: messages.messageType,
+        mediaUrl: messages.mediaUrl,
+        mediaMimeType: messages.mediaMimeType,
+        mediaFileName: messages.mediaFileName,
+        quotedExternalId: messages.quotedExternalId,
+      })
+      .from(messages)
+      .where(and(eq(messages.organizationId, connection.organizationId), eq(messages.externalId, msg.externalId)))
+      .limit(1);
+    if (!existing) {
+      return { conversationId, messageId: null, customerId, isNew: false, isUpdated: false, isInbound: !msg.fromMe };
+    }
+    const patch: Partial<typeof messages.$inferInsert> = {};
+    if (existing.body !== body) patch.body = body;
+    const messageType = msg.kind === "system" ? "system" : msg.kind;
+    if (existing.messageType !== messageType) patch.messageType = messageType;
+    if (msg.mediaUrl && existing.mediaUrl !== msg.mediaUrl) patch.mediaUrl = msg.mediaUrl;
+    if (msg.mediaMimeType && existing.mediaMimeType !== msg.mediaMimeType) patch.mediaMimeType = msg.mediaMimeType;
+    if (msg.mediaFileName && existing.mediaFileName !== msg.mediaFileName) patch.mediaFileName = msg.mediaFileName;
+    if (msg.quotedExternalId && existing.quotedExternalId !== msg.quotedExternalId) {
+      patch.quotedExternalId = msg.quotedExternalId;
+    }
+    const isUpdated = Object.keys(patch).length > 0;
+    if (isUpdated) await db.update(messages).set(patch).where(eq(messages.id, existing.id));
+    return {
+      conversationId,
+      messageId: existing.id,
+      customerId,
+      isNew: false,
+      isUpdated,
+      isInbound: !msg.fromMe,
+    };
   }
 
   if (msg.fromMe) {
     await db
       .update(conversations)
-      .set({ lastMessageAt: msg.sentAt, lastOutboundAt: msg.sentAt })
+      .set(
+        options.historical
+          ? {
+              lastMessageAt: sql`greatest(coalesce(${conversations.lastMessageAt}, ${msg.sentAt}), ${msg.sentAt})`,
+              lastOutboundAt: sql`greatest(coalesce(${conversations.lastOutboundAt}, ${msg.sentAt}), ${msg.sentAt})`,
+            }
+          : { lastMessageAt: msg.sentAt, lastOutboundAt: msg.sentAt },
+      )
+      .where(eq(conversations.id, conversationId));
+  } else if (options.historical) {
+    // Recuperar histórico não cria uma nova pendência nem reabre atendimento:
+    // apenas completa a linha do tempo já existente.
+    await db
+      .update(conversations)
+      .set({
+        lastMessageAt: sql`greatest(coalesce(${conversations.lastMessageAt}, ${msg.sentAt}), ${msg.sentAt})`,
+        lastInboundAt: sql`greatest(coalesce(${conversations.lastInboundAt}, ${msg.sentAt}), ${msg.sentAt})`,
+      })
       .where(eq(conversations.id, conversationId));
   } else {
     const [current] = await db
@@ -137,7 +198,7 @@ export async function ingestMessage(connection: ConnectionRow, msg: NormalizedMe
       .where(eq(conversations.id, conversationId));
   }
 
-  return { conversationId, messageId: inserted[0].id, customerId, isNew: true, isInbound: !msg.fromMe };
+  return { conversationId, messageId: inserted[0].id, customerId, isNew: true, isUpdated: false, isInbound: !msg.fromMe };
 }
 
 /** Reconcilia o banco com o histórico já conhecido pela instância. */
@@ -145,9 +206,10 @@ export async function syncConversationHistory(
   organizationId: number,
   conversationId: number,
   maxMessages = 200,
+  options: { includeGroups?: boolean } = {},
 ): Promise<number> {
   const [conversation] = await db
-    .select({ remoteJid: conversations.remoteJid })
+    .select({ remoteJid: conversations.remoteJid, isGroup: conversations.isGroup })
     .from(conversations)
     .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)))
     .limit(1);
@@ -156,23 +218,128 @@ export async function syncConversationHistory(
   const connection = await getConnectionRow(organizationId);
   if (!connection || connection.status !== "connected") return 0;
 
+  const { imported, conversationIds } = await importChatHistory(
+    connection,
+    conversation.remoteJid,
+    conversation.isGroup,
+    maxMessages,
+    options.includeGroups ?? false,
+  );
+
+  // /message/find cobre o histórico já salvo na instância (a documentação
+  // limita essa retenção a sete dias). Pedir um bloco anterior ao aparelho
+  // permite que eventos `history` completem conversas antigas sem bloquear a
+  // abertura da tela. Uma vez por hora é suficiente e evita pressionar o celular.
+  await maybeRequestOlderHistory(connection, conversation.remoteJid);
+
+  if (conversationIds.size > 0) await publishInboxEvent(organizationId, { type: "message", conversationId });
+  return imported;
+}
+
+const localHistoryRequests = new Map<string, number>();
+
+async function maybeRequestOlderHistory(connection: ConnectionRow, remoteJid: string): Promise<void> {
+  const key = `${connection.id}:${remoteJid}`;
+  const redis = getRedis();
+  if (redis) {
+    const claimed = await redis.set(`whatsapp:history-request:${key}`, "1", "EX", 3600, "NX").catch(() => null);
+    if (claimed !== "OK") return;
+  } else {
+    const last = localHistoryRequests.get(key) ?? 0;
+    if (Date.now() - last < 3_600_000) return;
+    localHistoryRequests.set(key, Date.now());
+  }
+  await requestMessageHistory(credentialsOf(connection), remoteJid, 100).catch((error) => {
+    console.warn("[whatsapp] histórico antigo não solicitado:", error instanceof Error ? error.message : error);
+  });
+}
+
+/**
+ * Importa um chat de forma idempotente. O mesmo caminho atende a recuperação
+ * do Inbox e dos grupos, sem disparar agente de IA para mensagens históricas.
+ */
+async function importChatHistory(
+  connection: ConnectionRow,
+  remoteJid: string,
+  expectedGroup: boolean,
+  maxMessages: number,
+  includeGroups: boolean,
+): Promise<{ imported: number; conversationIds: Set<number> }> {
   let imported = 0;
+  const conversationIds = new Set<number>();
+  const allRows: Json[] = [];
   for (let offset = 0; offset < maxMessages; offset += 100) {
     const rows = await findMessages(credentialsOf(connection), {
-      chatid: conversation.remoteJid,
+      chatid: remoteJid,
       limit: Math.min(100, maxMessages - offset),
       offset,
     });
-    for (const raw of [...rows].reverse()) {
-      const normalized = normalizeUazapiWebhook({ EventType: "messages", event: raw });
-      if (normalized.kind !== "message" || normalized.message.isGroup) continue;
-      const result = await ingestMessage(connection, normalized.message);
-      if (result.isNew) imported += 1;
-    }
+    allRows.push(...rows);
     if (rows.length < 100) break;
   }
+  // /message/find vem do mais novo para o mais antigo, inclusive entre
+  // páginas. Ingerir o lote inteiro ao contrário mantém a cronologia correta.
+  for (const raw of allRows.reverse()) {
+    const normalized = normalizeUazapiWebhook({ EventType: "messages", event: raw });
+    if (normalized.kind !== "message") continue;
+    if (normalized.message.isGroup !== expectedGroup) continue;
+    if (normalized.message.isGroup && !includeGroups) continue;
+    const result = await ingestMessage(connection, normalized.message, { historical: true });
+    if (result.isNew) {
+      imported += 1;
+      conversationIds.add(result.conversationId);
+    } else if (result.isUpdated) {
+      conversationIds.add(result.conversationId);
+    }
+  }
+  return { imported, conversationIds };
+}
 
-  if (imported > 0) await publishInboxEvent(organizationId, { type: "message", conversationId });
+/**
+ * Rede de segurança do Inbox para mensagens enviadas ou recebidas no celular.
+ * O webhook continua sendo o caminho instantâneo; a cada ciclo comparamos os
+ * chats recentes da instância e só consultamos mensagens dos que avançaram.
+ */
+export async function syncRecentConversationHistory(organizationId: number, maxChats = 20): Promise<number> {
+  const connection = await getConnectionRow(organizationId);
+  if (!connection || connection.status !== "connected") return 0;
+
+  const redis = getRedis();
+  if (redis) {
+    const claimed = await redis
+      .set(`inbox:recent-sync:${organizationId}`, "1", "EX", 20, "NX")
+      .catch(() => null);
+    if (claimed !== "OK") return 0;
+  }
+
+  const recent = await findChats(credentialsOf(connection), { limit: maxChats, isGroup: false });
+  const jids = recent.map((chat) => chat.jid);
+  if (jids.length === 0) return 0;
+
+  const local = await db
+    .select({ remoteJid: conversations.remoteJid, lastMessageAt: conversations.lastMessageAt })
+    .from(conversations)
+    .where(and(eq(conversations.organizationId, organizationId), inArray(conversations.remoteJid, jids)));
+  const localByJid = new Map(local.map((row) => [row.remoteJid, row.lastMessageAt?.getTime() ?? 0]));
+
+  let imported = 0;
+  const touched = new Set<number>();
+  for (const chat of recent) {
+    if (chat.isGroup) continue;
+    const rawTimestamp = chat.lastMessageTimestamp ?? 0;
+    const providerMs = rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000;
+    const localMs = localByJid.get(chat.jid) ?? 0;
+    // Chat já reconciliado não precisa de outra chamada /message/find.
+    if (providerMs > 0 && localMs >= providerMs) continue;
+
+    const result = await importChatHistory(connection, chat.jid, false, 100, false);
+    imported += result.imported;
+    for (const id of result.conversationIds) touched.add(id);
+  }
+
+  for (const conversationId of touched) {
+    await publishInboxEvent(organizationId, { type: "message", conversationId });
+  }
   return imported;
 }
 

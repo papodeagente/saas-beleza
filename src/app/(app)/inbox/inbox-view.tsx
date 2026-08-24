@@ -64,6 +64,7 @@ import {
   sendMessageAction,
   setAiPauseAction,
   syncConversationHistoryAction,
+  syncRecentInboxAction,
   updateAssignmentAction,
 } from "./actions";
 
@@ -386,6 +387,7 @@ export function InboxView({
   );
 
   const lastProviderSyncRef = useRef<{ conversationId: number; at: number } | null>(null);
+  const lastRecentSyncRef = useRef(0);
 
   // O webhook publica no Redis e este canal autenticado avisa a tela assim que
   // o banco terminou de gravar. EventSource se reconecta sozinho se a internet
@@ -403,6 +405,10 @@ export function InboxView({
       syncing = true;
       do {
         queued = false;
+        if (Date.now() - lastRecentSyncRef.current >= FALLBACK_POLL_MS) {
+          lastRecentSyncRef.current = Date.now();
+          await syncRecentInboxAction();
+        }
         await refreshList(tab, search);
         if (activeId) {
           const last = lastProviderSyncRef.current;

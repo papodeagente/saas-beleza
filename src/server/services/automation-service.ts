@@ -1,6 +1,6 @@
 import "server-only";
 import { addDays } from "date-fns";
-import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { db } from "@/db";
 import {
   appointments,
@@ -23,10 +23,12 @@ export type AutomationTrigger =
   | "before_appointment"
   | "appointment_day"
   | "after_appointment"
-  | "after_purchase";
+  | "after_purchase"
+  | "birthday_before"
+  | "birthday_day";
 
 type Candidate = {
-  sourceType: "appointment" | "payment";
+  sourceType: string;
   sourceId: number;
   customerId: number;
   customerName: string;
@@ -57,7 +59,10 @@ export async function createAutomationRule(ctx: TenantContext, input: Automation
   await db.insert(automationRules).values({
     organizationId: ctx.organizationId,
     ...input,
-    daysOffset: input.trigger === "appointment_day" || input.trigger === "appointment_created" ? 0 : input.daysOffset,
+    daysOffset:
+      input.trigger === "appointment_day" || input.trigger === "appointment_created" || input.trigger === "birthday_day"
+        ? 0
+        : input.daysOffset,
     createdByUserId: ctx.userId,
   });
 }
@@ -86,7 +91,12 @@ export async function deleteAutomationRule(ctx: TenantContext, id: number) {
 
 export function automationScheduledFor(eventAt: Date, trigger: AutomationTrigger, days: number, time: string, timezone: string) {
   if (trigger === "appointment_created") return eventAt;
-  const signedDays = trigger === "before_appointment" ? -days : trigger === "appointment_day" ? 0 : days;
+  const signedDays =
+    trigger === "before_appointment" || trigger === "birthday_before"
+      ? -days
+      : trigger === "appointment_day" || trigger === "birthday_day"
+        ? 0
+        : days;
   const targetDay = addDays(eventAt, signedDays);
   return localDateTimeToUtc(dateISOInTz(targetDay, timezone), time.slice(0, 5), timezone);
 }
@@ -110,11 +120,52 @@ export function renderAutomationTemplate(
   return template.replace(/\{(nome|cliente|servico|profissional|data|hora|link_agendamento)\}/g, (_, key) => values[key]);
 }
 
-async function candidatesForRule(rule: typeof automationRules.$inferSelect, now: Date): Promise<Candidate[]> {
+async function candidatesForRule(
+  rule: typeof automationRules.$inferSelect,
+  now: Date,
+  timezone: string,
+): Promise<Candidate[]> {
   // Janela larga o bastante para recuperar envios depois de uma indisponibilidade,
   // sem varrer o histórico inteiro a cada 30 segundos.
   const since = addDays(now, -120);
   const until = addDays(now, 120);
+  if (rule.trigger === "birthday_before" || rule.trigger === "birthday_day") {
+    const rows = await db
+      .select({
+        sourceId: customers.id,
+        customerId: customers.id,
+        customerName: customers.name,
+        consentMarketing: customers.consentMarketing,
+        birthdate: customers.birthdate,
+      })
+      .from(customers)
+      .where(and(eq(customers.organizationId, rule.organizationId), isNotNull(customers.birthdate)))
+      .limit(5000);
+    const currentYear = Number(dateISOInTz(now, timezone).slice(0, 4));
+    const candidates: Candidate[] = [];
+    for (const row of rows) {
+      const match = String(row.birthdate).match(/^\d{4}-(\d{2})-(\d{2})$/);
+      if (!match) continue;
+      const month = Number(match[1]);
+      const originalDay = Number(match[2]);
+      for (const year of [currentYear - 1, currentYear, currentYear + 1]) {
+        // 29/02 cai em 28/02 nos anos não bissextos, em vez de desaparecer.
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const day = Math.min(originalDay, lastDay);
+        const birthdayISO = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const eventAt = localDateTimeToUtc(birthdayISO, "12:00", timezone);
+        candidates.push({
+          sourceType: `birthday:${year}`,
+          sourceId: row.sourceId,
+          customerId: row.customerId,
+          customerName: row.customerName,
+          consentMarketing: row.consentMarketing,
+          eventAt,
+        });
+      }
+    }
+    return candidates;
+  }
   if (rule.trigger === "after_purchase") {
     const rows = await db
       .select({
@@ -276,7 +327,7 @@ export async function dispatchDueAutomations(now = new Date()) {
     if (rule.trigger === "appointment_created") continue;
     const ctx = await automationContext(rule.organizationId);
     if (!ctx) continue;
-    const candidates = await candidatesForRule(rule, now);
+    const candidates = await candidatesForRule(rule, now, ctx.timezone);
     const bookingUrl = `${(process.env.APP_URL ?? "").replace(/\/$/, "")}/agendar/${ctx.organizationSlug}`;
 
     for (const candidate of candidates) {
@@ -300,7 +351,13 @@ export async function dispatchDueAutomations(now = new Date()) {
       if (!claimed) continue;
 
       // Reativação é marketing; lembrete operacional de agenda não é.
-      if ((rule.trigger === "after_appointment" || rule.trigger === "after_purchase") && !candidate.consentMarketing) {
+      if (
+        (rule.trigger === "after_appointment" ||
+          rule.trigger === "after_purchase" ||
+          rule.trigger === "birthday_before" ||
+          rule.trigger === "birthday_day") &&
+        !candidate.consentMarketing
+      ) {
         await db.update(automationDispatches).set({ status: "skipped", error: "Cliente sem consentimento de marketing." }).where(eq(automationDispatches.id, claimed.id));
         skipped += 1;
         continue;

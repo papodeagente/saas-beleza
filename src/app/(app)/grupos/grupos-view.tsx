@@ -60,7 +60,7 @@ import {
   updateGroupAction,
   updateParticipantsAction,
 } from "./actions";
-import { syncPhotosAction } from "@/app/(app)/inbox/actions";
+import { loadMediaAction, syncPhotosAction } from "@/app/(app)/inbox/actions";
 
 /**
  * Caixa de entrada de grupos.
@@ -119,6 +119,8 @@ type ThreadMessage = {
   direction: "inbound" | "outbound";
   messageType: string;
   mediaUrl: string | null;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
   audioTranscription: string | null;
   createdAt: string;
 };
@@ -164,9 +166,9 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
   const pedido = useRef(0);
 
   const carregar = useCallback(
-    async (proximoFiltro: Filtro, termo: string, proximoOffset: number) => {
+    async (proximoFiltro: Filtro, termo: string, proximoOffset: number, silencioso = false) => {
       const chamada = ++pedido.current;
-      setCarregando(true);
+      if (!silencioso) setCarregando(true);
       const resultado = await listGroupInboxAction({
         classification: proximoFiltro,
         search: termo || undefined,
@@ -192,6 +194,34 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
     const timer = setTimeout(() => void carregar(filtro, busca, 0), busca ? 400 : 0);
     return () => clearTimeout(timer);
   }, [busca, filtro, connected, carregar]);
+
+  useEffect(() => {
+    if (!connected) return;
+    let syncing = false;
+    const sync = () => {
+      if (document.hidden || syncing) return;
+      syncing = true;
+      void carregar(filtro, busca, offset, true).finally(() => {
+        syncing = false;
+      });
+    };
+    const events = new EventSource("/api/inbox/events");
+    events.onmessage = sync;
+    const timer = window.setInterval(sync, 30_000);
+    const onVisible = () => {
+      if (!document.hidden) sync();
+    };
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      events.close();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [busca, carregar, connected, filtro, offset]);
 
   if (!connected) {
     return (
@@ -511,11 +541,19 @@ function GroupWorkspace({
   const [aba, setAba] = useState<Aba>("conversa");
   const [detalhe, setDetalhe] = useState<GroupDetail | null>(null);
   const [thread, setThread] = useState<ThreadMessage[]>([]);
+  const [conversationId, setConversationId] = useState<number | null>(group.conversationId);
   const [resumo, setResumo] = useState<string | null>(null);
   const [carregandoDetalhe, setCarregandoDetalhe] = useState(true);
   const [agendadas, setAgendadas] = useState(0);
   const [resumindo, startResumindo] = useTransition();
   const [classificando, startClassificando] = useTransition();
+
+  const carregarThread = useCallback(async () => {
+    const conversa = await groupThreadAction(group.jid);
+    if (!conversa.ok) return;
+    setConversationId(conversa.data.conversationId);
+    setThread(conversa.data.messages as ThreadMessage[]);
+  }, [group.jid]);
 
   // O componente é remontado a cada grupo (key={jid}), então o estado já nasce
   // carregando: mudar isso dentro do efeito seria render em cascata à toa.
@@ -526,12 +564,45 @@ function GroupWorkspace({
       setCarregandoDetalhe(false);
       if (info.ok) setDetalhe(info.data as GroupDetail);
       else toast.error(info.error);
-      if (conversa.ok) setThread(conversa.data.messages as ThreadMessage[]);
+      if (conversa.ok) {
+        setConversationId(conversa.data.conversationId);
+        setThread(conversa.data.messages as ThreadMessage[]);
+      }
     });
     return () => {
       ativo = false;
     };
   }, [group.jid]);
+
+  // O webhook avisa pelo mesmo canal autenticado do Inbox. A reconciliação a
+  // cada 30 s cobre oscilações sem exigir qualquer mudança na instância.
+  useEffect(() => {
+    let syncing = false;
+    const sync = () => {
+      if (document.hidden || syncing) return;
+      syncing = true;
+      void carregarThread().finally(() => {
+        syncing = false;
+      });
+    };
+    const events = new EventSource("/api/inbox/events");
+    events.addEventListener("ready", sync);
+    events.onmessage = sync;
+    const timer = window.setInterval(sync, 30_000);
+    const onVisible = () => {
+      if (!document.hidden) sync();
+    };
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      events.close();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [carregarThread]);
 
   function classificar(classification: Classification) {
     startClassificando(async () => {
@@ -669,9 +740,12 @@ function GroupWorkspace({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {aba === "conversa" ? (
-          <GroupThread jid={group.jid} messages={thread} onSent={() => void groupThreadAction(group.jid).then((r) => {
-            if (r.ok) setThread(r.data.messages as ThreadMessage[]);
-          })} />
+          <GroupThread
+            jid={group.jid}
+            conversationId={conversationId}
+            messages={thread}
+            onSent={() => void carregarThread()}
+          />
         ) : null}
 
         {aba === "membros" ? (
@@ -703,16 +777,20 @@ function GroupWorkspace({
 /** Conversa do grupo: quem falou aparece porque em grupo isso é metade da mensagem. */
 function GroupThread({
   jid,
+  conversationId,
   messages,
   onSent,
 }: {
   jid: string;
+  conversationId: number | null;
   messages: ThreadMessage[];
   onSent: () => void;
 }) {
   const [texto, setTexto] = useState("");
+  const [arquivo, setArquivo] = useState<{ file: File; kind: "image" | "video" | "ptt" | "document" } | null>(null);
   const [enviando, startEnviando] = useTransition();
   const fim = useRef<HTMLDivElement>(null);
+  const inputArquivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fim.current?.scrollIntoView({ block: "end" });
@@ -720,15 +798,24 @@ function GroupThread({
 
   function enviar() {
     const corpo = texto.trim();
-    if (!corpo) return;
+    if (!corpo && !arquivo) return;
     setTexto("");
     startEnviando(async () => {
-      const resultado = await sendToGroupAction({ jid, body: corpo });
+      let media: { kind: "image" | "video" | "ptt" | "document"; dataUrl: string; fileName: string } | null = null;
+      try {
+        if (arquivo) media = { kind: arquivo.kind, dataUrl: await lerArquivo(arquivo.file), fileName: arquivo.file.name };
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Não foi possível ler o arquivo.");
+        setTexto(corpo);
+        return;
+      }
+      const resultado = await sendToGroupAction({ jid, body: corpo, media });
       if (!resultado.ok) {
         toast.error(resultado.error);
         setTexto(corpo);
         return;
       }
+      setArquivo(null);
       onSent();
     });
   }
@@ -755,9 +842,19 @@ function GroupThread({
                     {!nossa && mensagem.senderName ? (
                       <span className="mb-0.5 block text-caption font-medium text-accent">{mensagem.senderName}</span>
                     ) : null}
-                    <span className="block whitespace-pre-wrap">
-                      {mensagem.audioTranscription || mensagem.body || `[${mensagem.messageType}]`}
-                    </span>
+                    {mensagem.messageType !== "text" && conversationId ? (
+                      <GroupMessageMedia
+                        key={mensagem.mediaUrl ?? "sem-url"}
+                        conversationId={conversationId}
+                        message={mensagem}
+                        onLoaded={onSent}
+                      />
+                    ) : null}
+                    {mensagem.audioTranscription || (mensagem.body && !/^\[[^\]]+\]$/.test(mensagem.body)) ? (
+                      <span className="block whitespace-pre-wrap">
+                        {mensagem.audioTranscription || mensagem.body}
+                      </span>
+                    ) : null}
                   </div>
                   <span suppressHydrationWarning className="mt-0.5 px-1 text-meta text-ink-secondary">
                     {format(new Date(mensagem.createdAt), "dd/MM HH:mm", { locale: ptBR })}
@@ -771,7 +868,43 @@ function GroupThread({
       </div>
 
       <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-2.5 md:px-6">
-        <div className="mx-auto flex max-w-[680px] items-end gap-2">
+        <div className="mx-auto flex max-w-[680px] flex-col gap-2">
+          {arquivo ? (
+            <span className="flex w-fit max-w-full items-center gap-1.5 rounded-control bg-surface-sunken px-2 py-1 text-caption text-ink">
+              <Paperclip className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{arquivo.file.name}</span>
+              <button type="button" onClick={() => setArquivo(null)} aria-label="Remover arquivo">
+                <X className="size-3.5" aria-hidden />
+              </button>
+            </span>
+          ) : null}
+          <div className="flex items-end gap-2">
+          <input
+            ref={inputArquivo}
+            type="file"
+            hidden
+            accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              if (file.size > 10 * 1024 * 1024) {
+                toast.error("Arquivo muito grande. O limite é 10 MB.");
+                return;
+              }
+              setArquivo({ file, kind: tipoDoArquivo(file) });
+            }}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            className="h-11 shrink-0"
+            title="Anexar arquivo"
+            onClick={() => inputArquivo.current?.click()}
+          >
+            <Paperclip aria-hidden />
+          </Button>
           <Textarea
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
@@ -785,12 +918,93 @@ function GroupThread({
             placeholder="Mensagem para o grupo"
             className="max-h-32 min-h-11 flex-1 resize-none"
           />
-          <Button size="md" className="h-11 shrink-0" loading={enviando} disabled={!texto.trim()} onClick={enviar}>
+          <Button size="md" className="h-11 shrink-0" loading={enviando} disabled={!texto.trim() && !arquivo} onClick={enviar}>
             <Send aria-hidden />
           </Button>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Prévia e recuperação de mídia do grupo, inclusive quando o link expirou. */
+function GroupMessageMedia({
+  conversationId,
+  message,
+  onLoaded,
+}: {
+  conversationId: number;
+  message: ThreadMessage;
+  onLoaded: () => void;
+}) {
+  const [url, setUrl] = useState(message.mediaUrl);
+  const [loading, startLoading] = useTransition();
+  const attempted = useRef(false);
+  const downloadable = ["image", "video", "audio", "ptt", "document", "sticker"].includes(message.messageType);
+
+  const refresh = useCallback((openAfter: boolean) => {
+    const tab = openAfter ? window.open("about:blank", "_blank") : null;
+    startLoading(async () => {
+      const result = await loadMediaAction({ conversationId, messageId: message.id });
+      if (!result.ok || !result.url) {
+        tab?.close();
+        toast.error(result.ok ? "Este arquivo não está mais disponível no WhatsApp." : result.error);
+        return;
+      }
+      setUrl(result.url);
+      if (tab) tab.location.href = result.url;
+      onLoaded();
+    });
+  }, [conversationId, message.id, onLoaded]);
+
+  useEffect(() => {
+    if (url || !downloadable || attempted.current) return;
+    attempted.current = true;
+    refresh(false);
+  }, [downloadable, refresh, url]);
+
+  if (message.messageType === "image" || message.messageType === "sticker") {
+    return url ? (
+      <a href={url} target="_blank" rel="noreferrer" className="mb-1 block">
+        <img
+          src={url}
+          alt={message.mediaFileName || "Imagem do grupo"}
+          className="max-h-[280px] w-auto rounded-control"
+          onError={() => refresh(false)}
+        />
+      </a>
+    ) : <MediaLoadLabel loading={loading} label="Foto" onRetry={() => refresh(false)} />;
+  }
+  if (message.messageType === "video") {
+    return url ? (
+      <video controls src={url} className="mb-1 max-h-[280px] w-auto rounded-control" onError={() => refresh(false)} />
+    ) : <MediaLoadLabel loading={loading} label="Vídeo" onRetry={() => refresh(false)} />;
+  }
+  if (message.messageType === "audio" || message.messageType === "ptt") {
+    return url ? (
+      <audio controls src={url} className="mb-1 h-9 w-[240px] max-w-full" onError={() => refresh(false)} />
+    ) : <MediaLoadLabel loading={loading} label="Áudio" onRetry={() => refresh(false)} />;
+  }
+  if (message.messageType === "document") {
+    return (
+      <button type="button" disabled={loading} onClick={() => refresh(true)} className="mb-1 flex max-w-full items-center gap-1.5 text-caption text-accent">
+        <Paperclip className="size-3.5 shrink-0" aria-hidden />
+        <span className="truncate">{message.mediaFileName || "Abrir arquivo"}</span>
+        <span>{loading ? "carregando…" : "abrir"}</span>
+      </button>
+    );
+  }
+  return <span className="mb-1 block text-caption text-ink-secondary">[{message.messageType}]</span>;
+}
+
+function MediaLoadLabel({ loading, label, onRetry }: { loading: boolean; label: string; onRetry: () => void }) {
+  return (
+    <span className="mb-1 flex items-center gap-1.5 text-caption text-ink-secondary">
+      <Paperclip className="size-3.5" aria-hidden />
+      {label}
+      {loading ? <span>carregando…</span> : <button type="button" onClick={onRetry} className="text-accent">tentar novamente</button>}
+    </span>
   );
 }
 

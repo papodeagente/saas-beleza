@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeUazapiWebhook } from "./normalizer";
+import { normalizeUazapiWebhook, normalizeUazapiWebhookBatch } from "./normalizer";
 import { canonicalBrPhone, phoneFromJid } from "./phone";
 
 /**
@@ -129,6 +129,15 @@ describe("normalizeUazapiWebhook", () => {
     expect(event.status).toBe("read");
   });
 
+  it("trata Type Deleted de messages_update como exclusão", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      event: { MessageIDs: ["DEL-1"], Type: "Deleted", chatid: "5511999999999@s.whatsapp.net" },
+    });
+    expect(event.kind).toBe("deleted");
+    if (event.kind === "deleted") expect(event.externalId).toBe("DEL-1");
+  });
+
   it("continua entendendo o formato antigo, com id único", () => {
     const event = normalizeUazapiWebhook({
       EventType: "messages_update",
@@ -256,5 +265,22 @@ describe("identidade de telefone", () => {
     expect(canonicalBrPhone("1187654321")).toBe("5511987654321");
     // Fixo continua fixo: não ganha nono dígito.
     expect(canonicalBrPhone("1132145678")).toBe("551132145678");
+  });
+});
+
+describe("lotes de histórico", () => {
+  it("normaliza todas as mensagens do evento history", () => {
+    const events = normalizeUazapiWebhookBatch({
+      EventType: "history",
+      event: {
+        messages: [
+          { messageid: "H1", chatid: "120363000000000000@g.us", messageType: "Conversation", text: "uma" },
+          { messageid: "H2", chatid: "120363000000000000@g.us", messageType: "Conversation", text: "duas" },
+        ],
+      },
+    });
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.kind)).toEqual(["message", "message"]);
+    expect(events.map((event) => event.kind === "message" && event.message.externalId)).toEqual(["H1", "H2"]);
   });
 });

@@ -298,10 +298,20 @@ export async function groupThreadAction(jid: unknown): Promise<GroupResult<Group
   }
 }
 
-const sendSchema = z.object({
-  jid: z.string().trim().endsWith("@g.us"),
-  body: z.string().trim().min(1).max(4000),
-});
+const sendSchema = z
+  .object({
+    jid: z.string().trim().endsWith("@g.us"),
+    body: z.string().trim().max(4000).default(""),
+    media: z
+      .object({
+        kind: z.enum(["image", "video", "document", "ptt"]),
+        dataUrl: z.string().startsWith("data:").max(16_000_000),
+        fileName: z.string().trim().max(200).optional(),
+      })
+      .nullable()
+      .default(null),
+  })
+  .refine((value) => Boolean(value.body || value.media), { message: "Escreva uma mensagem ou escolha um arquivo." });
 
 /** Enviar no grupo passa pelo mesmo caminho de qualquer envio do sistema. */
 export async function sendToGroupAction(input: unknown): Promise<GroupResult<true>> {
@@ -311,15 +321,24 @@ export async function sendToGroupAction(input: unknown): Promise<GroupResult<tru
     const data = sendSchema.parse(input);
 
     const { conversationId } = await getGroupThread(ctx, data.jid);
-    if (!conversationId) {
-      return {
-        ok: false,
-        error: "Ainda não há conversa deste grupo por aqui. Ela aparece assim que alguém escrever nele.",
+    if (!conversationId) return { ok: false, error: "Não foi possível abrir a conversa deste grupo." };
+
+    let media: { type: "image" | "video" | "document" | "ptt"; url: string; fileName?: string; mimeType?: string } | undefined;
+    if (data.media) {
+      const [header, base64] = data.media.dataUrl.split(",", 2);
+      if (!base64) return { ok: false, error: "Arquivo inválido." };
+      const bytes = Math.floor((base64.length * 3) / 4);
+      if (bytes > 10 * 1024 * 1024) return { ok: false, error: "Arquivo muito grande. O limite é 10 MB." };
+      media = {
+        type: data.media.kind,
+        url: data.media.dataUrl,
+        fileName: data.media.fileName,
+        mimeType: header.match(/data:([^;]+)/)?.[1],
       };
     }
 
     const { sendFromInbox } = await import("@/server/services/whatsapp-message-service");
-    await sendFromInbox(ctx, conversationId, data.body);
+    await sendFromInbox(ctx, conversationId, data.body, { media });
     revalidatePath("/grupos");
     return { ok: true, data: true };
   } catch (error) {

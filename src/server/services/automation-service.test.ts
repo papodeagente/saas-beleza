@@ -20,6 +20,18 @@ describe("automações", () => {
     ).toBe("2026-10-01T13:00:00.000Z");
   });
 
+  it("calcula mensagem antes do aniversário no fuso da clínica", () => {
+    expect(
+      automationScheduledFor(event, "birthday_before", 3, "09:00", "America/Sao_Paulo").toISOString(),
+    ).toBe("2026-09-07T12:00:00.000Z");
+  });
+
+  it("calcula mensagem no dia do aniversário", () => {
+    expect(
+      automationScheduledFor(event, "birthday_day", 0, "08:15", "America/Sao_Paulo").toISOString(),
+    ).toBe("2026-09-10T11:15:00.000Z");
+  });
+
   it("personaliza mensagem e link de reagendamento", () => {
     const message = renderAutomationTemplate(
       "Oi, {nome}! Seu {servico} é às {hora}. {link_agendamento}",

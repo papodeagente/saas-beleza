@@ -22,6 +22,7 @@ import {
   reactFromInbox,
   sendFromInbox,
   syncConversationHistory,
+  syncRecentConversationHistory,
   transcribeAudio,
 } from "@/server/services/whatsapp-message-service";
 
@@ -158,6 +159,19 @@ export async function syncConversationHistoryAction(input: unknown): Promise<{ o
     return { ok: true, imported };
   } catch (error) {
     console.warn("[inbox] reconciliação de histórico falhou:", error instanceof Error ? error.message : error);
+    return { ok: false, imported: 0 };
+  }
+}
+
+/** Recupera chats recentes que avançaram no aparelho, mesmo se o webhook oscilou. */
+export async function syncRecentInboxAction(): Promise<{ ok: boolean; imported: number }> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "staff");
+    const imported = await syncRecentConversationHistory(ctx.organizationId);
+    return { ok: true, imported };
+  } catch (error) {
+    console.warn("[inbox] reconciliação dos chats recentes falhou:", error instanceof Error ? error.message : error);
     return { ok: false, imported: 0 };
   }
 }

@@ -36,6 +36,10 @@ export type Group = {
   inviteLink?: string | null;
 };
 
+function trueLike(value: Json): boolean {
+  return value === true || value === 1 || (typeof value === "string" && ["true", "1", "yes"].includes(value.toLowerCase()));
+}
+
 function normalizeParticipant(raw: Json): GroupParticipant {
   const phoneRaw = firstString(get(raw, "PhoneNumber"), get(raw, "phoneNumber"));
   const phone = digitsOnly(phoneRaw.split("@")[0] ?? "");
@@ -43,8 +47,8 @@ function normalizeParticipant(raw: Json): GroupParticipant {
     jid: firstString(get(raw, "JID"), get(raw, "jid")),
     phone: phone || null,
     displayName: firstString(get(raw, "DisplayName"), get(raw, "displayName")).trim() || null,
-    isAdmin: Boolean(get(raw, "IsAdmin") ?? get(raw, "isAdmin")),
-    isSuperAdmin: Boolean(get(raw, "IsSuperAdmin") ?? get(raw, "isSuperAdmin")),
+    isAdmin: trueLike(get(raw, "IsAdmin") ?? get(raw, "isAdmin")),
+    isSuperAdmin: trueLike(get(raw, "IsSuperAdmin") ?? get(raw, "isSuperAdmin")),
   };
 }
 
@@ -59,9 +63,9 @@ export function normalizeGroup(raw: Json): Group {
     participants,
     // `ParticipantCount` volta zerado com frequência; a lista é a fonte confiável.
     participantCount: participants.length || (asNumber(get(raw, "ParticipantCount")) ?? 0),
-    onlyAdminsSend: Boolean(get(raw, "IsAnnounce") ?? get(raw, "isAnnounce")),
-    onlyAdminsEdit: Boolean(get(raw, "IsLocked") ?? get(raw, "isLocked")),
-    requiresApproval: Boolean(get(raw, "IsJoinApprovalRequired") ?? get(raw, "isJoinApprovalRequired")),
+    onlyAdminsSend: trueLike(get(raw, "IsAnnounce") ?? get(raw, "isAnnounce")),
+    onlyAdminsEdit: trueLike(get(raw, "IsLocked") ?? get(raw, "isLocked")),
+    requiresApproval: trueLike(get(raw, "IsJoinApprovalRequired") ?? get(raw, "isJoinApprovalRequired")),
     createdAt: firstString(get(raw, "GroupCreated"), get(raw, "groupCreated")) || null,
     inviteLink: firstString(get(raw, "InviteLink"), get(raw, "inviteLink")) || null,
   };
@@ -170,7 +174,10 @@ export async function setOnlyAdminsEdit(creds: UazapiCredentials, groupJid: stri
 }
 
 export async function setJoinApproval(creds: UazapiCredentials, groupJid: string, value: boolean): Promise<void> {
-  await uazapiRequest(creds, "POST", "/group/updateJoinApproval", { groupjid: groupJid, approval: value });
+  await uazapiRequest(creds, "POST", "/group/updateJoinApproval", {
+    groupjid: groupJid,
+    IsJoinApprovalRequired: value,
+  });
 }
 
 export async function leaveGroup(creds: UazapiCredentials, groupJid: string): Promise<void> {

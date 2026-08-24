@@ -1,5 +1,5 @@
 import "server-only";
-import { asArray, asString, firstString, get, type Json } from "@/server/whatsapp/json";
+import { asArray, asNumber, asString, firstString, get, type Json } from "@/server/whatsapp/json";
 
 /**
  * Cliente da uazapi.
@@ -228,6 +228,16 @@ export async function disconnectInstance(creds: UazapiCredentials): Promise<void
 
 export type SendResult = { messageId: string; status: string };
 
+/**
+ * Conversas privadas aceitam só o número, mas grupos, LIDs e canais precisam
+ * do JID completo. Remover tudo depois do `@` fazia `120...@g.us` virar um
+ * número de telefone inexistente justamente nos envios de grupo.
+ */
+export function recipientId(to: string): string {
+  const value = to.trim();
+  return value.toLowerCase().endsWith("@s.whatsapp.net") ? value.slice(0, value.lastIndexOf("@")) : value;
+}
+
 function extractMessageId(resp: Json): string {
   // `messageid` é o id curto rastreável; o composto `<owner>:<id>` não casa
   // com o que volta em messages_update.
@@ -241,7 +251,7 @@ export async function sendText(
   opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean },
 ): Promise<SendResult> {
   const resp = await request(creds, "POST", "/send/text", {
-    number: to.replace(/@.*$/, ""),
+    number: recipientId(to),
     text,
     replyid: opts?.replyId,
     mentions: opts?.mentions?.length ? opts.mentions.join(",") : undefined,
@@ -282,7 +292,7 @@ export async function sendMedia(
   },
 ): Promise<SendResult> {
   const resp = await request(creds, "POST", "/send/media", {
-    number: to.replace(/@.*$/, ""),
+    number: recipientId(to),
     type: media.type,
     file: media.file,
     text: media.caption,
@@ -308,7 +318,7 @@ export async function reactToMessage(
   emoji: string,
 ): Promise<void> {
   await request(creds, "POST", "/message/react", {
-    number: to.replace(/@.*$/, ""),
+    number: recipientId(to),
     id: messageId,
     text: emoji,
   });
@@ -342,7 +352,7 @@ export async function sendPresence(
   durationMs = 3000,
 ): Promise<void> {
   await request(creds, "POST", "/message/presence", {
-    number: to.replace(/@.*$/, ""),
+    number: recipientId(to),
     presence,
     delay: durationMs,
   });
@@ -351,6 +361,7 @@ export async function sendPresence(
 export type DownloadedMedia = {
   url: string | null;
   base64: string | null;
+  mimeType: string | null;
   transcription: string | null;
 };
 
@@ -375,7 +386,10 @@ export async function downloadMessageMedia(
   });
   return {
     url: firstString(get(resp, "fileURL"), get(resp, "url"), get(resp, "link")) || null,
-    base64: firstString(get(resp, "base64")) || null,
+    // `base64Data` e `mimetype` são os nomes documentados pela uazapi 2.1.
+    // Os aliases antigos continuam aceitos para instâncias ainda não atualizadas.
+    base64: firstString(get(resp, "base64Data"), get(resp, "base64")) || null,
+    mimeType: firstString(get(resp, "mimetype"), get(resp, "mimeType"), get(resp, "contentType")) || null,
     transcription: firstString(get(resp, "transcription"), get(resp, "text")).trim() || null,
   };
 }
@@ -399,7 +413,7 @@ export async function checkNumbers(creds: UazapiCredentials, numbers: string[]):
 }
 
 export async function markChatRead(creds: UazapiCredentials, chatId: string): Promise<void> {
-  await request(creds, "POST", "/chat/read", { number: chatId.replace(/@.*$/, ""), read: true });
+  await request(creds, "POST", "/chat/read", { number: recipientId(chatId), read: true });
 }
 
 export async function findMessages(
@@ -412,6 +426,53 @@ export async function findMessages(
     offset: params.offset ?? 0,
   });
   return Array.isArray(resp) ? resp : asArray(get(resp, "messages") ?? get(resp, "data"));
+}
+
+/** Solicita ao aparelho um bloco anterior do histórico; a resposta é assíncrona. */
+export async function requestMessageHistory(
+  creds: UazapiCredentials,
+  chatId: string,
+  count = 100,
+): Promise<void> {
+  await request(creds, "POST", "/message/history-sync", {
+    number: recipientId(chatId),
+    mode: "history",
+    count: Math.max(1, Math.min(100, count)),
+  });
+}
+
+export type FoundChat = {
+  jid: string;
+  name: string | null;
+  isGroup: boolean;
+  /** Timestamp bruto da última mensagem, em segundos ou milissegundos. */
+  lastMessageTimestamp: number | null;
+};
+
+/** Lista os chats mais recentes conhecidos pela instância. */
+export async function findChats(
+  creds: UazapiCredentials,
+  params: { limit?: number; offset?: number; isGroup?: boolean } = {},
+): Promise<FoundChat[]> {
+  const resp = await request(creds, "POST", "/chat/find", {
+    operator: "AND",
+    sort: "-wa_lastMsgTimestamp",
+    limit: params.limit ?? 20,
+    offset: params.offset ?? 0,
+    wa_isGroup: params.isGroup,
+  });
+  const rows = Array.isArray(resp) ? resp : asArray(get(resp, "chats") ?? get(resp, "data"));
+  return rows
+    .map((row) => {
+      const groupValue = get(row, "wa_isGroup");
+      return {
+        jid: firstString(get(row, "wa_chatid"), get(row, "chatid"), get(row, "jid")),
+        name: firstString(get(row, "name"), get(row, "wa_contactName"), get(row, "wa_name")) || null,
+        isGroup: groupValue === true || groupValue === 1 || String(groupValue).toLowerCase() === "true",
+        lastMessageTimestamp: asNumber(get(row, "wa_lastMsgTimestamp")) ?? null,
+      };
+    })
+    .filter((row) => Boolean(row.jid));
 }
 
 // ---------------------------------------------------------------------------

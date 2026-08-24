@@ -94,6 +94,8 @@ export const automationTrigger = pgEnum("automation_trigger", [
   "appointment_day",
   "after_appointment",
   "after_purchase",
+  "birthday_before",
+  "birthday_day",
 ]);
 export const automationDispatchStatus = pgEnum("automation_dispatch_status", [
   "processing",

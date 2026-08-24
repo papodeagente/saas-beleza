@@ -206,6 +206,20 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
     const numericStatus = rawStatus
       ? Number(rawStatus)
       : (asNumber(get(body, "ack")) ?? asNumber(get(raw, "ack")) ?? Number.NaN);
+    if (rawStatus.includes("delete")) {
+      if (externalIds.length === 0) return { kind: "ignored", reason: "exclusao_sem_id" };
+      return {
+        kind: "deleted",
+        instance,
+        externalId: externalIds[0],
+        remoteJid: firstString(
+          get(body, "chatid"),
+          get(body, "remoteJid"),
+          get(body, "key", "remoteJid"),
+          get(raw, "chatid"),
+        ),
+      };
+    }
     const status =
       rawStatus.includes("read") || rawStatus.includes("played") || numericStatus >= 4
         ? "read"
@@ -272,6 +286,11 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
 
   const externalId = firstString(get(msg, "messageid"), get(msg, "messageId"), get(msg, "id"), get(msg, "key", "id"));
   if (!externalId) return { kind: "ignored", reason: "sem_message_id" };
+
+  const messageStatus = firstString(get(msg, "status"), get(msg, "Type")).toLowerCase();
+  if (messageStatus.includes("delete")) {
+    return { kind: "deleted", instance, externalId, remoteJid };
+  }
 
   const rawType = firstString(get(msg, "messageType"), get(msg, "type"));
 
@@ -396,4 +415,44 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       sentAt: toDate(get(msg, "timestamp") ?? get(msg, "messageTimestamp") ?? get(msg, "t")),
     },
   };
+}
+
+/**
+ * `history` e algumas versões de `messages` agrupam várias mensagens num só
+ * payload. O normalizador unitário permanece útil para eventos normais; este
+ * adaptador garante que o webhook não descarte tudo depois do primeiro item.
+ */
+export function normalizeUazapiWebhookBatch(raw: Json): WaEvent[] {
+  if (!raw || typeof raw !== "object") return [normalizeUazapiWebhook(raw)];
+  const evento = get(raw, "event");
+  const eventName = firstString(get(raw, "EventType"), evento, get(raw, "type")).toLowerCase();
+  const body: Json =
+    (evento !== null && typeof evento === "object" ? evento : undefined) ??
+    get(raw, "data") ??
+    get(raw, "message") ??
+    raw;
+  let rows = Array.isArray(body)
+    ? body
+    : asArray(get(body, "messages") ?? (eventName === "history" ? get(body, "data") : null));
+  if (
+    eventName === "history" &&
+    rows.length === 0 &&
+    (get(body, "messageid") || get(body, "messageId") || get(body, "chatid"))
+  ) {
+    rows = [body];
+  }
+  if (rows.length === 0 || (rows.length === 1 && eventName !== "history")) {
+    return [normalizeUazapiWebhook(raw)];
+  }
+
+  const outer = !Array.isArray(raw) ? (raw as Record<string, Json>) : {};
+  const chat = get(raw, "chat") ?? get(body, "chat");
+  return rows.map((message) =>
+    normalizeUazapiWebhook({
+      ...outer,
+      EventType: "messages",
+      event: message,
+      ...(chat ? { chat } : {}),
+    }),
+  );
 }

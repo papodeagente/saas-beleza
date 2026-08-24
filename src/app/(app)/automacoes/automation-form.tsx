@@ -37,6 +37,18 @@ const PRESETS = {
     message:
       "Oi, {nome}! Sentimos sua falta por aqui 💛 Que tal reservar seu próximo cuidado? Escolha o melhor horário: {link_agendamento}",
   },
+  birthday_before: {
+    name: "Carinho antes do aniversário",
+    days: 3,
+    message:
+      "Oi, {nome}! Seu aniversário está chegando 🎉 Que tal reservar um momento especial para você? Escolha seu horário: {link_agendamento}",
+  },
+  birthday_day: {
+    name: "Mensagem no dia do aniversário",
+    days: 0,
+    message:
+      "Feliz aniversário, {nome}! 🎉 Desejamos um novo ciclo lindo e cheio de motivos para celebrar. Será um prazer cuidar de você 💜",
+  },
 } as const;
 
 type Trigger = keyof typeof PRESETS;
@@ -55,6 +67,8 @@ export function AutomationForm() {
           <option value="appointment_day">No dia do agendamento</option>
           <option value="after_appointment">X dias depois do atendimento</option>
           <option value="after_purchase">X dias depois da última compra confirmada</option>
+          <option value="birthday_before">X dias antes do aniversário</option>
+          <option value="birthday_day">No dia do aniversário</option>
         </Select>
       </Field>
 
@@ -69,9 +83,18 @@ export function AutomationForm() {
           </>
         ) : (
           <>
-            <Field label={trigger === "appointment_day" ? "No mesmo dia" : "Após quantos dias"} htmlFor="daysOffset">
-              <Input id="daysOffset" name="daysOffset" type="number" min={0} max={365} defaultValue={preset.days} disabled={trigger === "appointment_day"} required />
-              {trigger === "appointment_day" ? <input type="hidden" name="daysOffset" value="0" /> : null}
+            <Field
+              label={
+                trigger === "appointment_day" || trigger === "birthday_day"
+                  ? "No mesmo dia"
+                  : trigger === "before_appointment" || trigger === "birthday_before"
+                    ? "Quantos dias antes"
+                    : "Após quantos dias"
+              }
+              htmlFor="daysOffset"
+            >
+              <Input id="daysOffset" name="daysOffset" type="number" min={0} max={365} defaultValue={preset.days} disabled={trigger === "appointment_day" || trigger === "birthday_day"} required />
+              {trigger === "appointment_day" || trigger === "birthday_day" ? <input type="hidden" name="daysOffset" value="0" /> : null}
             </Field>
             <Field label="Horário" htmlFor="sendTime">
               <Input id="sendTime" name="sendTime" type="time" defaultValue="09:00" required />

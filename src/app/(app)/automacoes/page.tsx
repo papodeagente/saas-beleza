@@ -17,6 +17,8 @@ const TRIGGER_LABEL: Record<AutomationTrigger, (days: number) => string> = {
   appointment_day: () => "No dia do agendamento",
   after_appointment: (days) => `${days} ${days === 1 ? "dia" : "dias"} após o atendimento`,
   after_purchase: (days) => `${days} ${days === 1 ? "dia" : "dias"} após a última compra`,
+  birthday_before: (days) => `${days} ${days === 1 ? "dia" : "dias"} antes do aniversário`,
+  birthday_day: () => "No dia do aniversário",
 };
 
 export default async function AutomationsPage() {

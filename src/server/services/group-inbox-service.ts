@@ -5,6 +5,9 @@ import { conversations, messages, whatsappGroups } from "@/db/schema";
 import { whichHavePictures } from "@/server/services/profile-picture-service";
 import type { TenantContext } from "@/server/auth";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
+import { resolveConversation } from "@/server/services/conversation-resolver";
+import { syncConversationHistory } from "@/server/services/whatsapp-message-service";
+import { getRedis } from "@/server/queues/redis";
 import { listGroups, type Group } from "@/server/whatsapp/uazapi-groups";
 
 /**
@@ -307,21 +310,51 @@ export type GroupThreadMessage = {
   direction: "inbound" | "outbound";
   messageType: string;
   mediaUrl: string | null;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
   audioTranscription: string | null;
   createdAt: Date;
 };
 
-/** Mensagens do grupo, se ele já tiver conversa por aqui. */
+/** Cria o fio local antes da primeira mensagem para que o grupo já seja respondível. */
+export async function ensureGroupConversation(ctx: TenantContext, jid: string): Promise<number> {
+  const connection = await getConnectionRow(ctx.organizationId);
+  if (!connection) throw new Error("SEM_CONEXAO");
+  const [snapshot] = await db
+    .select({ name: whatsappGroups.name })
+    .from(whatsappGroups)
+    .where(and(eq(whatsappGroups.organizationId, ctx.organizationId), eq(whatsappGroups.jid, jid)))
+    .limit(1);
+  const resolved = await resolveConversation({
+    organizationId: ctx.organizationId,
+    connectionId: connection.id,
+    remoteJid: jid,
+    phone: null,
+    contactName: snapshot?.name ?? jid.split("@")[0] ?? "Grupo",
+    isGroup: true,
+  });
+  return resolved.conversationId;
+}
+
+/** Mensagens do grupo, reconciliadas com o histórico conhecido pela instância. */
 export async function getGroupThread(
   ctx: TenantContext,
   jid: string,
 ): Promise<{ conversationId: number | null; messages: GroupThreadMessage[] }> {
-  const [conversa] = await db
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(and(eq(conversations.organizationId, ctx.organizationId), eq(conversations.remoteJid, jid)))
-    .limit(1);
-  if (!conversa) return { conversationId: null, messages: [] };
+  const conversationId = await ensureGroupConversation(ctx, jid);
+
+  // A lista de grupos não traz mensagens. Buscar /message/find ao abrir o fio
+  // recupera o que já aconteceu no celular; o lock evita repetir a consulta a
+  // cada evento em todas as abas abertas.
+  const redis = getRedis();
+  const claimed = redis
+    ? await redis.set(`groups:history-sync:${ctx.organizationId}:${jid}`, "1", "EX", 20, "NX").catch(() => null)
+    : "OK";
+  if (claimed === "OK") {
+    await syncConversationHistory(ctx.organizationId, conversationId, 300, { includeGroups: true }).catch((error) => {
+      console.warn("[grupos] histórico não reconciliado:", error instanceof Error ? error.message : error);
+    });
+  }
 
   const linhas = await db
     .select({
@@ -331,15 +364,17 @@ export async function getGroupThread(
       direction: messages.direction,
       messageType: messages.messageType,
       mediaUrl: messages.mediaUrl,
+      mediaMimeType: messages.mediaMimeType,
+      mediaFileName: messages.mediaFileName,
       audioTranscription: messages.audioTranscription,
       createdAt: messages.createdAt,
     })
     .from(messages)
-    .where(and(eq(messages.organizationId, ctx.organizationId), eq(messages.conversationId, conversa.id)))
+    .where(and(eq(messages.organizationId, ctx.organizationId), eq(messages.conversationId, conversationId)))
     .orderBy(desc(messages.createdAt))
     .limit(120);
 
-  return { conversationId: conversa.id, messages: linhas.reverse() };
+  return { conversationId, messages: linhas.reverse() };
 }
 
 export const _refs = { ilike };

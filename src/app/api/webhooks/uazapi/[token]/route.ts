@@ -11,7 +11,7 @@ import {
   markMessageDeleted,
   transcribeAudio,
 } from "@/server/services/whatsapp-message-service";
-import { normalizeUazapiWebhook } from "@/server/whatsapp/normalizer";
+import { normalizeUazapiWebhookBatch } from "@/server/whatsapp/normalizer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,9 +43,19 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     return NextResponse.json({ ok: false, error: "payload inválido" }, { status: 400 });
   }
 
-  const event = normalizeUazapiWebhook(payload);
+  const events = normalizeUazapiWebhookBatch(payload);
+  const event = events[0];
+  const payloadObject = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+  const rawEventName = String(
+    payloadObject.EventType ?? (typeof payloadObject.event === "string" ? payloadObject.event : payloadObject.type) ?? "",
+  ).toLowerCase();
+  const historical = rawEventName === "history";
   const dedupeKey =
-    event.kind === "message"
+    events.length !== 1
+      ? null
+      : event.kind === "message"
       ? `msg:${event.message.externalId}`
       : event.kind === "reaction"
         ? `react:${event.targetExternalId}:${event.emoji}:${event.fromMe ? "me" : "them"}`
@@ -58,7 +68,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     .values({
       connectionId: connection.id,
       organizationId: connection.organizationId,
-      eventType: event.kind,
+      eventType: events.length === 1 ? event.kind : historical ? "history" : "message_batch",
       dedupeKey,
       payload: payload as Record<string, unknown>,
     })
@@ -86,66 +96,65 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     .catch(() => {});
 
   try {
-    if (event.kind === "message") {
-      const result = await ingestMessage(connection, event.message);
-      if (result.isNew) {
-        await publishInboxEvent(connection.organizationId, {
-          type: "message",
-          conversationId: result.conversationId,
-        });
-      }
-      if (result.isNew && result.isInbound) {
-        if (event.message.kind === "audio" && result.messageId && process.env.OPENAI_API_KEY) {
-          await transcribeAudio(connection.organizationId, result.conversationId, result.messageId).catch((error) => {
-            console.warn("[uazapi webhook] áudio recebido sem transcrição:", error instanceof Error ? error.message : error);
+    for (const current of events) {
+      if (current.kind === "message") {
+        const result = await ingestMessage(connection, current.message, { historical });
+        if (result.isNew || result.isUpdated) {
+          await publishInboxEvent(connection.organizationId, {
+            type: "message",
+            conversationId: result.conversationId,
           });
         }
-        // Nunca bloqueia o webhook: o turno do agente roda em background.
-        const { enqueueAgentTurn } = await import("@/server/queues/agent-turn-queue");
-        await enqueueAgentTurn({
-          organizationId: connection.organizationId,
-          conversationId: result.conversationId,
-          customerId: result.customerId,
-        });
+        if (result.isNew && result.isInbound && !historical) {
+          if (current.message.kind === "audio" && result.messageId && process.env.OPENAI_API_KEY) {
+            await transcribeAudio(connection.organizationId, result.conversationId, result.messageId).catch((error) => {
+              console.warn("[uazapi webhook] áudio recebido sem transcrição:", error instanceof Error ? error.message : error);
+            });
+          }
+          // Histórico é só reconciliação e nunca pode acordar a IA para
+          // responder mensagens antigas. Mensagens novas seguem para a fila.
+          const { enqueueAgentTurn } = await import("@/server/queues/agent-turn-queue");
+          await enqueueAgentTurn({
+            organizationId: connection.organizationId,
+            conversationId: result.conversationId,
+            customerId: result.customerId,
+          });
+        }
+      } else if (current.kind === "status") {
+        for (const externalId of current.externalIds) {
+          await applyStatusUpdate(connection, externalId, current.status);
+        }
+        await publishInboxEvent(connection.organizationId, { type: "status" });
+      } else if (current.kind === "reaction") {
+        await applyReaction(connection, current.targetExternalId, current.emoji, current.fromMe);
+        await publishInboxEvent(connection.organizationId, { type: "reaction" });
+      } else if (current.kind === "deleted") {
+        await markMessageDeleted(connection, current.externalId);
+        await publishInboxEvent(connection.organizationId, { type: "deleted" });
+      } else if (current.kind === "qrcode") {
+        await db
+          .update(whatsappConnections)
+          .set({
+            status: "connecting",
+            statusDetail: "aguardando leitura do QR",
+            pairingQrCode: current.qrCode,
+            pairingCode: current.pairCode,
+            pairingUpdatedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(whatsappConnections.id, connection.id));
+      } else if (current.kind === "connection") {
+        await db
+          .update(whatsappConnections)
+          .set({
+            status: current.connected ? "connected" : "disconnected",
+            statusDetail: current.status,
+            connectedAt: current.connected ? (connection.connectedAt ?? new Date()) : connection.connectedAt,
+            ...(current.connected ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(whatsappConnections.id, connection.id));
       }
-    } else if (event.kind === "status") {
-      for (const externalId of event.externalIds) {
-        await applyStatusUpdate(connection, externalId, event.status);
-      }
-      await publishInboxEvent(connection.organizationId, { type: "status" });
-    } else if (event.kind === "reaction") {
-      await applyReaction(connection, event.targetExternalId, event.emoji, event.fromMe);
-      await publishInboxEvent(connection.organizationId, { type: "reaction" });
-    } else if (event.kind === "deleted") {
-      await markMessageDeleted(connection, event.externalId);
-      await publishInboxEvent(connection.organizationId, { type: "deleted" });
-    } else if (event.kind === "qrcode") {
-      await db
-        .update(whatsappConnections)
-        .set({
-          status: "connecting",
-          statusDetail: "aguardando leitura do QR",
-          pairingQrCode: event.qrCode,
-          pairingCode: event.pairCode,
-          pairingUpdatedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(whatsappConnections.id, connection.id));
-    } else if (event.kind === "connection") {
-      await db
-        .update(whatsappConnections)
-        .set({
-          status: event.connected ? "connected" : "disconnected",
-          statusDetail: event.status,
-          connectedAt: event.connected ? (connection.connectedAt ?? new Date()) : connection.connectedAt,
-          // Pareou: o código não serve mais para nada e não deve continuar
-          // visível na tela.
-          ...(event.connected
-            ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(whatsappConnections.id, connection.id));
     }
 
     if (logId) {

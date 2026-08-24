@@ -158,6 +158,7 @@ export function MessageBubble({
   const [menuParaCima, setMenuParaCima] = useState(false);
   const [menuADireita, setMenuADireita] = useState(false);
   const toqueLongo = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ultimaUrlRecuperada = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -223,6 +224,15 @@ export function MessageBubble({
   const corpo = textoVisivel(message.body);
   const ehArquivo =
     message.messageType !== "text" && !["image", "audio", "ptt", "video"].includes(message.messageType);
+  const podeBaixarArquivo = ["document", "sticker"].includes(message.messageType);
+
+  function recuperarPreviaExpirada() {
+    if (!message.mediaUrl || ultimaUrlRecuperada.current === message.mediaUrl) return;
+    ultimaUrlRecuperada.current = message.mediaUrl;
+    void loadMediaAction({ conversationId, messageId: message.id }).then((result) => {
+      if (result.ok && result.url && result.url !== message.mediaUrl) onChanged();
+    });
+  }
   // Primeiro nome, como nos selos da lista: "Mariana Albuquerque" esticava a
   // bolha de um "teste" até a largura do nome, e quem atendeu se identifica
   // pelo primeiro nome em qualquer clínica.
@@ -310,6 +320,7 @@ export function MessageBubble({
                     src={message.mediaUrl}
                     alt={corpo || "Imagem recebida"}
                     className="max-h-[280px] w-auto rounded-control"
+                    onError={recuperarPreviaExpirada}
                   />
                 </a>
               ) : (
@@ -326,7 +337,7 @@ export function MessageBubble({
             {message.messageType === "audio" || message.messageType === "ptt" ? (
               message.mediaUrl ? (
                 // Player nativo: toca sem sair da conversa e sem baixar nada.
-                <audio controls src={message.mediaUrl} className="mb-1.5 block h-9 w-[240px] max-w-full" />
+                <audio controls src={message.mediaUrl} className="mb-1.5 block h-9 w-[240px] max-w-full" onError={recuperarPreviaExpirada} />
               ) : (
                 <MediaPlaceholder
                   conversationId={conversationId}
@@ -347,7 +358,7 @@ export function MessageBubble({
             */}
             {message.messageType === "video" ? (
               message.mediaUrl ? (
-                <video controls src={message.mediaUrl} className="mb-1.5 block max-h-[280px] w-auto rounded-control" />
+                <video controls src={message.mediaUrl} className="mb-1.5 block max-h-[280px] w-auto rounded-control" onError={recuperarPreviaExpirada} />
               ) : (
                 <MediaPlaceholder
                   conversationId={conversationId}
@@ -373,10 +384,10 @@ export function MessageBubble({
                   <FileText className="size-3.5 shrink-0" aria-hidden />
                 )}
                 <span className="truncate">{message.mediaFileName || rotuloDaMidia || "Arquivo"}</span>
-                {message.mediaUrl ? (
-                  <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">
-                    abrir
-                  </a>
+                {podeBaixarArquivo ? (
+                  <OpenMediaButton conversationId={conversationId} messageId={message.id} />
+                ) : message.mediaUrl ? (
+                  <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="text-accent">abrir</a>
                 ) : null}
               </span>
             ) : null}
@@ -499,6 +510,31 @@ function MediaPlaceholder({
         </button>
       ) : null}
     </span>
+  );
+}
+
+/** Renova o link temporário antes de abrir; a uazapi expira esses links. */
+function OpenMediaButton({ conversationId, messageId }: { conversationId: number; messageId: number }) {
+  const [loading, startLoading] = useTransition();
+
+  function abrir() {
+    const tab = window.open("about:blank", "_blank");
+    startLoading(async () => {
+      const result = await loadMediaAction({ conversationId, messageId });
+      if (!result.ok || !result.url) {
+        tab?.close();
+        toast.error(result.ok ? "Este arquivo não está mais disponível no WhatsApp." : result.error);
+        return;
+      }
+      if (tab) tab.location.href = result.url;
+      else window.location.assign(result.url);
+    });
+  }
+
+  return (
+    <button type="button" disabled={loading} onClick={abrir} className="text-accent disabled:opacity-60">
+      {loading ? "carregando…" : "abrir"}
+    </button>
   );
 }
 
