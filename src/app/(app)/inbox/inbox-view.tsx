@@ -411,6 +411,30 @@ export function InboxView({
   const lastProviderSyncRef = useRef<{ conversationId: number; at: number } | null>(null);
   const lastRecentSyncRef = useRef(0);
 
+  /**
+   * O que o canal de eventos precisa LER fica em refs, atualizadas a cada
+   * render. O efeito abaixo dependia de `tab`, `search` e `activeId` — o que
+   * significava que CADA TOQUE numa conversa derrubava o EventSource, o
+   * `ready` da reconexão disparava a sincronização completa (histórico na
+   * uazapi incluído, uma viagem à rede externa) e a abertura da conversa
+   * entrava na fila atrás de tudo isso. Medido: 1,3s para trocar de tela.
+   * Com o canal estável, o toque não paga nada além da própria conversa.
+   */
+  const tabRef = useRef(tab);
+  const searchRef = useRef(search);
+  const activeIdRef = useRef(activeId);
+  const refreshListRef = useRef(refreshList);
+  const guardarConversaRef = useRef(guardarConversa);
+  const cacheRef = useRef(cache);
+  useEffect(() => {
+    tabRef.current = tab;
+    searchRef.current = search;
+    activeIdRef.current = activeId;
+    refreshListRef.current = refreshList;
+    guardarConversaRef.current = guardarConversa;
+    cacheRef.current = cache;
+  });
+
   // O webhook publica no Redis e este canal autenticado avisa a tela assim que
   // o banco terminou de gravar. EventSource se reconecta sozinho se a internet
   // oscilar; o intervalo abaixo é apenas a rede de segurança.
@@ -427,19 +451,25 @@ export function InboxView({
       syncing = true;
       do {
         queued = false;
+        // O banco primeiro: é o que muda a tela. A reconciliação com a uazapi
+        // (rede externa, meio segundo fácil) vem DEPOIS da pintura — se ela
+        // importar algo, o próprio evento publicado reabre este ciclo.
+        const ativa = activeIdRef.current;
+        if (ativa) {
+          const loaded = await loadConversationAction(ativa, { markRead: false });
+          if (loaded && activeIdRef.current === ativa) guardarConversaRef.current(ativa, loaded);
+        }
+        await refreshListRef.current(tabRef.current, searchRef.current);
         if (Date.now() - lastRecentSyncRef.current >= FALLBACK_POLL_MS) {
           lastRecentSyncRef.current = Date.now();
           await syncRecentInboxAction();
         }
-        await refreshList(tab, search);
-        if (activeId) {
+        if (ativa && activeIdRef.current === ativa) {
           const last = lastProviderSyncRef.current;
-          if (!last || last.conversationId !== activeId || Date.now() - last.at >= FALLBACK_POLL_MS) {
-            lastProviderSyncRef.current = { conversationId: activeId, at: Date.now() };
-            await syncConversationHistoryAction(activeId);
+          if (!last || last.conversationId !== ativa || Date.now() - last.at >= FALLBACK_POLL_MS) {
+            lastProviderSyncRef.current = { conversationId: ativa, at: Date.now() };
+            await syncConversationHistoryAction(ativa);
           }
-          const loaded = await loadConversationAction(activeId, { markRead: false });
-          if (loaded) guardarConversa(activeId, loaded);
         }
       } while (queued);
       syncing = false;
@@ -464,7 +494,9 @@ export function InboxView({
       window.removeEventListener("online", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [tab, search, activeId, refreshList, guardarConversa]);
+    // Montado UMA vez: o estado vivo chega pelas refs. Colocar tab/search/
+    // activeId aqui de volta reintroduz o custo de reconexão em cada toque.
+  }, []);
 
   /**
    * Busca com respiro de 300 ms.
@@ -533,6 +565,55 @@ export function InboxView({
     window.history.replaceState(null, "", id ? `/inbox?conversa=${id}` : "/inbox");
   }
 
+  /**
+   * Aquece o cache de uma conversa sem nenhum efeito colateral visível.
+   *
+   * É o que faz o toque parecer instantâneo: o detalhe já chegou antes do
+   * clique (pelo pouso do mouse na linha, ou pelo aquecimento das primeiras da
+   * lista). `markRead: false` é obrigatório — pré-carregar não é ler, e zerar
+   * o contador aqui apagaria o "1 nova" de uma conversa que ninguém abriu.
+   */
+  const prefetchRef = useRef<Set<number>>(new Set());
+  const prefetch = useCallback(
+    (id: number) => {
+      if (cacheRef.current[id] || prefetchRef.current.has(id)) return;
+      prefetchRef.current.add(id);
+      void loadConversationAction(id, { markRead: false })
+        .then((loaded) => {
+          if (loaded) guardarConversaRef.current(id, loaded);
+        })
+        .finally(() => prefetchRef.current.delete(id));
+    },
+    [],
+  );
+
+  /** O primeiro alvo de toque é o topo da lista: chega aquecido. */
+  useEffect(() => {
+    const primeiras = list.slice(0, 6).map((c) => c.id);
+    const timer = setTimeout(() => {
+      for (const id of primeiras) prefetch(id);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [list, prefetch]);
+
+  /**
+   * Reconciliação com a uazapi em segundo plano, por conversa, com respiro.
+   * Fora do caminho do toque de propósito: é uma viagem à rede externa, e
+   * bloquear a troca de tela nela foi exatamente o que deixou o Inbox lento.
+   */
+  const sincronizarHistoricoEmFundo = useCallback((id: number) => {
+    const last = lastProviderSyncRef.current;
+    if (last && last.conversationId === id && Date.now() - last.at < FALLBACK_POLL_MS) return;
+    lastProviderSyncRef.current = { conversationId: id, at: Date.now() };
+    void syncConversationHistoryAction(id).then((r) => {
+      if (r.imported > 0 && activeIdRef.current === id) {
+        void loadConversationAction(id, { markRead: false }).then((loaded) => {
+          if (loaded && activeIdRef.current === id) guardarConversaRef.current(id, loaded);
+        });
+      }
+    });
+  }, []);
+
   function open(id: number, { marcarLida = true }: { marcarLida?: boolean } = {}) {
     setSelectedId(id);
     syncUrl(id);
@@ -543,12 +624,16 @@ export function InboxView({
     // Abrir zera o não lido; refletir na hora evita o contador fantasma.
     if (marcarLida) setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
     requestRef.current = id;
+    const jaAquecida = Boolean(cacheRef.current[id]);
     startSwitching(async () => {
+      // Aquecida pinta na hora; a releitura corre por fora só para zerar o não
+      // lido no servidor e trazer o que chegou depois do aquecimento.
       const loaded = await loadConversationAction(id, { markRead: marcarLida });
       if (requestRef.current !== id) return;
       if (loaded) guardarConversa(id, loaded);
-      else toast.error("Não foi possível abrir a conversa.");
+      else if (!jaAquecida) toast.error("Não foi possível abrir a conversa.");
     });
+    sincronizarHistoricoEmFundo(id);
   }
 
   async function reload(conversationId: number) {
@@ -825,6 +910,7 @@ export function InboxView({
                   active={conversation.id === activeId}
                   opened={conversation.id === selectedId}
                   onOpen={() => open(conversation.id)}
+                  onPrefetch={() => prefetch(conversation.id)}
                   currentUserId={currentUserId}
                   assignees={assignees}
                   pending={acting}
@@ -841,17 +927,21 @@ export function InboxView({
       {/* Conversa */}
       <section className={cn("min-w-0 flex-1 flex-col bg-surface md:flex", selectedId == null ? "hidden" : "flex")}>
         {detail == null ? (
-          <div className="flex flex-1 items-center justify-center">
-            {loading ? (
-              <p className="text-caption text-ink-secondary">Carregando conversa…</p>
-            ) : (
+          loading ? (
+            // O esqueleto herda nome e foto da linha tocada: a tela muda no
+            // instante do toque, e o que falta chegar são só as bolhas. Um
+            // painel vazio com "Carregando…" fazia um toque de meio segundo
+            // parecer travado.
+            <ConversationSkeleton row={list.find((c) => c.id === activeId) ?? null} />
+          ) : (
+            <div className="flex flex-1 items-center justify-center">
               <EmptyState
                 icon={MessageSquare}
                 title="Escolha uma conversa"
                 description="As conversas do WhatsApp aparecem à esquerda, com o histórico do cliente ao lado."
               />
-            )}
-          </div>
+            </div>
+          )
         ) : (
           <>
             <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-surface-raised px-3 py-2 md:px-5 md:py-3">
@@ -1364,11 +1454,57 @@ function BotaoFotos() {
   );
 }
 
+/**
+ * Painel da conversa antes de as mensagens chegarem.
+ *
+ * O cabeçalho é real (nome, foto e telefone já estão na linha da lista); só as
+ * bolhas são promessa. As larguras variadas e os lados alternados imitam a
+ * silhueta de uma conversa de verdade — um retângulo único no meio da tela
+ * lê-se como defeito, não como carregamento.
+ */
+function ConversationSkeleton({ row }: { row: ConversationItem | null }) {
+  const larguras = ["w-[46%]", "w-[30%]", "w-[58%]", "w-[24%]", "w-[40%]"];
+  return (
+    <>
+      <header className="flex shrink-0 items-center gap-2 border-b border-line bg-surface-raised px-3 py-2 md:px-5 md:py-3">
+        {row ? <Avatar name={row.customerName} src={row.photoUrl} size="lg" /> : <span className="size-10 animate-pulse rounded-full bg-surface-sunken" />}
+        <div className="min-w-0 flex-1">
+          {row ? (
+            <>
+              <h2 className="truncate text-card text-ink">{row.customerName}</h2>
+              <p className="truncate text-caption text-ink-secondary">{row.phone ?? "WhatsApp"}</p>
+            </>
+          ) : (
+            <span className="block h-4 w-40 animate-pulse rounded-control bg-surface-sunken" />
+          )}
+        </div>
+      </header>
+      <div aria-hidden className="flex flex-1 flex-col justify-end gap-2 overflow-hidden px-4 py-4 md:px-6">
+        {larguras.map((w, i) => (
+          <span
+            key={w}
+            className={cn(
+              "h-9 animate-pulse rounded-card bg-surface-sunken",
+              w,
+              i % 2 === 0 ? "self-start" : "self-end",
+            )}
+            style={{ animationDelay: `${i * 120}ms` }}
+          />
+        ))}
+      </div>
+      <div className="shrink-0 border-t border-line bg-surface-raised px-3 py-3 md:px-6">
+        <span className="block h-10 animate-pulse rounded-card bg-surface-sunken" />
+      </div>
+    </>
+  );
+}
+
 function ConversationRow({
   conversation,
   active,
   opened,
   onOpen,
+  onPrefetch,
   currentUserId,
   assignees,
   pending,
@@ -1378,6 +1514,8 @@ function ConversationRow({
   active: boolean;
   opened: boolean;
   onOpen: () => void;
+  /** Pousar o mouse já busca a conversa: quando o clique vem, ela está pronta. */
+  onPrefetch: () => void;
   currentUserId: number;
   assignees: InboxAssignee[];
   pending: boolean;
@@ -1400,6 +1538,8 @@ function ConversationRow({
       <button
         type="button"
         onClick={onOpen}
+        onMouseEnter={onPrefetch}
+        onTouchStart={onPrefetch}
         aria-current={active ? "true" : undefined}
         className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-1 pl-[9px] text-left"
       >

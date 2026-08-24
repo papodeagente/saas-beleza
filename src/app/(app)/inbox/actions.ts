@@ -191,12 +191,16 @@ export async function loadConversationAction(
     const ctx = await requireSession();
     requireRole(ctx, "staff");
     const conversationId = idSchema.parse(input);
-    const detail = await getConversation(ctx, conversationId);
+    // A leitura periódica passa `markRead: false`. Zerar o não lido a cada
+    // varredura escrevia à toa e destruía a fronteira de onde a atendente
+    // parou de ler. A escrita roda em PARALELO com a leitura: são
+    // independentes, e em série ela adiava a pintura da conversa em uma
+    // viagem inteira ao banco.
+    const [detail] = await Promise.all([
+      getConversation(ctx, conversationId),
+      options.markRead !== false ? clearUnread(ctx.organizationId, conversationId) : null,
+    ]);
     if (!detail) return null;
-    // A leitura periódica passa `markRead: false`. Zerar o não lido a cada dez
-    // segundos escrevia à toa e, pior, destruía a fronteira de onde a atendente
-    // tinha parado de ler antes de ela poder ser desenhada.
-    if (options.markRead !== false) await clearUnread(ctx.organizationId, conversationId);
     return serialize(detail);
   } catch (error) {
     console.error(error);

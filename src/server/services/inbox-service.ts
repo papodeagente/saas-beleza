@@ -346,15 +346,8 @@ export async function getConversation(
     .limit(1);
   if (!conversation) return null;
 
-  // Consulta separada e não junção: a foto não participa de nenhum filtro e
-  // uma leitura por chave única é mais barata que arrastar a tabela pela
-  // junção da conversa inteira.
-  const temFoto = conversation.remoteJid
-    ? (await whichHavePictures(ctx.organizationId, [conversation.remoteJid])).size > 0
-    : false;
-
   const sender = db.select({ id: users.id, name: users.name }).from(users).as("message_sender");
-  const rows = await db
+  const mensagensQ = db
     .select({
       id: messages.id,
       direction: messages.direction,
@@ -387,9 +380,21 @@ export async function getConversation(
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(200);
 
-  let context: ConversationContext | null = null;
-  if (conversation.customerId) {
-    const [customer] = await db
+  /**
+   * O contexto do cliente tem dependência interna (as fichas irmãs pelas
+   * variações do telefone alimentam as métricas), então vive numa função
+   * própria — que roda em PARALELO com as mensagens e com a foto. A versão
+   * anterior enfileirava seis idas ao banco uma atrás da outra, e cada ida é
+   * uma viagem de rede inteira até o Postgres do Coolify: a abertura da
+   * conversa pagava a soma, não o máximo.
+   */
+  const carregarContexto = async (): Promise<ConversationContext | null> => {
+    if (!conversation.customerId) return null;
+    const customerId = conversation.customerId;
+
+    const variants = brPhoneVariants(conversation.phone);
+    const [[customer], related] = await Promise.all([
+      db
       .select({
         customerId: customers.id,
         name: customers.name,
@@ -401,22 +406,21 @@ export async function getConversation(
         lastVisitAt: customers.lastVisitAt,
       })
       .from(customers)
-      .where(eq(customers.id, conversation.customerId))
-      .limit(1);
+      .where(eq(customers.id, customerId))
+      .limit(1),
+      // Cadastros antigos podem guardar o mesmo WhatsApp com/sem DDI e com/sem
+      // nono dígito. O Inbox precisa mostrar a relação inteira, mesmo antes de
+      // a gestão decidir mesclar as fichas duplicadas.
+      variants.length
+        ? db
+            .select({ id: customers.id })
+            .from(customers)
+            .where(and(eq(customers.organizationId, ctx.organizationId), inArray(customers.phone, variants)))
+        : Promise.resolve([] as Array<{ id: number }>),
+    ]);
+    const customerIds = [...new Set([customerId, ...related.map((row) => row.id)])];
 
-    // Cadastros antigos podem guardar o mesmo WhatsApp com/sem DDI e com/sem
-    // nono dígito. O Inbox precisa mostrar a relação inteira, mesmo antes de a
-    // gestão decidir mesclar as fichas duplicadas.
-    const variants = brPhoneVariants(conversation.phone);
-    const related = variants.length
-      ? await db
-          .select({ id: customers.id })
-          .from(customers)
-          .where(and(eq(customers.organizationId, ctx.organizationId), inArray(customers.phone, variants)))
-      : [];
-    const customerIds = [...new Set([conversation.customerId, ...related.map((row) => row.id)])];
-
-    const [allAppointments, appointmentMetrics, paymentMetrics] = await Promise.all([
+    const [allAppointments, appointmentMetrics, paymentMetrics, tags] = await Promise.all([
       db
       .select({
         id: appointments.id,
@@ -447,29 +451,36 @@ export async function getConversation(
         .select({ totalSpentCents: sql<number>`coalesce(sum(${payments.amountCents}), 0)::int`.mapWith(Number) })
         .from(payments)
         .where(and(eq(payments.organizationId, ctx.organizationId), inArray(payments.customerId, customerIds))),
+      db
+        .select({ name: customerTags.name })
+        .from(customerTagLinks)
+        .innerJoin(customerTags, eq(customerTags.id, customerTagLinks.tagId))
+        .where(eq(customerTagLinks.customerId, customerId))
+        .limit(8),
     ]);
 
-    const tags = await db
-      .select({ name: customerTags.name })
-      .from(customerTagLinks)
-      .innerJoin(customerTags, eq(customerTags.id, customerTagLinks.tagId))
-      .where(eq(customerTagLinks.customerId, conversation.customerId))
-      .limit(8);
+    if (!customer) return null;
+    const metrics = appointmentMetrics[0] ?? { visitsCount: 0, noShowCount: 0, lastVisitAt: null };
+    return {
+      ...customer,
+      ...metrics,
+      totalSpentCents: paymentMetrics[0]?.totalSpentCents ?? 0,
+      stage: customerStage(metrics.visitsCount, metrics.lastVisitAt),
+      tags: tags.map((t) => t.name),
+      appointmentsCount: allAppointments.length,
+      nextAppointments: allAppointments,
+    };
+  };
 
-    if (customer) {
-      const metrics = appointmentMetrics[0] ?? { visitsCount: 0, noShowCount: 0, lastVisitAt: null };
-      const totalSpentCents = paymentMetrics[0]?.totalSpentCents ?? 0;
-      context = {
-        ...customer,
-        ...metrics,
-        totalSpentCents,
-        stage: customerStage(metrics.visitsCount, metrics.lastVisitAt),
-        tags: tags.map((t) => t.name),
-        appointmentsCount: allAppointments.length,
-        nextAppointments: allAppointments,
-      };
-    }
-  }
+  const [temFoto, rows, context] = await Promise.all([
+    // Leitura por chave única, em paralelo — não vale uma junção na consulta
+    // principal, mas também não vale uma viagem própria em série.
+    conversation.remoteJid
+      ? whichHavePictures(ctx.organizationId, [conversation.remoteJid]).then((set) => set.size > 0)
+      : Promise.resolve(false),
+    mensagensQ,
+    carregarContexto(),
+  ]);
 
   return {
     conversation: {
