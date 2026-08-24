@@ -145,6 +145,33 @@
   --text-quote--font-weight: 600;
   --text-quote--letter-spacing: -0.02em;
 
+  /* -------------------------------------------------------------------------
+     Agendamento público — a VITRINE.
+
+     Mesma licença que a landing tomou, pela mesma razão e com a mesma regra:
+     só adiciona nomes, não redefine nenhum token do produto.
+
+     Por que a escala do produto não serve aqui: `--text-display` para em 26px
+     porque tela de operação não tem manchete. Esta página tem — ela é o único
+     contato de quem marca com a clínica, e o nome da casa precisa entrar como
+     nome de casa, não como título de card.
+
+     `--text-house` sai na Playfair (`font-brand`), que já é a face do
+     logotipo: a assinatura da marca e o nome do salão passam a ser a mesma
+     voz. Todo o resto da página continua na Plus Jakarta.
+     ------------------------------------------------------------------------- */
+  --text-house: clamp(23px, 5.6vw, 31px);
+  --text-house--line-height: 1.12;
+  --text-house--font-weight: 600;
+  --text-house--letter-spacing: -0.015em;
+
+  /* A pergunta do passo ("O que você quer fazer?"). Um degrau abaixo do nome
+     da casa: quem manda na página é a clínica, não o formulário. */
+  --text-ask: clamp(19px, 4.4vw, 24px);
+  --text-ask--line-height: 1.24;
+  --text-ask--font-weight: 600;
+  --text-ask--letter-spacing: -0.02em;
+
   --animate-rise-in: rise-in 700ms var(--ease-out-quint) backwards;
   --animate-fade-in: fade-in 600ms var(--ease-out-quint) backwards;
   --animate-mockup-in: mockup-in 1100ms var(--ease-out-quint) backwards;
@@ -308,6 +335,39 @@
 
 @utility shadow-lift {
   box-shadow: 0 18px 40px -18px rgb(3 6 20 / 0.6);
+}
+
+/**
+ * Borda picotada do bilhete de confirmação.
+ *
+ * O recorte é uma MÁSCARA e não dois pseudo-elementos pintados da cor do
+ * fundo: o fundo da página tem um brilho radial no canto, então círculos
+ * "da cor do fundo" só coincidem no meio da tela e denunciam a gambiarra nas
+ * bordas. A máscara tira alfa de verdade, e por isso o relevo do bilhete
+ * precisa vir de `drop-shadow` no elemento de fora — `box-shadow` seria
+ * recortado junto e o papel perderia o volume exatamente onde ele importa.
+ *
+ * Ladrilho de 26px com um furo de raio 9 na base: repete-se sozinho em
+ * qualquer largura, sem depender da altura do conteúdo (que varia com o nome
+ * do serviço e o endereço da unidade).
+ */
+@utility picote {
+  --furo: radial-gradient(circle 9px at 13px 100%, transparent 98%, #000 100%);
+  -webkit-mask-image: var(--furo);
+  -webkit-mask-size: 26px 100%;
+  -webkit-mask-repeat: repeat-x;
+  mask-image: var(--furo);
+  mask-size: 26px 100%;
+  mask-repeat: repeat-x;
+}
+
+/** Faixa de dias: rola na horizontal sem a barra atravessar os cartões. */
+@utility trilha {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @keyframes rise-in {

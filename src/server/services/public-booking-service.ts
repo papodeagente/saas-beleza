@@ -24,7 +24,7 @@ import { getAvailableSlots } from "./availability-service";
 export type PublicOrganization = {
   ctx: TenantContext;
   organization: { id: number; name: string; slug: string; timezone: string };
-  branches: Array<{ id: number; name: string; address: string | null }>;
+  branches: Array<{ id: number; name: string; address: string | null; phone: string | null }>;
   services: Array<{
     id: number;
     name: string;
@@ -56,7 +56,7 @@ export async function getPublicOrganization(slug: string): Promise<PublicOrganiz
 
   const [branchRows, serviceRows] = await Promise.all([
     db
-      .select({ id: branches.id, name: branches.name, address: branches.address })
+      .select({ id: branches.id, name: branches.name, address: branches.address, phone: branches.phone })
       .from(branches)
       .where(and(eq(branches.organizationId, org.id), eq(branches.active, true)))
       .orderBy(asc(branches.name)),

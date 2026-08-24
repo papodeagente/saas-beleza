@@ -33,6 +33,11 @@ const twMerge = extendTailwindMerge({
             "stat",
             "quote",
             "eyebrow",
+            // Escala do agendamento público. Mesmo risco, e aqui ele cai em
+            // cima de quem paga: `text-house` confundido com cor derruba o
+            // `text-white` do chip de dia selecionado.
+            "house",
+            "ask",
           ],
         },
       ],
