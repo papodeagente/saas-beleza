@@ -496,7 +496,13 @@ function GroupRow({
               : (group.description ?? "Sem mensagens por aqui")}
           </span>
           {group.unreadCount > 0 ? (
-            <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
+            /* `text-[10px]` estava fora da escala do produto (o menor degrau é
+               `text-meta`, 11px) e sozinho no arquivo inteiro. Um número solto
+               também não diz nada em leitor de tela — daí o rótulo. */
+            <span
+              aria-label={`${group.unreadCount} ${group.unreadCount === 1 ? "mensagem não lida" : "mensagens não lidas"}`}
+              className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-meta font-semibold text-white tabular"
+            >
               {group.unreadCount > 99 ? "99+" : group.unreadCount}
             </span>
           ) : null}
@@ -918,7 +924,7 @@ function GroupThread({
             placeholder="Mensagem para o grupo"
             className="max-h-32 min-h-11 flex-1 resize-none"
           />
-          <Button size="md" className="h-11 shrink-0" loading={enviando} disabled={!texto.trim() && !arquivo} onClick={enviar}>
+          <Button variant="primary" size="md" className="h-11 shrink-0" loading={enviando} disabled={!texto.trim() && !arquivo} onClick={enviar}>
             <Send aria-hidden />
           </Button>
           </div>
@@ -1062,7 +1068,7 @@ function GroupMembers({
               />
             </Field>
           </div>
-          <Button
+          <Button variant="primary"
             size="md"
             loading={busy}
             disabled={novo.replace(/\D/g, "").length < 12}
@@ -1367,7 +1373,7 @@ function CreateGroup({ onCreated }: { onCreated: () => void }) {
         <p className="text-caption text-ink-secondary">
           {lista.length} {lista.length === 1 ? "número válido" : "números válidos"}
         </p>
-        <Button
+        <Button variant="primary"
           size="md"
           loading={busy}
           disabled={!nome.trim() || lista.length === 0}
@@ -1405,7 +1411,7 @@ function JoinGroup({ onJoined }: { onJoined: () => void }) {
         <Field label="Link ou código">
           <Input value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="https://chat.whatsapp.com/…" />
         </Field>
-        <Button
+        <Button variant="primary"
           size="md"
           loading={busy}
           disabled={codigo.trim().length < 4}
@@ -1599,7 +1605,7 @@ function ScheduledPanel({
               <Input type="datetime-local" value={quando} onChange={(e) => setQuando(e.target.value)} />
             </Field>
           </div>
-          <Button
+          <Button variant="primary"
             size="md"
             className="h-11"
             loading={salvando}

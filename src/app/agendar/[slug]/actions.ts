@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -7,6 +8,8 @@ import { bookingPageVisits, organizations } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
 import { dateISOInTz, formatTz } from "@/lib/tz";
 import { DomainError } from "@/server/services/appointment-service";
+import { clientIp } from "@/server/services/signup";
+import { permitirVisita } from "./rate-limit";
 import {
   type PublicSlot,
   createPublicBooking,
@@ -45,12 +48,22 @@ export async function publicAvailableDaysAction(input: unknown) {
   return getPublicAvailableDays(data.slug, data);
 }
 
-/** Registra uma visita anônima por navegador/dia; não guarda IP nem dados da cliente. */
+/**
+ * Registra uma visita anônima por navegador/dia; não guarda IP nem dados da cliente.
+ *
+ * O limite vem ANTES da consulta da conta, e a chave é `ip:slug` (e não o id da
+ * conta) exatamente por isso: descobrir o id custaria a consulta que o limite
+ * existe para evitar, e varrer slugs à procura de agendas que existem seria
+ * outro uso indevido que a chave por slug já segura. O IP fica só na contagem
+ * em memória — a linha gravada continua sem ele.
+ */
 export async function trackBookingAccessAction(input: unknown): Promise<void> {
   const data = z.object({
     slug: z.string().min(1).max(120),
     visitorToken: z.string().uuid(),
   }).parse(input);
+  const ip = clientIp(await headers());
+  if (!permitirVisita(`${ip}:${data.slug}`)) return;
   const [org] = await db.select({ id: organizations.id, timezone: organizations.timezone })
     .from(organizations).where(eq(organizations.slug, data.slug)).limit(1);
   if (!org) return;

@@ -17,9 +17,15 @@ import { BrandLogo } from "@/components/brand";
 /**
  * Chrome do painel da plataforma.
  *
- * Deliberadamente escuro, ao contrário do azul do painel da clínica: quem
+ * Deliberadamente escuro, ao contrário do roxo do painel da clínica: quem
  * opera os dois precisa saber, em um relance, se está olhando UMA conta ou
  * TODAS elas. Confundir os dois é como confundir o caixa com o cofre.
+ *
+ * O escuro é o `night` da marca (#160e20), não o #141B34 azul-marinho que
+ * ficou aqui do tema anterior: era a única superfície do produto fora da
+ * família roxa, e denunciava a troca de identidade toda vez que alguém abria
+ * a plataforma. O cartão do usuário usa `night-raised`, o degrau seguinte da
+ * mesma escala, em vez de um branco transparente que clareava o roxo.
  */
 
 const NAV = [
@@ -45,7 +51,7 @@ export function PlatformShell({
     <div className="flex min-h-dvh flex-col md:flex-row">
       <nav
         aria-label="Navegação da plataforma"
-        className="flex w-full shrink-0 flex-col bg-[#141B34] px-3.5 py-5 md:w-[240px]"
+        className="flex w-full shrink-0 flex-col bg-night px-3.5 py-5 md:w-[240px]"
       >
         <div className="px-2 pb-6">
           <BrandLogo compact variant="white" />
@@ -87,7 +93,7 @@ export function PlatformShell({
           Voltar para a clínica
         </Link>
 
-        <div className="rounded-card bg-white/10 px-3 py-2.5">
+        <div className="rounded-card bg-night-raised px-3 py-2.5">
           <p className="truncate text-caption font-semibold text-white">{user.name}</p>
           <p className="truncate text-meta text-white/60">{user.email}</p>
           <form action="/api/sair" method="post" className="mt-2">

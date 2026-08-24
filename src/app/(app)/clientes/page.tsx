@@ -100,7 +100,25 @@ export default async function CustomersPage({
             </div>
 
             <ul className="divide-y divide-line">
-              {rows.map((customer) => (
+              {rows.map((customer) => {
+                /**
+                 * Contato que chegou pelo WhatsApp guarda o telefone na coluna
+                 * `name` até alguém identificá-lo, e a linha imprimia o mesmo
+                 * número duas vezes, um em cima do outro. Repetição não é dado:
+                 * o telefone é a única identidade que existe, então ele fica no
+                 * título e a linha de apoio passa a dizer o que falta.
+                 *
+                 * A regra é a MESMA do avatar (`initials`): conta como nome só
+                 * quem tem uma palavra começando por letra. Duplicá-la aqui é
+                 * deliberado — `initials` mora num módulo "use client" e esta
+                 * página é servidor; importar de lá devolveria uma referência
+                 * de cliente, não a função.
+                 */
+                const temNome = /(?:^|\s)\p{L}/u.test(customer.name);
+                const telefone = customer.phone ? formatPhone(customer.phone) : null;
+                const titulo = temNome || !telefone ? customer.name : telefone;
+                const apoio = temNome ? (telefone ?? "Sem telefone") : "Ainda sem nome";
+                return (
                 <li key={customer.id}>
                   <Link
                     href={`/clientes/${customer.id}`}
@@ -109,7 +127,7 @@ export default async function CustomersPage({
                     <Avatar name={customer.name} size="md" />
                     <span className="min-w-0 flex-[2]">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate text-label text-ink">{customer.name}</span>
+                        <span className="truncate text-label text-ink">{titulo}</span>
                         {customer.tags.map((tag) => (
                           <Badge key={tag} tone={tag === "VIP" ? "accent" : "neutral"}>
                             {tag}
@@ -117,7 +135,7 @@ export default async function CustomersPage({
                         ))}
                       </span>
                       <span className="mt-0.5 block text-caption text-ink-secondary">
-                        {customer.phone ? formatPhone(customer.phone) : "Sem telefone"}
+                        {apoio}
                         {/* No celular as colunas somem: o que importa vem para cá */}
                         <span className="sm:hidden">
                           {" · "}
@@ -151,7 +169,8 @@ export default async function CustomersPage({
                     </span>
                   </Link>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
         )}

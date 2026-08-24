@@ -18,7 +18,7 @@ export function CatalogForms({ professionals }: { professionals: Option[] }) {
   const [open, setOpen] = useState<Kind>(null);
   return <>
     <div className="flex flex-wrap gap-2">
-      <Button onClick={() => setOpen("service")}><Scissors />Novo serviço</Button>
+      <Button variant="primary" onClick={() => setOpen("service")}><Scissors />Novo serviço</Button>
       <Button variant="secondary" onClick={() => setOpen("product")}><PackagePlus />Novo produto</Button>
     </div>
     {open === "service" ? <ServiceSheet professionals={professionals} close={() => setOpen(null)} /> : null}
@@ -31,7 +31,7 @@ function FormError({ result }: { result: CatalogResult | null }) {
 }
 
 function Footer({ pending, disabled, close, label }: { pending: boolean; disabled?: boolean; close: () => void; label: string }) {
-  return <><Button variant="ghost" onClick={close}>Cancelar</Button><Button loading={pending} disabled={disabled} onClick={() => document.getElementById("catalog-submit")?.click()}>{label}</Button></>;
+  return <><Button variant="ghost" onClick={close}>Cancelar</Button><Button variant="primary" loading={pending} disabled={disabled} onClick={() => document.getElementById("catalog-submit")?.click()}>{label}</Button></>;
 }
 
 function ServiceSheet({ professionals, close }: { professionals: Option[]; close: () => void }) {

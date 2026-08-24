@@ -156,6 +156,25 @@
   --shadow-card-hover: 0 10px 28px rgb(74 43 96 / 0.11);
   --shadow-overlay: 0 20px 50px rgb(45 24 61 / 0.18), 0 4px 12px rgb(45 24 61 / 0.08);
   --shadow-sticky: 0 2px 10px rgb(45 24 61 / 0.08);
+  /* Relevo da ação primária. Estava cravado em button.tsx como
+     rgb(37 96 214 / 0.28) — um azul sobrevivente do tema anterior, que acendia
+     um halo frio embaixo de cada botão roxo. Mesma família das sombras acima. */
+  --shadow-action: 0 2px 8px rgb(74 43 96 / 0.28);
+
+  /* Degraus do funil da agenda, do topo (mais aberto) para a base (mais
+     fechado). Moram aqui e não no .tsx porque cor cravada em componente é cor
+     que some do inventário do tema: ninguém a encontra quando a marca muda.
+
+     A rampa original (#9966cc … #712fb5) foi escurecida na mesma matiz porque
+     o rótulo dentro da barra é BRANCO: os três primeiros degraus mediam 4,10,
+     4,41 e 4,72:1 e o gradiente de 87% derrubava a ponta esquerda para 3,38:1.
+     Agora o degrau mais claro parte de 4,85:1 e a rampa fecha em 8,30:1. */
+  --funnel-step-1: #8f56c7;
+  --funnel-step-2: #894cc7;
+  --funnel-step-3: #8342c7;
+  --funnel-step-4: #7c39c2;
+  --funnel-step-5: #7532bb;
+  --funnel-step-6: #692ca9;
 
   --brand-gradient: linear-gradient(170deg, var(--color-brand-from) 0%, var(--color-brand-to) 100%);
 
@@ -261,6 +280,10 @@
 
 @utility shadow-sticky {
   box-shadow: var(--shadow-sticky);
+}
+
+@utility shadow-action {
+  box-shadow: var(--shadow-action);
 }
 
 /* Gradiente da marca — barra lateral e superfícies de destaque */

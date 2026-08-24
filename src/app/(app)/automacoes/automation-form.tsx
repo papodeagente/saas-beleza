@@ -118,7 +118,7 @@ export function AutomationForm() {
         </p>
       ) : null}
       <div className="flex justify-end">
-        <Button type="submit" loading={pending}>Criar automação</Button>
+        <Button variant="primary" type="submit" loading={pending}>Criar automação</Button>
       </div>
     </form>
   );

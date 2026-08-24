@@ -119,6 +119,15 @@ export type TransactionRow = {
   paidAt: Date | null;
   categoryName: string | null;
   customerName: string | null;
+  /**
+   * Serviço do atendimento que gerou o lançamento, quando houve um.
+   *
+   * A receita nascida de atendimento entra com `description = "Atendimento"`,
+   * literalmente igual em todas as linhas. Sem esta coluna a lista de
+   * lançamentos do mês vira uma pilha de "Atendimento / Atendimento /
+   * Atendimento" e o dono precisa abrir cada uma para saber do que se trata.
+   */
+  serviceName: string | null;
 };
 
 export async function listTransactions(
@@ -147,10 +156,27 @@ export async function listTransactions(
       paidAt: financialTransactions.paidAt,
       categoryName: financialCategories.name,
       customerName: customers.name,
+      serviceName: services.name,
     })
     .from(financialTransactions)
     .leftJoin(financialCategories, eq(financialCategories.id, financialTransactions.categoryId))
     .leftJoin(customers, eq(customers.id, financialTransactions.customerId))
+    // Os dois `leftJoin` são encadeados e não uma subconsulta porque
+    // `appointment_id` já é indexado e a lista para em 200 linhas.
+    .leftJoin(
+      appointments,
+      and(
+        eq(appointments.id, financialTransactions.appointmentId),
+        // Redundante pela chave estrangeira, e mantido de propósito: filtro de
+        // conta em TODA junção é o que impede que um id trocado por engano
+        // atravesse a fronteira entre contas.
+        eq(appointments.organizationId, ctx.organizationId),
+      ),
+    )
+    .leftJoin(
+      services,
+      and(eq(services.id, appointments.serviceId), eq(services.organizationId, ctx.organizationId)),
+    )
     .where(and(...conditions))
     .orderBy(desc(financialTransactions.dueDate), desc(financialTransactions.id))
     .limit(200);

@@ -37,7 +37,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
           <form method="get" className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <label className="flex-1"><span className="mb-1.5 block text-label text-ink">De</span><Input type="date" name="from" defaultValue={safeFrom} max={safeTo} /></label>
             <label className="flex-1"><span className="mb-1.5 block text-label text-ink">Até</span><Input type="date" name="to" defaultValue={safeTo} min={safeFrom} max={today} /></label>
-            <Button type="submit"><CalendarRange aria-hidden />Aplicar período</Button>
+            <Button variant="primary" type="submit"><CalendarRange aria-hidden />Aplicar período</Button>
           </form>
         </Card>
 

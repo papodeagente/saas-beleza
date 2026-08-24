@@ -74,6 +74,13 @@ async function request<T = Json>(
   method: "GET" | "POST",
   path: string,
   body?: unknown,
+  /**
+   * Envio com atraso nativo segura a resposta HTTP durante todo o atraso (é
+   * assim que a uazapi mantém o "Digitando..." aceso). O teto fixo de 30s
+   * abortaria qualquer atraso maior — daí o timeout poder ser esticado por
+   * chamada.
+   */
+  timeoutMs = TIMEOUT_MS,
 ): Promise<T> {
   const base = normalizeBaseUrl(creds.baseUrl);
   if (!base) throw new UazapiError("URL do servidor uazapi não configurada.", 0, "");
@@ -84,7 +91,7 @@ async function request<T = Json>(
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         method,
@@ -244,19 +251,42 @@ function extractMessageId(resp: Json): string {
   return firstString(get(resp, "messageid"), get(resp, "id"), get(resp, "messageId"));
 }
 
+/**
+ * Atraso máximo aceito no envio.
+ *
+ * A uazapi limita a presença a cinco minutos e é ela quem desenha o
+ * "Digitando..." durante o atraso; passar disso só prenderia a requisição sem
+ * o cliente ver nada.
+ */
+const MAX_DELAY_MS = 300_000;
+
 export async function sendText(
   creds: UazapiCredentials,
   to: string,
   text: string,
-  opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean },
+  opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean; delayMs?: number },
 ): Promise<SendResult> {
-  const resp = await request(creds, "POST", "/send/text", {
-    number: recipientId(to),
-    text,
-    replyid: opts?.replyId,
-    mentions: opts?.mentions?.length ? opts.mentions.join(",") : undefined,
-    linkPreview: opts?.linkPreview,
-  });
+  /**
+   * `delay` é o atraso NATIVO: a uazapi segura a mensagem e mostra
+   * "Digitando..." (ou "Gravando áudio...") para o cliente durante a espera.
+   * Antes o atraso do agente era um `setTimeout` nosso — o cliente via a tela
+   * parada e a resposta simplesmente aparecia depois.
+   */
+  const delay = Math.min(Math.max(0, Math.round(opts?.delayMs ?? 0)), MAX_DELAY_MS);
+  const resp = await request(
+    creds,
+    "POST",
+    "/send/text",
+    {
+      number: recipientId(to),
+      text,
+      replyid: opts?.replyId,
+      mentions: opts?.mentions?.length ? opts.mentions.join(",") : undefined,
+      linkPreview: opts?.linkPreview,
+      delay: delay > 0 ? delay : undefined,
+    },
+    TIMEOUT_MS + delay,
+  );
   const messageId = extractMessageId(resp);
   if (!messageId) throw new UazapiError("uazapi /send/text respondeu sem messageid", 500, JSON.stringify(resp).slice(0, 300));
   return { messageId, status: firstString(get(resp, "status")) || "sent" };
@@ -340,6 +370,22 @@ export async function markMessagesRead(creds: UazapiCredentials, messageIds: str
 }
 
 /**
+ * Quanto tempo cada aviso de presença fica de pé quando ninguém diz outra coisa.
+ *
+ * A uazapi reenvia a presença a cada dez segundos até o prazo acabar e a
+ * cancela sozinha assim que uma mensagem é enviada para o mesmo chat. O padrão
+ * anterior era 3000 ms para os dois casos: bastava para "digitando", porque a
+ * tela reavisa a cada três segundos enquanto a pessoa digita, mas apagava o
+ * "gravando áudio" três segundos depois de começar a gravação — que é avisada
+ * UMA vez só. Gravar um áudio leva mais que isso.
+ */
+const PRESENCE_DEFAULT_MS: Record<"composing" | "recording" | "paused", number> = {
+  composing: 10_000,
+  recording: 45_000,
+  paused: 0,
+};
+
+/**
  * Mostra "digitando" ou "gravando áudio" para o cliente.
  *
  * É o que faz a conversa parecer conversa. Best-effort por natureza: falhar
@@ -349,12 +395,12 @@ export async function sendPresence(
   creds: UazapiCredentials,
   to: string,
   presence: "composing" | "recording" | "paused",
-  durationMs = 3000,
+  durationMs = PRESENCE_DEFAULT_MS[presence],
 ): Promise<void> {
   await request(creds, "POST", "/message/presence", {
     number: recipientId(to),
     presence,
-    delay: durationMs,
+    delay: Math.min(Math.max(0, Math.round(durationMs)), MAX_DELAY_MS),
   });
 }
 
@@ -428,14 +474,34 @@ export async function findMessages(
   return Array.isArray(resp) ? resp : asArray(get(resp, "messages") ?? get(resp, "data"));
 }
 
-/** Solicita ao aparelho um bloco anterior do histórico; a resposta é assíncrona. */
+/**
+ * Pede ao aparelho um bloco anterior do histórico de um chat.
+ *
+ * Assíncrono por natureza: o WhatsApp só entrega depois que o celular acorda.
+ * As mensagens recuperadas entram no acervo da própria uazapi, e a aposta é que
+ * elas cheguem até nós pela próxima leitura do /message/find — o evento
+ * `history`, que seria a entrega direta, NÃO está assinado nesta instância
+ * (`GET /webhook` devolve só messages, messages_update e connection) e a
+ * instância é compartilhada, então assiná-lo é decisão de operação, não de
+ * código.
+ *
+ * O indício a favor é que o acervo desta instância guarda mensagens de setembro
+ * de 2025 num aparelho pareado em agosto de 2026 — mas isso não separa o que o
+ * history-sync trouxe do que já veio na sincronização inicial do pareamento.
+ * Quem for confirmar precisa medir a contagem de /message/find de um chat antes
+ * e depois de um pedido, com o celular acordado.
+ *
+ * `number` exige o JID COMPLETO ("JID completo do chat", na documentação).
+ * Passar só os dígitos, como faz o resto do cliente, fazia o pedido morrer sem
+ * erro visível: nenhuma mensagem voltava e ninguém era avisado.
+ */
 export async function requestMessageHistory(
   creds: UazapiCredentials,
   chatId: string,
   count = 100,
 ): Promise<void> {
   await request(creds, "POST", "/message/history-sync", {
-    number: recipientId(chatId),
+    number: chatId.trim(),
     mode: "history",
     count: Math.max(1, Math.min(100, count)),
   });

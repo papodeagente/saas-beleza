@@ -26,6 +26,9 @@ export type WaMessageKind =
   | "system"
   | "unsupported";
 
+/** Ciclo de vida de uma mensagem, no mesmo vocabulário do banco. */
+export type WaMessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+
 export type NormalizedMessage = {
   externalId: string;
   remoteJid: string;
@@ -43,6 +46,15 @@ export type NormalizedMessage = {
   mediaMimeType: string | null;
   mediaFileName: string | null;
   quotedExternalId: string | null;
+  /**
+   * Status que o provedor JÁ conhece para esta mensagem.
+   *
+   * O /message/find devolve `Sent`, `Delivered` ou `Read` em toda mensagem, e
+   * o webhook de mensagem também traz o campo. Ignorá-lo era o que fazia a
+   * reconciliação regravar "enviada" por cima de uma mensagem que o cliente
+   * já tinha lido. Nulo quando o payload não diz nada a respeito.
+   */
+  status: WaMessageStatus | null;
   sentAt: Date;
 };
 
@@ -53,7 +65,7 @@ export type WaEvent =
       instance: string;
       /** Uma atualização pode cobrir várias mensagens de uma vez. */
       externalIds: string[];
-      status: "sent" | "delivered" | "read" | "failed";
+      status: WaMessageStatus;
     }
   | { kind: "connection"; instance: string; status: string; connected: boolean }
   | { kind: "qrcode"; instance: string; qrCode: string | null; pairCode: string | null }
@@ -68,7 +80,61 @@ export type WaEvent =
       remoteJid: string;
     }
   | { kind: "deleted"; instance: string; externalId: string; remoteJid: string }
+  | {
+      /**
+       * A uazapi terminou de baixar a mídia e a hospedou em servidor próprio.
+       * É a única chance de guardar uma URL que abre: a do WhatsApp vem
+       * criptografada e sem chave, e a do provedor não é reemitida.
+       */
+      kind: "media";
+      instance: string;
+      externalIds: string[];
+      mediaUrl: string;
+      mediaMimeType: string | null;
+      remoteJid: string;
+    }
   | { kind: "ignored"; reason: string };
+
+/**
+ * Estado do provedor → estado nosso.
+ *
+ * O vocabulário oficial do /message/find é `Queued`, `Canceled`, `Failed`,
+ * `Sent`, `Delivered`, `Read`; o webhook acrescenta `Played` (áudio ouvido) e
+ * as versões antigas mandam ACK numérico (3 = entregue, 4 = lida). Devolve
+ * nulo quando não há informação de status, que é diferente de "foi enviada":
+ * inventar `sent` nesse caso era o que fazia o Inbox mentir.
+ */
+export function statusFromProvider(raw: Json, ack?: Json): WaMessageStatus | null {
+  const texto = asString(raw).toLowerCase();
+  if (texto) {
+    if (texto.includes("read") || texto.includes("played")) return "read";
+    if (texto.includes("deliver")) return "delivered";
+    if (texto.includes("error") || texto.includes("fail") || texto.includes("cancel")) return "failed";
+    if (texto.includes("queue") || texto.includes("pending")) return "pending";
+    if (texto.includes("sent") || texto.includes("ack")) return "sent";
+  }
+  /**
+   * O ACK numérico é lido candidato a candidato, e o vazio é descartado ANTES
+   * de virar número.
+   *
+   * `Number(null)`, `Number("")` e `Number(false)` valem 0 — e 0 é justamente
+   * o código de "recusada" no vocabulário de ACK. Convertendo em bloco, um
+   * `ack: null` no payload marcaria como FALHOU uma mensagem que o cliente já
+   * tinha lido, e `failed` vence qualquer estado no ranque: o estrago não teria
+   * volta. Testar um por vez também impede que um `Type` desconhecido (texto
+   * não vazio que não casa com nenhuma palavra) esconda um ACK válido ao lado.
+   */
+  for (const bruto of [texto, ack]) {
+    if (bruto === null || bruto === undefined || bruto === "" || typeof bruto === "boolean") continue;
+    const numero = asNumber(bruto);
+    if (numero === null) continue;
+    if (numero >= 4) return "read";
+    if (numero === 3) return "delivered";
+    if (numero === 1 || numero === 2) return "sent";
+    if (numero === 0) return "failed";
+  }
+  return null;
+}
 
 const TYPE_ALIASES: Record<string, WaMessageKind> = {
   Conversation: "text",
@@ -100,7 +166,139 @@ const TYPE_ALIASES: Record<string, WaMessageKind> = {
   ContactMessage: "contact",
   contactMessage: "contact",
   contact: "contact",
+  // Cartão de contato com mais de uma pessoa dentro.
+  ContactsArrayMessage: "contact",
+  contactsArrayMessage: "contact",
+  LiveLocationMessage: "location",
+  liveLocationMessage: "location",
+  // Vídeo redondo ("recado de vídeo"). Chega desta instância como PtvMessage e
+  // caía em "não suportada" — era vídeo o tempo todo.
+  PtvMessage: "video",
+  ptvMessage: "video",
+  ptv: "video",
+  /**
+   * Enquete, resposta de lista e resposta de botão viram texto de propósito.
+   *
+   * O tipo do banco (`wa_message_type`) é o vocabulário que a tela sabe
+   * desenhar; inventar valores novos exigiria migração de enum e um desenho
+   * novo de bolha para cada um. O que a atendente precisa ler — a pergunta, as
+   * opções, o voto, o botão escolhido — é montado em `body` logo abaixo.
+   */
+  PollCreationMessage: "text",
+  pollCreationMessage: "text",
+  PollCreationMessageV2: "text",
+  PollCreationMessageV3: "text",
+  poll: "text",
+  PollUpdateMessage: "text",
+  pollUpdateMessage: "text",
+  ListResponseMessage: "text",
+  listResponseMessage: "text",
+  ButtonsResponseMessage: "text",
+  buttonsResponseMessage: "text",
+  TemplateButtonReplyMessage: "text",
+  templateButtonReplyMessage: "text",
+  /**
+   * `TemplateMessage` é o formato antigo de mensagem com botões, e o texto dele
+   * chega inteiro em `text` como em qualquer outra.
+   *
+   * Era o tipo desconhecido MAIS comum nesta instância: 45 mensagens
+   * perfeitamente legíveis (lembretes, relatórios, campanhas) estavam gravadas
+   * como `unsupported`, e a bolha as anunciava com o rótulo "Mensagem não
+   * suportada" antes de imprimir o texto que estava logo ali.
+   */
+  TemplateMessage: "text",
+  templateMessage: "text",
+  HydratedTemplateMessage: "text",
+  hydratedTemplateMessage: "text",
+  InteractiveResponseMessage: "text",
+  interactiveResponseMessage: "text",
+  ListMessage: "text",
+  listMessage: "text",
+  ButtonsMessage: "text",
+  buttonsMessage: "text",
 };
+
+/**
+ * Corpo legível para os tipos cujo conteúdo não vem em `text`.
+ *
+ * A uazapi entrega a mensagem original em `content` (a struct do whatsmeow
+ * serializada). Sem ler dali, enquete virava linha vazia, localização virava
+ * "[localização]" sem lugar nenhum e cartão de contato não tinha nem o nome.
+ */
+function bodyFromContent(msg: Json, rawType: string): string {
+  const content = get(msg, "content");
+  const tipo = rawType.toLowerCase();
+
+  if (tipo.includes("location")) {
+    const lat = primeiroNumero(get(content, "degreesLatitude"), get(content, "latitude"), get(msg, "latitude"));
+    const lng = primeiroNumero(get(content, "degreesLongitude"), get(content, "longitude"), get(msg, "longitude"));
+    const lugar = firstString(get(content, "name"), get(content, "address"), get(msg, "address"));
+    if (lat === null || lng === null) return lugar ? `[localização] ${lugar}` : "";
+    // Coordenada primeiro: é o que permite abrir no mapa mesmo sem nome.
+    return `[localização] ${lat}, ${lng}${lugar ? ` — ${lugar}` : ""}`;
+  }
+
+  if (tipo.includes("contact")) {
+    const cartoes = asArray(get(content, "contacts"));
+    const lista = cartoes.length > 0 ? cartoes : [content];
+    const pessoas = lista
+      .map((cartao) => {
+        const nome = firstString(get(cartao, "displayName"), get(cartao, "name"));
+        const telefone = telefoneDoVcard(asString(get(cartao, "vcard")));
+        return [nome, telefone].filter(Boolean).join(" — ");
+      })
+      .filter(Boolean);
+    return pessoas.length > 0 ? `[contato] ${pessoas.join(" | ")}` : "";
+  }
+
+  if (tipo.includes("pollcreation") || tipo === "poll") {
+    const pergunta = firstString(get(content, "name"), get(content, "question"), get(msg, "text"));
+    const opcoes = asArray(get(content, "options"))
+      .map((opcao) => firstString(get(opcao, "optionName"), get(opcao, "name"), opcao))
+      .filter(Boolean);
+    if (!pergunta && opcoes.length === 0) return "";
+    return `[enquete] ${pergunta}${opcoes.length > 0 ? `\n${opcoes.map((o) => `• ${o}`).join("\n")}` : ""}`;
+  }
+
+  if (tipo.includes("pollupdate")) {
+    // `vote` é o campo que a uazapi usa para voto de enquete e de lista.
+    const voto = firstString(get(msg, "vote"), get(content, "vote"));
+    return voto ? `[voto na enquete] ${voto}` : "";
+  }
+
+  if (tipo.includes("response") || tipo.includes("buttonreply")) {
+    const escolha = firstString(
+      get(msg, "text"),
+      get(content, "title"),
+      get(content, "selectedDisplayText"),
+      get(content, "displayText"),
+      get(msg, "vote"),
+      get(msg, "buttonOrListid"),
+      get(content, "selectedRowID"),
+      get(content, "selectedButtonID"),
+    );
+    return escolha ? `[resposta] ${escolha}` : "";
+  }
+
+  return "";
+}
+
+/** Primeiro número aproveitável — a uazapi manda coordenada ora número, ora texto. */
+function primeiroNumero(...candidatos: Json[]): number | null {
+  for (const candidato of candidatos) {
+    if (candidato === null || candidato === undefined || candidato === "") continue;
+    const numero = asNumber(candidato);
+    if (numero !== null) return numero;
+  }
+  return null;
+}
+
+/** Só o telefone interessa do vCard: o resto não cabe numa bolha de conversa. */
+function telefoneDoVcard(vcard: string): string {
+  const linha = vcard.split(/\r?\n/).find((l) => l.toUpperCase().startsWith("TEL"));
+  if (!linha) return "";
+  return (linha.split(":").pop() ?? "").trim();
+}
 
 function toDate(value: Json): Date {
   const n = Number(value);
@@ -203,32 +401,48 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       get(body, "ack"),
       get(raw, "ack"),
     ).toLowerCase();
-    const numericStatus = rawStatus
-      ? Number(rawStatus)
-      : (asNumber(get(body, "ack")) ?? asNumber(get(raw, "ack")) ?? Number.NaN);
+    const remoteJidDoUpdate = firstString(
+      get(body, "chatid"),
+      get(body, "Chat"),
+      get(body, "remoteJid"),
+      get(body, "key", "remoteJid"),
+      get(raw, "chatid"),
+    );
     if (rawStatus.includes("delete")) {
       if (externalIds.length === 0) return { kind: "ignored", reason: "exclusao_sem_id" };
       return {
         kind: "deleted",
         instance,
         externalId: externalIds[0],
-        remoteJid: firstString(
-          get(body, "chatid"),
-          get(body, "remoteJid"),
-          get(body, "key", "remoteJid"),
-          get(raw, "chatid"),
-        ),
+        remoteJid: remoteJidDoUpdate,
       };
     }
-    const status =
-      rawStatus.includes("read") || rawStatus.includes("played") || numericStatus >= 4
-        ? "read"
-        : rawStatus.includes("deliver") || numericStatus === 3
-          ? "delivered"
-          : rawStatus.includes("error") || rawStatus.includes("fail") || numericStatus === 0
-            ? "failed"
-            : "sent";
+
+    /**
+     * `FileDownloaded` não é estado de entrega: é o aviso de que a mídia foi
+     * baixada e reservida pela uazapi, com uma URL que ABRE — a do WhatsApp
+     * vem criptografada. Tratá-lo como status enterrava essa URL (o único
+     * momento em que ela chega sozinha) e ainda mandava toda aba recarregar
+     * a tela por uma mudança que não era de status.
+     */
+    if (rawStatus.includes("filedownload")) {
+      const mediaUrl = firstString(get(body, "FileURL"), get(body, "fileURL"), get(body, "fileUrl"), get(raw, "FileURL"));
+      if (externalIds.length === 0 || !mediaUrl) return { kind: "ignored", reason: "midia_sem_id_ou_url" };
+      return {
+        kind: "media",
+        instance,
+        externalIds,
+        mediaUrl,
+        mediaMimeType: firstString(get(body, "MimeType"), get(body, "mimetype"), get(body, "mimeType")) || null,
+        remoteJid: remoteJidDoUpdate,
+      };
+    }
+
     if (externalIds.length === 0) return { kind: "ignored", reason: "status_sem_id" };
+    const status = statusFromProvider(rawStatus, get(body, "ack") ?? get(raw, "ack"));
+    // Sem status reconhecido não há o que gravar. O fallback antigo era `sent`,
+    // e ele fabricava uma confirmação que ninguém tinha dado.
+    if (!status) return { kind: "ignored", reason: `atualizacao_sem_status:${rawStatus || "?"}` };
     return { kind: "status", instance, externalIds, status };
   }
 
@@ -323,6 +537,15 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
     if (deletedId) return { kind: "deleted", instance, externalId: deletedId, remoteJid };
   }
 
+  /**
+   * Álbum é só o cabeçalho de um conjunto: as fotos e os vídeos chegam logo
+   * depois como mensagens próprias. Ingerir o cabeçalho criaria uma bolha
+   * vazia antes das mídias reais, então ele é reconhecido para ser descartado
+   * de propósito — e não por acidente, como acontecia ao cair em "não
+   * suportada".
+   */
+  if (rawType.toLowerCase().includes("album")) return { kind: "ignored", reason: "album_cabecalho" };
+
   const kind: WaMessageKind =
     TYPE_ALIASES[rawType] ??
     (get(msg, "image")
@@ -337,17 +560,21 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
               ? "unsupported"
               : "text");
 
-  const text = firstString(
-    get(msg, "text"),
-    get(msg, "content", "text"),
-    get(msg, "message", "conversation"),
-    get(msg, "message", "extendedTextMessage", "text"),
-    get(msg, "content"),
-    get(msg, "body"),
-    get(msg, "caption"),
-    get(msg, "message", "imageMessage", "caption"),
-    get(msg, "message", "videoMessage", "caption"),
-  );
+  const text =
+    firstString(
+      get(msg, "text"),
+      get(msg, "content", "text"),
+      get(msg, "message", "conversation"),
+      get(msg, "message", "extendedTextMessage", "text"),
+      get(msg, "content"),
+      get(msg, "body"),
+      get(msg, "caption"),
+      get(msg, "message", "imageMessage", "caption"),
+      get(msg, "message", "videoMessage", "caption"),
+    ) ||
+    // Enquete, voto, resposta de lista, localização e cartão de contato não
+    // têm `text`: o conteúdo mora na struct crua, em `content`.
+    bodyFromContent(msg, rawType);
 
   const mediaUrl =
     firstString(
@@ -378,6 +605,19 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
       get(msg, "quotedMessageId"),
       get(msg, "message", "extendedTextMessage", "contextInfo", "stanzaId"),
     ) || null;
+
+  /**
+   * Tipo que não sabemos ler E sem nada dentro não vira mensagem.
+   *
+   * O caso real são os registros de chamada (`UnknownMessageType` com
+   * `callLogMesssage` e texto vazio): nove deles entraram no fio como
+   * "[mensagem não suportada]", sem informar nada a quem lê. Um tipo
+   * desconhecido COM texto continua sendo gravado — aí existe conteúdo de
+   * verdade, e perdê-lo seria pior do que exibi-lo sem formatação.
+   */
+  if (kind === "unsupported" && !text && !mediaUrl) {
+    return { kind: "ignored", reason: `mensagem_sem_conteudo:${rawType || "?"}` };
+  }
 
   return {
     kind: "message",
@@ -412,6 +652,9 @@ export function normalizeUazapiWebhook(raw: Json): WaEvent {
         firstString(get(msg, "fileName"), get(msg, "docName"), get(msg, "message", "documentMessage", "fileName")) ||
         null,
       quotedExternalId,
+      // O mesmo campo `status` que o /message/find devolve em toda mensagem:
+      // é ele que corrige retroativamente o que ficou preso em "enviada".
+      status: statusFromProvider(messageStatus),
       sentAt: toDate(get(msg, "timestamp") ?? get(msg, "messageTimestamp") ?? get(msg, "t")),
     },
   };

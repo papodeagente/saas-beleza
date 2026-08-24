@@ -197,7 +197,7 @@ export function WhatsappView({
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <Button size="md" onClick={save} loading={saving} disabled={!baseUrl.trim() || (!current && !token.trim())}>
+            <Button variant="primary" size="md" onClick={save} loading={saving} disabled={!baseUrl.trim() || (!current && !token.trim())}>
               {current ? "Salvar e testar" : "Conectar"}
             </Button>
             {current ? (
@@ -505,7 +505,7 @@ function PairingCard({
               câmera não for uma opção.
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button size="md" onClick={() => begin("qr")} loading={starting}>
+              <Button variant="primary" size="md" onClick={() => begin("qr")} loading={starting}>
                 <QrCode aria-hidden />
                 Gerar QR code
               </Button>
@@ -579,7 +579,7 @@ function PairingCard({
             ) : null}
 
             <div className="flex gap-2">
-              <Button
+              <Button variant="primary"
                 size="md"
                 onClick={() => begin("code")}
                 loading={starting}

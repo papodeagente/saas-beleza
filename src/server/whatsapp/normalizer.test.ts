@@ -284,3 +284,309 @@ describe("lotes de histórico", () => {
     expect(events.map((event) => event.kind === "message" && event.message.externalId)).toEqual(["H1", "H2"]);
   });
 });
+
+/**
+ * Status do provedor.
+ *
+ * Cada payload aqui é o que a instância devolveu de verdade em 24/08/2026: o
+ * /message/find responde `"status": "Read"` para mensagens que o banco tinha
+ * como "enviada". Ler esse campo é o que desfaz as 627 mensagens presas.
+ */
+describe("status que a uazapi já conhece", () => {
+  it("lê o status da mensagem no formato do /message/find", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      instanceName: "c",
+      event: {
+        messageid: "3EB0F008BD7A1CEB1C8896",
+        chatid: "5511987654321@s.whatsapp.net",
+        fromMe: true,
+        messageType: "ExtendedTextMessage",
+        text: "Oi, Grace! Seu agendamento foi realizado com sucesso",
+        status: "Read",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.status).toBe("read");
+  });
+
+  it("cobre todo o vocabulário de status do provedor", () => {
+    const status = (valor: string) => {
+      const event = normalizeUazapiWebhook({
+        EventType: "messages",
+        event: { messageid: `S-${valor}`, chatid: "5511@s.whatsapp.net", messageType: "Conversation", text: "x", status: valor },
+      });
+      return event.kind === "message" ? event.message.status : "erro";
+    };
+    expect(status("Sent")).toBe("sent");
+    expect(status("Delivered")).toBe("delivered");
+    expect(status("Read")).toBe("read");
+    expect(status("Played")).toBe("read");
+    expect(status("Queued")).toBe("pending");
+    expect(status("Failed")).toBe("failed");
+    expect(status("Canceled")).toBe("failed");
+  });
+
+  it("não inventa status quando o payload não traz nenhum", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: { messageid: "SEM", chatid: "5511@s.whatsapp.net", messageType: "Conversation", text: "oi" },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.status).toBeNull();
+  });
+
+  it("não transforma `ack` vazio em recusa", () => {
+    // `Number(null)` e `Number("")` valem 0, e 0 é "recusada" no vocabulário de
+    // ACK. Convertendo o candidato sem descartar o vazio antes, um `ack: null`
+    // marcava como FALHOU uma mensagem que o cliente já tinha lido — e `failed`
+    // vence qualquer estado no ranque, então não haveria como desfazer.
+    for (const ack of [null, "", false]) {
+      const event = normalizeUazapiWebhook({
+        EventType: "messages_update",
+        ack,
+        event: { MessageIDs: ["ACK_VAZIO"], ack },
+      });
+      expect(event.kind).toBe("ignored");
+    }
+  });
+
+  it("lê o ACK numérico mesmo quando o Type ao lado é desconhecido", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      event: { MessageIDs: ["ACK_NUM"], Type: "AlgoQueNaoSabemosLer", ack: 4 },
+    });
+    expect(event).toMatchObject({ kind: "status", status: "read" });
+  });
+
+  it("ignora atualização cujo estado não reconhece, em vez de chamar de enviada", () => {
+    // O fallback antigo era "sent": qualquer Type desconhecido virava uma
+    // confirmação que ninguém tinha dado, e ainda recarregava a tela.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      event: { MessageIDs: ["X1"], Type: "AlgoNovoQueNaoSabemosLer" },
+    });
+    expect(event.kind).toBe("ignored");
+  });
+});
+
+describe("mídia baixada pela uazapi", () => {
+  it("guarda a URL nova do arquivo em vez de tratar como confirmação de entrega", () => {
+    // Payload real de 24/08/2026: `FileDownloaded` traz a URL servida pela
+    // uazapi, a única que abre — a do WhatsApp vem criptografada.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      type: "FileDownloadedMessage",
+      instanceName: "Bruno Barbosa - Teste",
+      event: {
+        Chat: "553199325441@s.whatsapp.net",
+        Type: "FileDownloaded",
+        chatid: "553199325441@s.whatsapp.net",
+        FileURL: "https://enturos.uazapi.com/files/6524169974.jpg",
+        MimeType: "image/jpeg",
+        MessageIDs: ["3A35148AA7F067CABE2E"],
+        IsFromMe: false,
+      },
+    });
+    expect(event).toMatchObject({
+      kind: "media",
+      externalIds: ["3A35148AA7F067CABE2E"],
+      mediaUrl: "https://enturos.uazapi.com/files/6524169974.jpg",
+      mediaMimeType: "image/jpeg",
+      remoteJid: "553199325441@s.whatsapp.net",
+    });
+  });
+
+  it("descarta o aviso de download que chega sem URL", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages_update",
+      event: { Type: "FileDownloaded", MessageIDs: ["A1"], FileURL: "" },
+    });
+    expect(event.kind).toBe("ignored");
+  });
+});
+
+describe("tipos de mensagem que faltavam", () => {
+  it("lê a mensagem com botões antiga como o texto que ela é", () => {
+    // Payload real: 45 mensagens desta instância (lembretes, relatórios,
+    // campanhas) estavam gravadas como `unsupported` e a bolha as anunciava
+    // como "Mensagem não suportada" — com o texto legível impresso logo abaixo.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      message: {
+        messageid: "490BCF316B4C88B624",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "TemplateMessage",
+        fromMe: false,
+        status: "",
+        text: "*Dia 25, às 20h*, eu vou te mostrar como colocar IA para trabalhar.",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("text");
+    expect(event.message.body).toContain("Dia 25");
+    // `status: ""` é o que o webhook desta instância manda em TODA mensagem:
+    // não pode virar um estado inventado.
+    expect(event.message.status).toBeNull();
+  });
+
+  it("lê a enquete com pergunta e opções", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "P1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "PollCreationMessage",
+        text: "",
+        content: {
+          name: "Qual horário fica melhor?",
+          options: [{ optionName: "14h" }, { optionName: "16h" }],
+          selectableOptionsCount: 1,
+        },
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("text");
+    expect(event.message.body).toBe("[enquete] Qual horário fica melhor?\n• 14h\n• 16h");
+  });
+
+  it("lê o voto da enquete no campo vote", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "P2",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "PollUpdateMessage",
+        text: "",
+        vote: "16h",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.body).toBe("[voto na enquete] 16h");
+  });
+
+  it("lê a resposta de lista e a de botão", () => {
+    const lista = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "L1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "ListResponseMessage",
+        text: "",
+        buttonOrListid: "servico_manutencao",
+        content: { title: "Manutenção" },
+      },
+    });
+    if (lista.kind !== "message") throw new Error("esperava mensagem");
+    expect(lista.message.body).toBe("[resposta] Manutenção");
+
+    const botao = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "B1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "ButtonsResponseMessage",
+        text: "",
+        buttonOrListid: "confirmar",
+        content: {},
+      },
+    });
+    if (botao.kind !== "message") throw new Error("esperava mensagem");
+    expect(botao.message.body).toBe("[resposta] confirmar");
+  });
+
+  it("extrai latitude e longitude da localização", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "G1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "LocationMessage",
+        text: "",
+        content: { degreesLatitude: -9.66581, degreesLongitude: -35.71032, name: "Studio Lumina" },
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("location");
+    expect(event.message.body).toBe("[localização] -9.66581, -35.71032 — Studio Lumina");
+  });
+
+  it("extrai nome e telefone do vCard do contato", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "C1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "ContactMessage",
+        text: "",
+        content: {
+          displayName: "Katiuscy",
+          vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:Katiuscy\nTEL;type=CELL:+55 84 99999-1234\nEND:VCARD",
+        },
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("contact");
+    expect(event.message.body).toBe("[contato] Katiuscy — +55 84 99999-1234");
+  });
+
+  it("reconhece o recado de vídeo, que antes virava não suportada", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "V1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "PtvMessage",
+        fileURL: "https://enturos.uazapi.com/files/video.mp4",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("video");
+  });
+
+  it("não ingere registro de chamada, que chega como tipo desconhecido e vazio", () => {
+    // Nove destes viraram "[mensagem não suportada]" no fio das conversas.
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "00F9D4432DCC91336F39F941DC626764",
+        chatid: "558481282118@s.whatsapp.net",
+        messageType: "UnknownMessageType",
+        text: "",
+        status: "Delivered",
+        content: { message: { message: { callLogMesssage: { callOutcome: 1, durationSecs: 0 } } } },
+      },
+    });
+    expect(event.kind).toBe("ignored");
+    if (event.kind === "ignored") expect(event.reason).toContain("mensagem_sem_conteudo");
+  });
+
+  it("continua gravando tipo desconhecido que TEM texto", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "U2",
+        chatid: "558481282118@s.whatsapp.net",
+        messageType: "TipoQueAindaNaoExiste",
+        text: "algo que a cliente escreveu",
+      },
+    });
+    if (event.kind !== "message") throw new Error("esperava mensagem");
+    expect(event.message.kind).toBe("unsupported");
+    expect(event.message.body).toBe("algo que a cliente escreveu");
+  });
+
+  it("descarta o cabeçalho do álbum, porque as mídias vêm em seguida", () => {
+    const event = normalizeUazapiWebhook({
+      EventType: "messages",
+      event: {
+        messageid: "AL1",
+        chatid: "5511987654321@s.whatsapp.net",
+        messageType: "AlbumMessage",
+        content: { expectedImageCount: 3 },
+      },
+    });
+    expect(event.kind).toBe("ignored");
+    if (event.kind === "ignored") expect(event.reason).toBe("album_cabecalho");
+  });
+});

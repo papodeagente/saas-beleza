@@ -28,6 +28,32 @@ import type { AgentTurnJob } from "@/server/queues/agent-turn-queue";
 export type TurnOutcome = { status: "sent" | "skipped" | "error"; reason?: string };
 
 /**
+ * Quanto da espera o cliente vê como "Digitando...".
+ *
+ * É a fatia que entregamos à uazapi. Curta de propósito: enquanto ela segura a
+ * mensagem, a conversa já saiu das nossas mãos e pausar a IA não a alcança
+ * mais.
+ */
+const ATRASO_DIGITANDO_MS = 8_000;
+
+/**
+ * Divide o atraso configurado entre nós e o provedor.
+ *
+ * A fatia final vai para o campo `delay` do /send/text, que é o que faz o
+ * cliente ver "Digitando..." — um `setTimeout` nosso deixava a conversa muda
+ * durante toda a espera. A fatia longa continua sendo nossa, e é o que mantém
+ * duas garantias: pausar a IA ainda cancela a resposta durante quase toda a
+ * espera, e a requisição de /send/text não fica minutos aberta (o endpoint não
+ * é idempotente e o cliente repete falha de rede — conexão presa vira mensagem
+ * duplicada para um cliente real).
+ */
+export function dividirAtraso(totalMs: number): { nosso: number; provedor: number } {
+  const total = Number.isFinite(totalMs) ? Math.max(0, Math.round(totalMs)) : 0;
+  const provedor = Math.min(total, ATRASO_DIGITANDO_MS);
+  return { nosso: total - provedor, provedor };
+}
+
+/**
  * Releitura da pausa no instante do envio.
  *
  * O valor lido no início do turno já está velho quando o modelo termina; entre
@@ -189,8 +215,12 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       return { status: "skipped", reason: "resposta_vazia" };
     }
 
-    if (agent.responseDelaySeconds > 0) {
-      await new Promise((resolve) => setTimeout(resolve, agent.responseDelaySeconds * 1000));
+    // A espera longa vem ANTES da releitura da pausa, e essa ordem é a regra:
+    // é ela que faz um clique em "pausar IA" durante a espera realmente
+    // impedir a resposta. Entregar o atraso inteiro ao provedor invertia isso.
+    const atraso = dividirAtraso(agent.responseDelaySeconds * 1000);
+    if (atraso.nosso > 0) {
+      await new Promise((resolve) => setTimeout(resolve, atraso.nosso));
     }
 
     if (await isPausedNow(conversationId)) {
@@ -204,7 +234,13 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       .set({ aiLastProcessedInboundAt: lastInboundAt, controlledBy: "ai" })
       .where(eq(conversations.id, conversationId));
 
-    await sendMessageToConversation(organizationId, conversationId, result.reply, { sender: "ai" });
+    // Só os últimos segundos vão para o provedor: o suficiente para o cliente
+    // ver "Digitando..." antes da mensagem cair, sem abrir uma janela em que
+    // pausar a IA não faz mais efeito.
+    await sendMessageToConversation(organizationId, conversationId, result.reply, {
+      sender: "ai",
+      delayMs: atraso.provedor,
+    });
 
     if (result.effect?.type === "transfer_to_human") {
       await applyTransfer(organizationId, conversationId, result.effect.reason, result.effect.summary);

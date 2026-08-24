@@ -37,7 +37,7 @@ function Checks({ options, values, onChange }: { options: Option[]; values: numb
 }
 
 function Actions({ pending, disabled, label, close }: { pending: boolean; disabled?: boolean; label: string; close: () => void }) {
-  return <><Button variant="ghost" onClick={close}>Cancelar</Button><Button loading={pending} disabled={disabled} onClick={() => document.getElementById("cadastro-submit")?.click()}>{label}</Button></>;
+  return <><Button variant="ghost" onClick={close}>Cancelar</Button><Button variant="primary" loading={pending} disabled={disabled} onClick={() => document.getElementById("cadastro-submit")?.click()}>{label}</Button></>;
 }
 
 export function ManagementForms({ branches, services }: { branches: Option[]; services: Option[] }) {
@@ -58,7 +58,7 @@ export function ManagementForms({ branches, services }: { branches: Option[]; se
   return (
     <>
       <div className="flex flex-wrap gap-2" aria-label="Novos cadastros">
-        <Button onClick={() => setOpen("branch")}><Building2 />Nova unidade</Button>
+        <Button variant="primary" onClick={() => setOpen("branch")}><Building2 />Nova unidade</Button>
         <Button variant="secondary" onClick={() => setOpen("professional")} disabled={!branches.length}><UserRound />Novo profissional</Button>
         <Button variant="secondary" onClick={() => setOpen("member")} disabled={!branches.length}><Users />Novo usuário</Button>
         <Button variant="secondary" onClick={() => setOpen("resource")} disabled={!branches.length}><DoorOpen />Sala ou recurso</Button>

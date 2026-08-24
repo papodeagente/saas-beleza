@@ -3,12 +3,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 /**
  * Silhueta genérica do módulo. Rotas com layout próprio (agenda, inbox)
  * declaram o seu; esta cobre as telas de cabeçalho + lista.
+ *
+ * O teto de 1600px é o mesmo do PageHeader/PageBody, e precisa continuar
+ * sendo: a silhueta é o primeiro quadro de toda navegação, então largura
+ * diferente da real faz a tela nascer estreita e saltar para o lado quando o
+ * conteúdo chega. Mexeu em um, mexa no outro.
  */
 export default function Loading() {
   return (
     <div>
       <div className="border-b border-line">
-        <div className="flex min-h-[60px] w-full max-w-[1180px] items-center justify-between gap-3 px-5 py-3 md:px-8">
+        <div className="flex min-h-[76px] w-full max-w-[1600px] items-center justify-between gap-3 px-5 py-4 md:px-8">
           <div className="space-y-1.5">
             <Skeleton className="h-5 w-40" />
             <Skeleton className="h-3 w-24" />
@@ -16,7 +21,7 @@ export default function Loading() {
           <Skeleton className="h-9 w-32" />
         </div>
       </div>
-      <div className="w-full max-w-[1180px] px-5 py-6 md:px-8 md:py-8">
+      <div className="w-full max-w-[1600px] px-5 py-6 md:px-8 md:py-8">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="space-y-2 rounded-card bg-surface-raised px-5 py-4 shadow-card">

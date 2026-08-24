@@ -128,8 +128,10 @@ export function CtaButton({
     "inline-flex h-12 items-center justify-center gap-2 rounded-control px-6 text-[15px] font-semibold tracking-[-0.011em] transition-colors duration-150";
   const estilo =
     variant === "primary"
-      ? // O #2560d6 sobre o azul-noite dá 3.3:1 de borda, pouca folga. O anel
-        // externo garante que o botão continue destacado se o fundo mudar.
+      ? // O fundo do botão contra a noite mede 2,66:1 — abaixo dos 3:1 que um
+        // controle precisa ter de contorno, então sozinho ele desapareceria na
+        // seção escura. Quem faz o recorte é o anel em accent-lift, que mede
+        // 9,35:1 contra o mesmo fundo. O texto branco sobre o botão dá 7,06:1.
         "bg-accent text-white shadow-[0_0_0_1px_var(--color-accent-lift)] hover:bg-accent-hover"
       : "border border-night-line-strong text-night-ink hover:bg-white/6";
 

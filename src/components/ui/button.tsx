@@ -9,7 +9,7 @@ const button = cva(
   {
     variants: {
       variant: {
-        primary: "bg-accent text-white shadow-[0_2px_8px_rgb(37_96_214/0.28)] hover:bg-accent-hover",
+        primary: "bg-accent text-white shadow-action hover:bg-accent-hover",
         secondary: "border border-accent/35 bg-surface-raised text-accent hover:bg-accent-soft",
         ghost: "text-ink-secondary hover:bg-surface-sunken hover:text-ink",
         danger: "bg-danger text-white hover:brightness-95",
@@ -26,13 +26,24 @@ const button = cva(
         icon: "size-10 pointer-coarse:min-h-11 pointer-coarse:min-w-11 [&_svg]:size-4",
       },
     },
-    defaultVariants: { variant: "secondary", size: "md" },
+    /**
+     * Sem padrão de variante.
+     *
+     * O padrão era `secondary`, e formulário que esquecia de passar `variant`
+     * saía com TODOS os botões contornados — a tela deixava de dizer qual é a
+     * ação. Tornando `variant` obrigatório no tipo, esquecer virou erro de
+     * compilação em vez de tela sem hierarquia. Regra da casa: um preenchido
+     * por tela ou por painel, e só ele.
+     */
+    defaultVariants: { size: "md" },
   },
 );
 
 export interface ButtonProps
   extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "children">,
-    VariantProps<typeof button> {
+    Omit<VariantProps<typeof button>, "variant"> {
+  /** Obrigatório: ver a nota sobre `defaultVariants` acima. */
+  variant: NonNullable<VariantProps<typeof button>["variant"]>;
   asChild?: boolean;
   /** Mostra o giro e bloqueia o clique sem alterar a largura do botão. */
   loading?: boolean;

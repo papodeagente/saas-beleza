@@ -1,5 +1,7 @@
 import { addDays, endOfMonth, endOfWeek, startOfMonth, startOfWeek } from "date-fns";
 import { and, eq } from "drizzle-orm";
+import { headers } from "next/headers";
+import { userAgent } from "next/server";
 import { db } from "@/db";
 import { customers } from "@/db/schema";
 import { requireSession } from "@/server/auth";
@@ -10,6 +12,27 @@ import { AgendaView } from "./agenda-view";
 
 export const metadata = { title: "Agenda" };
 export const dynamic = "force-dynamic";
+
+/**
+ * Visão padrão da agenda quando a URL não pede uma.
+ *
+ * Semana é o padrão certo no desktop e inutilizável no celular: são sete
+ * colunas em 390px, cada uma com ~50px úteis, onde todo nome vira "Re…". A
+ * decisão precisa ser tomada no SERVIDOR e não no cliente porque ela muda a
+ * consulta — a visão de dia nem chega a pedir o intervalo da semana — e porque
+ * decidir depois da hidratação faria a tela abrir errada e se remontar.
+ *
+ * `sec-ch-ua-mobile` vem primeiro por ser um sinal declarado pelo próprio
+ * navegador (Chromium manda em toda requisição); a leitura do user-agent é o
+ * plano B para Safari e Firefox, que não enviam a dica.
+ */
+async function defaultViewMode(): Promise<"dia" | "semana"> {
+  const cabecalhos = await headers();
+  const dica = cabecalhos.get("sec-ch-ua-mobile");
+  if (dica === "?1") return "dia";
+  if (dica === "?0") return "semana";
+  return userAgent({ headers: cabecalhos }).device.type === "mobile" ? "dia" : "semana";
+}
 
 function resolveDay(param: string | undefined): Date {
   const today = new Date();
@@ -36,7 +59,10 @@ export default async function AgendaPage({
   const ctx = await requireSession();
   const params = await searchParams;
   const day = resolveDay(params.dia);
-  const viewMode = params.visualizacao === "dia" || params.visualizacao === "mes" ? params.visualizacao : "semana";
+  const viewMode =
+    params.visualizacao === "dia" || params.visualizacao === "mes" || params.visualizacao === "semana"
+      ? params.visualizacao
+      : await defaultViewMode();
   const branchId = params.unidade ? Number(params.unidade) : undefined;
   const rangeStart = viewMode === "mes"
     ? startOfWeek(startOfMonth(day), { weekStartsOn: 1 })

@@ -9,6 +9,7 @@ import { sendMessageToConversation } from "@/server/services/whatsapp-message-se
 import { canonicalBrPhone, digitsOnly, jidFromPhone } from "@/server/whatsapp/phone";
 import {
   UazapiAuthError,
+  UazapiError,
   UazapiRateLimitError,
   checkNumbers,
 } from "@/server/whatsapp/uazapi-client";
@@ -49,7 +50,15 @@ export type StartErrorCode =
   | "LIMITE_ATINGIDO"
   | "VERIFICACAO_INDISPONIVEL"
   | "SEM_WHATSAPP"
-  | "ENVIO_FALHOU";
+  | "ENVIO_FALHOU"
+  /**
+   * O provedor ACEITOU a mensagem e algo quebrou depois dela.
+   *
+   * Separado de `ENVIO_FALHOU` porque é o único desfecho de erro em que a
+   * cliente JÁ recebeu: quem for retentar automaticamente precisa saber a
+   * diferença, senão a retentativa é uma segunda mensagem.
+   */
+  | "ENVIO_INCERTO";
 
 export type StartConversationResult =
   | {
@@ -59,12 +68,32 @@ export type StartConversationResult =
       /** Verdadeiro quando a mensagem entrou numa conversa que já existia. */
       reused: boolean;
     }
-  | { ok: false; code: StartErrorCode; error: string };
+  | {
+      ok: false;
+      code: StartErrorCode;
+      /** Texto para a tela, em português e sem jargão. */
+      error: string;
+      /**
+       * Erro CRU do provedor. Quem chama grava isto no registro do disparo: o
+       * texto de interface diz "tente de novo em instantes" para meia dúzia de
+       * causas diferentes, e depurar com ele é impossível.
+       */
+      detail?: string;
+    };
 
 type Falha = Extract<StartConversationResult, { ok: false }>;
 
-function falha(code: StartErrorCode, error: string): Falha {
-  return { ok: false, code, error };
+function falha(code: StartErrorCode, error: string, detail?: string): Falha {
+  return { ok: false, code, error, detail };
+}
+
+/** Resumo técnico do erro, com o corpo da resposta quando o provedor mandou um. */
+function detalheTecnico(erro: unknown): string {
+  if (erro instanceof UazapiError) {
+    return `${erro.name} ${erro.status}: ${(erro.body || erro.message).slice(0, 400)}`;
+  }
+  if (erro instanceof Error) return `${erro.name}: ${erro.message}`.slice(0, 400);
+  return String(erro).slice(0, 400);
 }
 
 export type StartConversationInput = {
@@ -182,6 +211,13 @@ async function findConversationByPhone(organizationId: number, variants: string[
 /**
  * Quantas conversas a conta abriu na última hora, com o teto como limite da
  * consulta: passar de 30 não muda a decisão, então não há por que contar mais.
+ *
+ * A contagem é por `startedBy` (origem) e NÃO por `startedByUserId` (autor).
+ * Enquanto olhava para o autor, o envio automático — que não tem usuário — não
+ * aparecia aqui: uma automação de aniversário abria conversa atrás de conversa
+ * em rajada, com o teto marcando zero o tempo todo. É esse furo que faz o
+ * WhatsApp bloquear o número da clínica, e um número bloqueado derruba o
+ * atendimento inteiro, não só a campanha.
  */
 async function contarConversasIniciadas(organizationId: number): Promise<number> {
   const desde = new Date(Date.now() - 3_600_000);
@@ -191,7 +227,7 @@ async function contarConversasIniciadas(organizationId: number): Promise<number>
     .where(
       and(
         eq(conversations.organizationId, organizationId),
-        isNotNull(conversations.startedByUserId),
+        isNotNull(conversations.startedBy),
         gte(conversations.createdAt, desde),
       ),
     )
@@ -412,9 +448,9 @@ export async function startOutboundConversation(
       // duas vezes.
       if ((await ultimaMensagemId(existente.id)) !== marcaExistente) {
         if (!input.automated) await assumirConversa(ctx, existente.id);
-        return falha("ENVIO_FALHOU", AVISO_MENSAGEM_JA_SAIU);
+        return falha("ENVIO_INCERTO", AVISO_MENSAGEM_JA_SAIU, detalheTecnico(error));
       }
-      return falha("ENVIO_FALHOU", mensagemDeFalhaNoEnvio(error));
+      return falha("ENVIO_FALHOU", mensagemDeFalhaNoEnvio(error), detalheTecnico(error));
     }
     if (!input.automated) await assumirConversa(ctx, existente.id);
     return {
@@ -450,6 +486,7 @@ export async function startOutboundConversation(
     return falha(
       "VERIFICACAO_INDISPONIVEL",
       "Não deu para confirmar esse número no WhatsApp agora. Tente de novo em instantes.",
+      detalheTecnico(error),
     );
   }
 
@@ -508,10 +545,20 @@ export async function startOutboundConversation(
   // A marca de origem é gravada antes do envio: é neste instante que a conta
   // gastou uma conversa nova, e o limite de vazão precisa enxergá-la mesmo se o
   // processo morrer no meio do envio.
-  if (resolvida.created && !input.automated) {
+  //
+  // O envio automático grava origem SEM autor: não há usuário por trás dele, e
+  // inventar um (usuário de sistema) sujaria a lista da equipe e o seletor de
+  // responsável. O que importa para o teto é que a linha exista com origem
+  // preenchida — antes, o `if` inteiro era pulado no caminho automático e a
+  // conversa nascia invisível para o limite.
+  if (resolvida.created) {
     await db
       .update(conversations)
-      .set({ startedByUserId: ctx.userId })
+      .set(
+        input.automated
+          ? { startedBy: "automation", startedByUserId: null }
+          : { startedBy: "user", startedByUserId: ctx.userId },
+      )
       .where(eq(conversations.id, resolvida.conversationId));
   }
 
@@ -534,7 +581,7 @@ export async function startOutboundConversation(
      */
     if ((await ultimaMensagemId(resolvida.conversationId)) !== marca) {
       if (!input.automated) await assumirConversa(ctx, resolvida.conversationId);
-      return falha("ENVIO_FALHOU", AVISO_MENSAGEM_JA_SAIU);
+      return falha("ENVIO_INCERTO", AVISO_MENSAGEM_JA_SAIU, detalheTecnico(error));
     }
 
     if (resolvida.created) {
@@ -550,7 +597,7 @@ export async function startOutboundConversation(
           .catch((erroLimpeza) => console.error("[conversa ativa] cadastro órfão", erroLimpeza));
       }
     }
-    return falha("ENVIO_FALHOU", mensagemDeFalhaNoEnvio(error));
+    return falha("ENVIO_FALHOU", mensagemDeFalhaNoEnvio(error), detalheTecnico(error));
   }
 
   // (8) A conversa nasce COM DONO: quem escreveu.

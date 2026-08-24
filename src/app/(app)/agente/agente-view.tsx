@@ -350,7 +350,7 @@ export function AgentView({
           </Card>
 
           <div className="sticky bottom-4 flex justify-end">
-            <Button size="md" onClick={saveConfig} loading={saving}>
+            <Button variant="primary" size="md" onClick={saveConfig} loading={saving}>
               Salvar
             </Button>
           </div>
@@ -484,7 +484,7 @@ function KnowledgeTab({
               <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={8} />
             </Field>
             <div className="flex gap-2">
-              <Button size="md" onClick={save} loading={saving} disabled={!title.trim() || !content.trim()}>
+              <Button variant="primary" size="md" onClick={save} loading={saving} disabled={!title.trim() || !content.trim()}>
                 Salvar
               </Button>
               <Button size="md" variant="ghost" onClick={() => setEditing(null)}>
@@ -623,7 +623,7 @@ function SimulatorTab({ agentName }: { agentName: string }) {
             placeholder="Mensagem do cliente"
             className="max-h-32 min-h-11 flex-1 resize-none"
           />
-          <Button size="md" onClick={send} loading={running} disabled={!draft.trim()} className="h-11 shrink-0">
+          <Button variant="primary" size="md" onClick={send} loading={running} disabled={!draft.trim()} className="h-11 shrink-0">
             <Send aria-hidden />
           </Button>
         </div>

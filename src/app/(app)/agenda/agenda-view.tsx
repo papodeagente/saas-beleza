@@ -134,8 +134,11 @@ export function AgendaView({
 
   function setViewMode(mode: ViewMode) {
     const params = new URLSearchParams(searchParams.toString());
-    if (mode === "semana") params.delete("visualizacao");
-    else params.set("visualizacao", mode);
+    // Semana também vai para a URL. Antes o parâmetro era apagado porque
+    // "semana" era o padrão implícito; agora o padrão depende do aparelho
+    // (celular abre em dia), e apagar faria a escolha explícita do usuário
+    // voltar sozinha para dia no próximo render.
+    params.set("visualizacao", mode);
     params.delete("atendimento");
     navigate(params);
   }
@@ -247,12 +250,29 @@ export function AgendaView({
           <Button variant="ghost" size="icon" className="size-9" onClick={() => goToPeriod(-1)} aria-label={viewMode === "mes" ? "Mês anterior" : viewMode === "semana" ? "Semana anterior" : "Dia anterior"}><ChevronLeft /></Button>
           <Button variant="ghost" size="icon" className="size-9" onClick={() => goToPeriod(1)} aria-label={viewMode === "mes" ? "Próximo mês" : viewMode === "semana" ? "Próxima semana" : "Próximo dia"}><ChevronRight /></Button>
         </div>
-        <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-ink md:text-card">{title}</h2>
+        {/* No celular a data ganha a própria linha. Espremida entre o botão
+            Hoje, as setas e o seletor de visualização sobravam ~80px para ela,
+            e "Segunda, 24 de agosto" virava "Seg…" — a tela deixava de dizer
+            que dia está aberto, que é a única informação obrigatória aqui. */}
+        <h2 className="order-first w-full min-w-0 truncate text-body font-semibold text-ink sm:order-none sm:w-auto sm:flex-1 md:text-card">{title}</h2>
         {formData.branches.length > 1 ? (
-          <Select value={selectedBranchId ?? ""} onChange={(e) => setBranch(e.target.value)} aria-label="Filtrar por unidade" className="hidden h-9 w-[150px] sm:block">
-            <option value="">Todas as unidades</option>
-            {formData.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </Select>
+          /**
+           * O `hidden sm:block` precisa ficar no ENVOLTÓRIO, não no <select>.
+           *
+           * O Select desenha a própria seta como filho absoluto de um <div
+           * relative>; escondendo só o <select>, a seta continuava aparecendo —
+           * era um "⌄" solto no meio da barra do celular, em cima do título do
+           * dia, que ainda perdia largura para um controle invisível.
+           *
+           * Largura automática entre 150 e 220: em 150 fixo "Todas as unidades"
+           * saía cortado no "unidade".
+           */
+          <div className="hidden sm:block">
+            <Select value={selectedBranchId ?? ""} onChange={(e) => setBranch(e.target.value)} aria-label="Filtrar por unidade" className="h-9 w-auto min-w-[150px] max-w-[220px]">
+              <option value="">Todas as unidades</option>
+              {formData.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </Select>
+          </div>
         ) : null}
         {canManageSchedule ? (
           <Button variant="ghost" size="icon" className="size-9" onClick={() => setScheduleEditor({ professionalId: null })} title="Disponibilidade" aria-label="Configurar disponibilidade"><CalendarCog /></Button>

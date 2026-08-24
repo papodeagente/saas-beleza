@@ -345,7 +345,7 @@ export function Composer({
           </div>
           <div className="flex justify-end gap-2 px-3 py-2">
             <Button variant="ghost" size="sm" onClick={descartarMidia}>Cancelar</Button>
-            <Button size="sm" onClick={enviarMidia} loading={enviando}><Send aria-hidden />Enviar</Button>
+            <Button variant="primary" size="sm" onClick={enviarMidia} loading={enviando}><Send aria-hidden />Enviar</Button>
           </div>
         </div>
       ) : null}
@@ -360,7 +360,7 @@ export function Composer({
             <Trash2 aria-hidden />
             Descartar
           </Button>
-          <Button size="sm" onClick={() => pararGravacao(true)}>
+          <Button variant="primary" size="sm" onClick={() => pararGravacao(true)}>
             <Send aria-hidden />
             Concluir
           </Button>
@@ -445,7 +445,7 @@ export function Composer({
           />
 
           {midia ? null : draft.trim() ? (
-            <Button size="md" onClick={enviarTexto} loading={enviando} className="h-11 shrink-0">
+            <Button variant="primary" size="md" onClick={enviarTexto} loading={enviando} className="h-11 shrink-0">
               <Send aria-hidden />
               <span className="hidden sm:inline">Enviar</span>
             </Button>

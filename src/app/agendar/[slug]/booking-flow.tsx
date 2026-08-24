@@ -192,9 +192,11 @@ export function BookingFlow({
             <div className="flex size-12 items-center justify-center rounded-pill bg-white/16 ring-1 ring-white/25">
               <Check className="size-6" aria-hidden />
             </div>
-            <p className="mt-6 text-eyebrow text-white/75">Tudo certo</p>
+            {/* Mesmo gradiente da coluna lateral, mesma conta de contraste:
+                sem opacidade em texto, hierarquia por tamanho e peso. */}
+            <p className="mt-6 text-eyebrow text-white">Tudo certo</p>
             <h1 className="mt-2 text-display text-white">Seu horário está reservado</h1>
-            <p className="mt-2 text-body text-white/80">{organizationName} espera por você.</p>
+            <p className="mt-2 text-body text-white">{organizationName} espera por você.</p>
           </div>
           <div className="px-7 py-7 sm:px-10">
             <dl className="divide-y divide-line rounded-card border border-line">
@@ -552,6 +554,20 @@ function BookingAside({
   const current = step === "branch" ? 0 : step === "day" || step === "time" ? 1 : step === "identify" ? 2 : 0;
 
   return (
+    /**
+     * Nenhum texto desta coluna usa transparência.
+     *
+     * O gradiente da marca começa em #8744cd, e sobre esse roxo o BRANCO PURO
+     * já mede só 5,62:1 — o orçamento inteiro de contraste cabe em meio ponto
+     * acima do mínimo AA. Qualquer `text-white/xx` gasta esse meio ponto: /70
+     * caía para 3,59:1 e /65 para 3,31:1, medidos aqui antes da correção. Por
+     * isso a hierarquia é feita por TAMANHO e PESO (26/16/14/13/12/11 px e
+     * semibold vs normal), que não custam contraste, e não por opacidade.
+     *
+     * Pela mesma conta, painel de destaque aqui ESCURECE em vez de clarear:
+     * `bg-white/8` clareava o fundo para #9153d1 e derrubava o branco puro para
+     * 4,82:1; `bg-night/18` leva o fundo para #733ab0 e devolve 7,13:1.
+     */
     <aside className="relative overflow-hidden bg-brand px-5 py-6 text-white sm:px-10 lg:px-9 lg:py-10">
       <div aria-hidden className="absolute -right-20 -top-20 size-64 rounded-pill border border-white/10" />
       <div aria-hidden className="absolute -bottom-24 -left-20 size-72 rounded-pill bg-white/5" />
@@ -559,13 +575,13 @@ function BookingAside({
         <BrandLogo compact variant="white" />
         <div className="mt-4 min-w-0 lg:mt-6">
           <p className="truncate text-label font-semibold text-white">{organizationName}</p>
-          <p className="mt-0.5 text-caption text-white/70">Cuidado no seu tempo</p>
+          <p className="mt-0.5 text-caption text-white">Cuidado no seu tempo</p>
         </div>
       </div>
 
       <div className="relative mt-6 hidden lg:block">
         <p className="max-w-[260px] text-display text-white">Reserve um momento só para você.</p>
-        <p className="mt-3 max-w-[260px] text-body text-white/72">Escolha o serviço e o melhor horário. Leva menos de dois minutos.</p>
+        <p className="mt-3 max-w-[260px] text-body text-white">Escolha o serviço e o melhor horário. Leva menos de dois minutos.</p>
       </div>
 
       <ol className="relative mt-6 grid grid-cols-3 gap-2 lg:mt-10 lg:block lg:space-y-5">
@@ -574,29 +590,37 @@ function BookingAside({
           const complete = current > index;
           return (
             <li key={item.key} className="flex items-center gap-3">
+              {/* Os três estados se distinguem por preenchimento, símbolo e
+                  força da borda. A borda da etapa futura para em /60 porque é
+                  o limiar de 3:1 exigido de contorno de componente (2,80:1 em
+                  /55 reprovaria). */}
               <span className={cn(
                 "flex size-7 shrink-0 items-center justify-center rounded-pill border text-meta font-semibold transition-colors",
-                active ? "border-white bg-white text-accent" : complete ? "border-white/40 bg-white/15 text-white" : "border-white/25 text-white/65",
+                active
+                  ? "border-white bg-white text-accent"
+                  : complete
+                    ? "border-white text-white"
+                    : "border-white/60 text-white",
               )}>
                 {complete ? <Check className="size-3.5" aria-hidden /> : index + 1}
               </span>
-              <span className={cn("hidden text-label lg:block", active ? "font-semibold text-white" : "text-white/65")}>{item.label}</span>
+              <span className={cn("hidden text-label text-white lg:block", active ? "font-semibold" : "font-normal")}>{item.label}</span>
             </li>
           );
         })}
       </ol>
 
       {service ? (
-        <div className="relative mt-10 hidden rounded-card border border-white/15 bg-white/8 p-4 backdrop-blur lg:block">
-          <p className="text-meta font-semibold uppercase tracking-[0.1em] text-white/60">Sua escolha</p>
+        <div className="relative mt-10 hidden rounded-card border border-white/25 bg-night/18 p-4 backdrop-blur lg:block">
+          <p className="text-meta font-semibold uppercase tracking-[0.1em] text-white">Sua escolha</p>
           <p className="mt-2 text-card text-white">{service.name}</p>
-          <p className="mt-1 text-caption text-white/70">{service.durationMin} min · {formatBRL(service.priceCents)}</p>
-          {slot ? <p className="mt-3 border-t border-white/15 pt-3 text-label text-white">{slot.label} · {slot.professionalName}</p> : null}
-          {branch ? <p className="mt-1 text-caption text-white/65">{branch.name}</p> : null}
+          <p className="mt-1 text-caption text-white">{service.durationMin} min · {formatBRL(service.priceCents)}</p>
+          {slot ? <p className="mt-3 border-t border-white/25 pt-3 text-label font-semibold text-white">{slot.label} · {slot.professionalName}</p> : null}
+          {branch ? <p className="mt-1 text-caption text-white">{branch.name}</p> : null}
         </div>
       ) : null}
 
-      <div className="relative mt-8 hidden items-center gap-2 text-caption text-white/65 lg:flex">
+      <div className="relative mt-8 hidden items-center gap-2 text-caption text-white lg:flex">
         <ShieldCheck className="size-4" aria-hidden />
         Seus dados ficam protegidos
       </div>

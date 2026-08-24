@@ -105,27 +105,34 @@ export default async function FinancePage({
         actions={
           <div className="flex flex-wrap items-center gap-1">
             <TransactionForm branches={branchOptions} />
-            <MonthStep
-              href={href({ mes: shiftMonth(month, -1) })}
-              label={`Ver ${formatTz(new Date(`${shiftMonth(month, -1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
-              direction="prev"
-            />
-            <span className="whitespace-nowrap px-1 text-center text-label text-ink md:min-w-[132px]">
-              {monthLabel}
-            </span>
-            <MonthStep
-              href={href({ mes: shiftMonth(month, 1) })}
-              label={`Ver ${formatTz(new Date(`${shiftMonth(month, 1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
-              direction="next"
-            />
-            {month !== thisMonth ? (
-              <Link
-                href={href({ mes: thisMonth })}
-                className="ml-1 inline-flex min-h-[44px] items-center rounded-control px-2 text-label text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink md:min-h-[36px]"
-              >
-                Mês atual
-              </Link>
-            ) : null}
+            {/* A navegação de mês é UM controle, não quatro peças soltas.
+                Sem este agrupamento o flex-wrap quebrava no meio dela quando o
+                botão de lançamento não deixava tudo caber numa linha: no
+                celular a seta "seguinte" descia sozinha para a linha de baixo,
+                longe do mês a que se refere. */}
+            <div className="flex items-center gap-1">
+              <MonthStep
+                href={href({ mes: shiftMonth(month, -1) })}
+                label={`Ver ${formatTz(new Date(`${shiftMonth(month, -1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
+                direction="prev"
+              />
+              <span className="whitespace-nowrap px-1 text-center text-label text-ink md:min-w-[132px]">
+                {monthLabel}
+              </span>
+              <MonthStep
+                href={href({ mes: shiftMonth(month, 1) })}
+                label={`Ver ${formatTz(new Date(`${shiftMonth(month, 1)}-01T12:00:00Z`), ctx.timezone, "MMMM 'de' yyyy")}`}
+                direction="next"
+              />
+              {month !== thisMonth ? (
+                <Link
+                  href={href({ mes: thisMonth })}
+                  className="ml-1 inline-flex min-h-[44px] items-center rounded-control px-2 text-label text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink md:min-h-[36px]"
+                >
+                  Mês atual
+                </Link>
+              ) : null}
+            </div>
           </div>
         }
       />
@@ -136,7 +143,15 @@ export default async function FinancePage({
           <SectionLabel>
             <span id="caixa">Caixa do mês</span>
           </SectionLabel>
-          <MetricRow className="mt-3">
+          {/* Grade própria: 1 → 2 → 4 colunas.
+              A do MetricRow (2 no celular, 4 a partir de 640px) foi calibrada
+              para números curtos. Aqui os quatro são dinheiro com centavos, e
+              "R$ 21.220,00" ocupa 154px: sobravam 129px em 390px de tela, 114px
+              em 360px e 127px no tablet de 768px — o último dígito saía cortado
+              nos três. Quatro colunas só cabem a partir de 1024px (191px por
+              número). Fica local porque as outras telas que usam MetricRow têm
+              números curtos e a grade padrão serve bem a elas. */}
+          <MetricRow className="mt-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
             <Metric label="Entrou" value={formatBRL(summary.receivedCents)} tone="positive" />
             <Metric label="Saiu" value={formatBRL(summary.paidOutCents)} />
             <Metric
@@ -304,12 +319,36 @@ export default async function FinancePage({
             <Card className="mt-3">
               <ul className="divide-y divide-line">
                 {transactions.map((row) => {
-                  // O nome do cliente já costuma vir no texto do lançamento —
-                  // repeti-lo na linha de apoio só empurra a data para fora.
                   const origin =
                     row.categoryName ?? (row.kind === "income" ? "Atendimento" : "Sem categoria");
+                  /**
+                   * O título da linha é O QUE FOI VENDIDO.
+                   *
+                   * Receita que nasce de um atendimento é gravada com a
+                   * descrição literal "Atendimento", então a lista de um mês
+                   * cheio saía como cinco linhas idênticas chamadas
+                   * "Atendimento" e o valor era o único jeito de distinguir
+                   * uma da outra. O serviço sobe para o título; a descrição só
+                   * volta para a linha de apoio quando ela diz algo que a
+                   * origem ainda não disse (lançamento manual amarrado a um
+                   * atendimento, por exemplo).
+                   */
+                  const title = row.serviceName ?? row.description;
+                  // Só volta o que ACRESCENTA: descrição que já contém o nome
+                  // do serviço é outra forma de dizer o título ("Botox Facial —
+                  // Fernanda Duarte" embaixo de "Botox Facial" é eco, não dado).
+                  const extraDescription =
+                    row.serviceName &&
+                    row.description !== origin &&
+                    !row.description.includes(row.serviceName)
+                      ? row.description
+                      : null;
+                  // Mesma regra para o cliente: se o nome dele já aparece no
+                  // título ou no complemento, repetir só empurra a data para fora.
                   const customer =
-                    row.customerName && !row.description.includes(row.customerName)
+                    row.customerName &&
+                    !title.includes(row.customerName) &&
+                    !(extraDescription ?? "").includes(row.customerName)
                       ? row.customerName
                       : null;
                   const day = formatTz(new Date(`${row.dueDate}T12:00:00Z`), ctx.timezone, "d MMM");
@@ -319,14 +358,14 @@ export default async function FinancePage({
                         para a linha de apoio — a data nunca some de lista de dinheiro. */}
                     <span className="min-w-0 flex-1">
                       <span className="block text-label text-ink line-clamp-2 sm:line-clamp-1">
-                        {row.description}
+                        {title}
                       </span>
                       <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
                         <Badge className="sm:hidden" tone={STATUS[row.status]?.tone ?? "neutral"}>
                           {STATUS[row.status]?.label ?? row.status}
                         </Badge>
                         <span className="min-w-0 truncate text-meta text-ink-secondary">
-                          {[origin, customer, day].filter(Boolean).join(" · ")}
+                          {[origin, extraDescription, customer, day].filter(Boolean).join(" · ")}
                         </span>
                       </span>
                     </span>

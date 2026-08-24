@@ -508,7 +508,7 @@ export function PageHeader({
 }) {
   return (
     <header className="border-b border-line bg-surface-raised">
-      <div className="flex min-h-[76px] w-full max-w-[1180px] flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-8">
+      <div className="flex min-h-[76px] w-full max-w-[1600px] flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-8">
         <div className="min-w-0">
           <h1 className={cn("truncate text-ink", entity ? "text-entity" : "text-title")}>{title}</h1>
           {description ? (
@@ -522,8 +522,17 @@ export function PageHeader({
 }
 
 /**
- * Corpo da página. Ancorado à esquerda: a sidebar já é a margem, centralizar
- * criaria uma segunda margem que cresce com a tela (500px mortos em 1920).
+ * Corpo da página.
+ *
+ * Ancorado à esquerda para alinhar com a barra superior, que também começa na
+ * borda. (O comentário que estava aqui justificava a âncora pela "sidebar que
+ * já é a margem" — a sidebar virou barra no topo e a frase ficou mentindo.)
+ *
+ * O teto era 1180px, herdado de quando a coluna de menu comia 260px da
+ * esquerda. Sem ela, esses mesmos 260px viraram vazio no lado direito de todo
+ * notebook de 1440. 1600 é o teto onde a linha de tabela ainda se lê de ponta a
+ * ponta sem o olho se perder, e não corta nada abaixo disso — o mesmo teto vale
+ * para o PageHeader, senão título e conteúdo desalinham.
  */
 export function PageBody({
   children,
@@ -533,7 +542,7 @@ export function PageBody({
   className?: string;
 }) {
   return (
-    <div className={cn("w-full max-w-[1180px] px-5 py-6 md:px-8 md:py-8", className)}>{children}</div>
+    <div className={cn("w-full max-w-[1600px] px-5 py-6 md:px-8 md:py-8", className)}>{children}</div>
   );
 }
 

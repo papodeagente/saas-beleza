@@ -21,25 +21,51 @@ export function BrandIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * O lockup da tela é o RECORTE da marca, sem a assinatura.
+ *
+ * O arquivo oficial (2172x724) traz "GESTÃO INTELIGENTE PARA MANICURES" numa
+ * faixa de 30px de altura. Em qualquer slot de interface que existe neste
+ * produto — barra de 56px, faixa do login, rodapé da landing — essa faixa cai
+ * para 2 ou 3 pixels e vira um risco sujo debaixo do nome. Não é questão de
+ * escolher um tamanho maior: para a assinatura sair com 7px de caixa alta o
+ * PNG inteiro precisaria de ~250px de altura, que nenhum desses lugares tem.
+ *
+ * Os recortes `-marca` foram gerados por script (Pillow) a partir dos oficiais:
+ * apaga-se a assinatura à direita do traço da unha e recorta-se colado na
+ * tinta. Colar na tinta é o segundo ganho: o arquivo original tinha 27% de
+ * transparente em volta, então o nome renderizava a 30px dentro de uma caixa de
+ * 48px. Agora a caixa É a marca.
+ *
+ * A assinatura continua existindo onde ela cabe e é lida: no rodapé da landing,
+ * escrita como texto de verdade logo abaixo desta logo. Os PNGs oficiais
+ * completos seguem em /public/brand como mestres para material impresso.
+ */
+const ARQUIVOS = {
+  color: { src: "/brand/agenda-de-unha-color-marca.png", width: 709, height: 240 },
+  white: { src: "/brand/agenda-de-unha-white-marca.png", width: 658, height: 240 },
+} as const;
+
 export function BrandLogo({
   className,
   compact = false,
   variant = "color",
 }: {
   className?: string;
+  /** Uso em chrome (barra, faixa de login, coluna do agendamento). */
   compact?: boolean;
   variant?: "color" | "white";
 }) {
+  const arquivo = ARQUIVOS[variant];
   return (
     <span className={cn("inline-flex shrink-0 items-center", className)} aria-label="Agenda de Unha">
-      {/* Arquivo oficial fornecido pela marca. Mantido sem recorte ou tratamento. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={variant === "white" ? "/brand/agenda-de-unha-white.png" : "/brand/agenda-de-unha-color.png"}
-        alt="Agenda de Unha — Gestão inteligente para manicures"
-        width={2172}
-        height={724}
-        className={cn("block w-auto object-contain", compact ? "h-12" : "h-20")}
+        src={arquivo.src}
+        alt="Agenda de Unha"
+        width={arquivo.width}
+        height={arquivo.height}
+        className={cn("block w-auto object-contain", compact ? "h-10" : "h-14")}
       />
     </span>
   );

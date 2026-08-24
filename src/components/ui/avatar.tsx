@@ -1,14 +1,34 @@
 "use client";
 
+import { User } from "lucide-react";
 import { useState } from "react";
 import { identityTint } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 0 || !parts[0]) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts.at(-1)![0]).toUpperCase();
+/**
+ * Iniciais só de PALAVRA, nunca do que estiver na coluna `name`.
+ *
+ * Contato que chega pelo WhatsApp antes de ser identificado tem o telefone no
+ * lugar do nome, e a versão anterior devolvia dele o que fosse: "(9" para
+ * "(84) 99999-0000", "55" para "5584999990000". Dois caracteres de pontuação
+ * dentro de um círculo não são iniciais de ninguém — são lixo com cara de dado.
+ *
+ * Devolve null quando não sobra letra, e aí o avatar mostra o ícone de pessoa,
+ * que é a informação honesta: "esta pessoa ainda não tem nome".
+ */
+export function initials(name: string): string | null {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    // Uma palavra só conta se COMEÇAR por letra: "(84)" e "99999-0000" saem,
+    // "D'Ávila" e "Ângela" ficam.
+    .filter((word) => /^\p{L}/u.test(word));
+  if (words.length === 0) return null;
+  if (words.length === 1) {
+    const single = [...words[0]].filter((c) => /\p{L}/u.test(c));
+    return single.slice(0, 2).join("").toUpperCase();
+  }
+  return (words[0][0] + words.at(-1)![0]).toUpperCase();
 }
 
 const SIZES = {
@@ -34,6 +54,7 @@ export function Avatar({
 }) {
   const [falhou, setFalhou] = useState(false);
   const mostrarFoto = Boolean(src) && !falhou;
+  const iniciais = mostrarFoto ? null : initials(name);
 
   return (
     <span
@@ -74,8 +95,10 @@ export function Avatar({
           onError={() => setFalhou(true)}
           className="size-full object-cover"
         />
+      ) : iniciais ? (
+        iniciais
       ) : (
-        initials(name)
+        <User className="size-[55%]" strokeWidth={2} aria-hidden />
       )}
     </span>
   );

@@ -3,7 +3,12 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
-import { normalizeUazapiWebhook, type NormalizedMessage, type WaMessageKind } from "@/server/whatsapp/normalizer";
+import {
+  normalizeUazapiWebhook,
+  type NormalizedMessage,
+  type WaMessageKind,
+  type WaMessageStatus,
+} from "@/server/whatsapp/normalizer";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { resolveConversation } from "@/server/services/conversation-resolver";
 import { publishInboxEvent } from "@/server/services/inbox-events";
@@ -80,6 +85,18 @@ export async function ingestMessage(
   });
 
   const body = msg.body || KIND_TO_SENDER_LABEL[msg.kind] || "";
+  /**
+   * O provedor é a fonte da verdade do status.
+   *
+   * Antes o status era cravado na mão — `sent` para o que sai, `delivered`
+   * para o que entra — e o campo `status` que a uazapi manda em toda mensagem
+   * era jogado fora. Resultado: 627 mensagens de saída paradas em "enviada" no
+   * banco enquanto a uazapi já dizia "Read". O valor cravado vira apenas o
+   * piso, para quando o payload não disser nada.
+   */
+  const statusPiso: WaMessageStatus = msg.fromMe ? "sent" : "delivered";
+  const status =
+    msg.status && deveAvancarStatus(statusPiso, msg.status) ? msg.status : statusPiso;
   const inserted = await db
     .insert(messages)
     .values({
@@ -94,7 +111,7 @@ export async function ingestMessage(
       senderPhone: msg.senderPhone,
       body,
       messageType: msg.kind === "system" ? "system" : msg.kind,
-      status: msg.fromMe ? "sent" : "delivered",
+      status,
       externalId: msg.externalId,
       quotedExternalId: msg.quotedExternalId,
       mediaUrl: msg.mediaUrl,
@@ -112,6 +129,7 @@ export async function ingestMessage(
         id: messages.id,
         body: messages.body,
         messageType: messages.messageType,
+        status: messages.status,
         mediaUrl: messages.mediaUrl,
         mediaMimeType: messages.mediaMimeType,
         mediaFileName: messages.mediaFileName,
@@ -133,6 +151,14 @@ export async function ingestMessage(
     if (msg.quotedExternalId && existing.quotedExternalId !== msg.quotedExternalId) {
       patch.quotedExternalId = msg.quotedExternalId;
     }
+    /**
+     * É aqui que as mensagens presas em "enviada" se curam sozinhas: a
+     * reconciliação relê o /message/find, que devolve o status atual, e este
+     * ramo é o único que roda para mensagem que já existe. O ranque impede o
+     * caminho inverso — uma releitura antiga não pode transformar "lida" de
+     * volta em "entregue".
+     */
+    if (msg.status && deveAvancarStatus(existing.status, msg.status)) patch.status = msg.status;
     const isUpdated = Object.keys(patch).length > 0;
     if (isUpdated) await db.update(messages).set(patch).where(eq(messages.id, existing.id));
     return {
@@ -226,10 +252,15 @@ export async function syncConversationHistory(
     options.includeGroups ?? false,
   );
 
-  // /message/find cobre o histórico já salvo na instância (a documentação
-  // limita essa retenção a sete dias). Pedir um bloco anterior ao aparelho
-  // permite que eventos `history` completem conversas antigas sem bloquear a
-  // abertura da tela. Uma vez por hora é suficiente e evita pressionar o celular.
+  /**
+   * O /message/find lê o acervo da uazapi; o history-sync é o que ALIMENTA
+   * esse acervo com o que só existe no celular. O par funciona em duas etapas:
+   * o pedido daqui volta vazio, e o bloco recuperado aparece na próxima
+   * abertura da conversa, quando o /message/find já o encontra.
+   *
+   * Uma vez por hora por conversa: o pedido acorda o aparelho, e insistir não
+   * traz o histórico mais rápido.
+   */
   await maybeRequestOlderHistory(connection, conversation.remoteJid);
 
   if (conversationIds.size > 0) await publishInboxEvent(organizationId, { type: "message", conversationId });
@@ -343,20 +374,60 @@ export async function syncRecentConversationHistory(organizationId: number, maxC
   return imported;
 }
 
+/**
+ * A confirmação chegou antes da mensagem existir aqui.
+ *
+ * Não é erro de programação nem dado corrompido: a uazapi entrega o
+ * `messages_update` de uma mensagem enviada pelo celular antes do `messages`
+ * que a cria. Quem trata este erro é a rota do webhook, que responde 503 para
+ * a uazapi reentregar — e na reentrega a linha já existe. Engolir isso em
+ * silêncio (o `if (!row) return` de antes) apagava a confirmação PARA SEMPRE,
+ * porque a deduplicação marcava o evento como processado com sucesso.
+ */
+export class MensagemAindaNaoGravadaError extends Error {
+  constructor(readonly externalId: string) {
+    super(`Mensagem ${externalId} ainda não foi gravada; reentregar o evento.`);
+    this.name = "MensagemAindaNaoGravadaError";
+  }
+}
+
+/**
+ * Ranque do ciclo de vida de uma mensagem enviada.
+ *
+ * Único lugar onde a ordem é declarada: webhook de confirmação e reconciliação
+ * pelo /message/find precisam concordar, senão um caminho desfaz o outro.
+ */
+const STATUS_RANK: Record<WaMessageStatus, number> = {
+  pending: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 4,
+};
+
+/**
+ * Status só avança: um "delivered" atrasado não pode apagar um "read".
+ *
+ * `failed` é a exceção e sempre vence — uma mensagem que o WhatsApp recusou
+ * precisa aparecer como recusada mesmo que já tenha sido dada como entregue.
+ */
+export function deveAvancarStatus(atual: WaMessageStatus, proximo: WaMessageStatus): boolean {
+  if (proximo === "failed") return atual !== "failed";
+  return STATUS_RANK[proximo] > STATUS_RANK[atual];
+}
+
 export async function applyStatusUpdate(
   connection: ConnectionRow,
   externalId: string,
-  status: "sent" | "delivered" | "read" | "failed",
+  status: WaMessageStatus,
 ): Promise<void> {
-  // Status só avança: um "delivered" atrasado não pode apagar um "read".
-  const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
   const [row] = await db
     .select({ id: messages.id, status: messages.status })
     .from(messages)
     .where(and(eq(messages.organizationId, connection.organizationId), eq(messages.externalId, externalId)))
     .limit(1);
-  if (!row) return;
-  if (status !== "failed" && rank[status] <= rank[row.status]) return;
+  if (!row) throw new MensagemAindaNaoGravadaError(externalId);
+  if (!deveAvancarStatus(row.status, status)) return;
   await db.update(messages).set({ status }).where(eq(messages.id, row.id));
 }
 
@@ -367,6 +438,12 @@ export type SendOptions = {
   media?: { type: MediaKind; url: string; fileName?: string; mimeType?: string };
   /** Id externo da mensagem que está sendo respondida. */
   replyToExternalId?: string;
+  /**
+   * Atraso antes de a mensagem sair, executado pela uazapi — que mostra
+   * "Digitando..." para o cliente durante a espera. Só vale para texto: em
+   * mídia o cliente já vê "enviando arquivo".
+   */
+  delayMs?: number;
 };
 
 /**
@@ -406,7 +483,10 @@ export async function sendMessageToConversation(
         mimetype: options.media.mimeType,
         replyId: options.replyToExternalId,
       })
-    : await sendText(credentials, conversation.remoteJid, body, { replyId: options.replyToExternalId });
+    : await sendText(credentials, conversation.remoteJid, body, {
+        replyId: options.replyToExternalId,
+        delayMs: options.delayMs,
+      });
 
   const now = new Date();
   const [inserted] = await db
@@ -498,7 +578,8 @@ export async function applyReaction(
       and(eq(messages.organizationId, connection.organizationId), eq(messages.externalId, targetExternalId)),
     )
     .limit(1);
-  if (!row) return;
+  // Mesma corrida do status: a reação pode chegar antes da mensagem reagida.
+  if (!row) throw new MensagemAindaNaoGravadaError(targetExternalId);
 
   const atuais = Array.isArray(row.reactions) ? (row.reactions as Reaction[]) : [];
   const semAntiga = atuais.filter((r) => r.fromMe !== fromMe);
@@ -507,12 +588,62 @@ export async function applyReaction(
   await db.update(messages).set({ reactions: proximas }).where(eq(messages.id, row.id));
 }
 
+/**
+ * Guarda a URL da mídia que a uazapi acabou de baixar.
+ *
+ * A URL que vem no evento de mensagem é a do WhatsApp, criptografada: só abre
+ * com a chave da mensagem. Quando a uazapi termina de baixar o arquivo, ela
+ * avisa com uma URL própria, essa sim exibível — e o aviso só chega uma vez.
+ * Devolve as conversas afetadas para que só elas sejam avisadas na tela.
+ */
+export async function applyMediaDownloaded(
+  connection: ConnectionRow,
+  externalIds: string[],
+  mediaUrl: string,
+  mediaMimeType: string | null,
+): Promise<number[]> {
+  if (externalIds.length === 0) return [];
+  const atualizadas = await db
+    .update(messages)
+    .set({
+      mediaUrl,
+      // O mime só é sobrescrito quando ainda não temos um: o do evento é o do
+      // arquivo baixado e às vezes vem mais genérico que o original.
+      ...(mediaMimeType ? { mediaMimeType: sql`coalesce(${messages.mediaMimeType}, ${mediaMimeType})` } : {}),
+    })
+    .where(
+      and(
+        eq(messages.organizationId, connection.organizationId),
+        inArray(messages.externalId, externalIds),
+      ),
+    )
+    .returning({ conversationId: messages.conversationId, externalId: messages.externalId });
+  /**
+   * Mesma corrida do status: o download pode terminar antes de a mensagem ser
+   * gravada. Reentregar é o que preserva a URL.
+   *
+   * A cobrança é por id, não pelo lote: um evento pode citar várias mensagens
+   * (álbum), e exigir só que ALGUMA tenha casado deixava as demais sem URL para
+   * sempre — o aviso de download chega uma vez só, e a URL do WhatsApp que
+   * ficou na linha vem criptografada, ou seja, não abre. Reaplicar o que já
+   * casou na reentrega é inofensivo: a gravação é a mesma.
+   */
+  const gravadas = new Set(atualizadas.map((linha) => linha.externalId));
+  const faltando = externalIds.filter((id) => !gravadas.has(id));
+  if (faltando.length > 0) throw new MensagemAindaNaoGravadaError(faltando.join(","));
+  return [...new Set(atualizadas.map((linha) => linha.conversationId))];
+}
+
 /** Marca como apagada, sem remover a linha: o histórico não pode ganhar buracos. */
 export async function markMessageDeleted(connection: ConnectionRow, externalId: string): Promise<void> {
-  await db
+  const marcadas = await db
     .update(messages)
     .set({ deletedAt: new Date() })
-    .where(and(eq(messages.organizationId, connection.organizationId), eq(messages.externalId, externalId)));
+    .where(and(eq(messages.organizationId, connection.organizationId), eq(messages.externalId, externalId)))
+    .returning({ id: messages.id });
+  // Apagar antes de a mensagem ter sido gravada deixaria a linha visível para
+  // sempre: a reentrega é a única chance de marcá-la.
+  if (marcadas.length === 0) throw new MensagemAindaNaoGravadaError(externalId);
 }
 
 /** Reage a uma mensagem a partir do inbox. */
