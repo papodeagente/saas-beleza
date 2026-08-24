@@ -3,6 +3,7 @@
 import { differenceInCalendarDays, format, isToday, isYesterday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
+  ArrowLeftRight,
   Bot,
   CalendarCheck,
   Check,
@@ -40,6 +41,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { formatBRL } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
@@ -91,6 +93,9 @@ type ConversationItem = {
 };
 
 type Tab = "meus" | "fila" | "todos" | "resolvidas";
+type AssignmentAction = "assumir" | "transferir" | "devolver" | "resolver" | "reabrir";
+type AssigneeFilter = "all" | "unassigned" | `user:${number}`;
+type InboxAssignee = { userId: number; name: string; role: "owner" | "admin" | "staff" };
 
 /**
  * Mensagem que já está na tela mas ainda não foi confirmada pelo servidor.
@@ -115,8 +120,13 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof InboxIcon }> = [
   { id: "meus", label: "Meus", icon: InboxIcon },
   { id: "fila", label: "Fila", icon: ListOrdered },
   { id: "todos", label: "Todos", icon: LayoutGrid },
-  { id: "resolvidas", label: "Resolvidas", icon: CheckCircle2 },
+  { id: "resolvidas", label: "Finalizadas", icon: CheckCircle2 },
 ];
+
+function assigneeFromFilter(filter: AssigneeFilter): "all" | "unassigned" | number {
+  if (filter === "all" || filter === "unassigned") return filter;
+  return Number(filter.slice("user:".length));
+}
 
 /** Grafia dos canais: "whatsapp" nunca deve virar "Whatsapp" via CSS. */
 const CHANNEL_LABEL: Record<string, string> = {
@@ -172,6 +182,7 @@ export function InboxView({
   initialSelectedId,
   initialTab,
   currentUserId,
+  assignees,
   whatsappConnected,
   canSupervise,
   canStartConversation,
@@ -182,6 +193,7 @@ export function InboxView({
   initialSelectedId: number | null;
   initialTab: Tab;
   currentUserId: number;
+  assignees: InboxAssignee[];
   whatsappConnected: boolean;
   canSupervise: boolean;
   /** Iniciar conversa é ação de staff; profissional não vê o botão. */
@@ -194,6 +206,8 @@ export function InboxView({
   const [search, setSearch] = useState("");
   const [list, setList] = useState<ConversationItem[]>(conversations);
   const [tabCounts, setTabCounts] = useState(counts);
+  /** Na visão Todos, permite acompanhar uma pessoa sem criar outra aba. */
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [cache, setCache] = useState<Record<number, InboxDetail>>(() =>
     initialDetail ? { [initialDetail.conversationId]: initialDetail } : {},
   );
@@ -368,9 +382,17 @@ export function InboxView({
    * clicar numa delas abria conversa que não pertencia ao filtro.
    */
   const refreshList = useCallback(
-    async (nextTab: Tab, term: string): Promise<ConversationItem[] | null> => {
+    async (
+      nextTab: Tab,
+      term: string,
+      nextAssignee: AssigneeFilter = assigneeFilter,
+    ): Promise<ConversationItem[] | null> => {
       const meu = (listReqRef.current += 1);
-      const resultado = await listConversationsAction({ tab: nextTab, search: term || undefined });
+      const resultado = await listConversationsAction({
+        tab: nextTab,
+        search: term || undefined,
+        assignee: nextTab === "todos" ? assigneeFromFilter(nextAssignee) : "all",
+      });
       if (listReqRef.current !== meu) return null;
       if (!resultado.ok) {
         toast.error(resultado.error);
@@ -383,7 +405,7 @@ export function InboxView({
       setTabCounts(resultado.counts);
       return linhas;
     },
-    [],
+    [assigneeFilter],
   );
 
   const lastProviderSyncRef = useRef<{ conversationId: number; at: number } | null>(null);
@@ -493,6 +515,20 @@ export function InboxView({
     });
   }
 
+  function changeAssignee(next: AssigneeFilter) {
+    setAssigneeFilter(next);
+    startSwitching(async () => {
+      const linhas = await refreshList("todos", search, next);
+      if (!linhas || !doisPaineis) return;
+      if (linhas.length === 0) {
+        setSelectedId(null);
+        syncUrl(null);
+      } else if (!linhas.some((conversation) => conversation.id === activeId)) {
+        open(linhas[0].id, { marcarLida: false });
+      }
+    });
+  }
+
   function syncUrl(id: number | null) {
     window.history.replaceState(null, "", id ? `/inbox?conversa=${id}` : "/inbox");
   }
@@ -569,23 +605,29 @@ export function InboxView({
   }
 
 
-  function assignment(action: "assumir" | "devolver" | "resolver" | "reabrir") {
-    if (!detail) return;
-    const conversationId = detail.conversationId;
+  function assignmentFor(conversationId: number, action: AssignmentAction, targetUserId?: number) {
     startActing(async () => {
-      const result = await updateAssignmentAction({ conversationId, action });
+      const result = await updateAssignmentAction({ conversationId, action, targetUserId });
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      await reload(conversationId);
-      // `refreshList` já traz os contadores do servidor. O que havia aqui era
-      // `setTabCounts((prev) => ({ ...prev }))`: um objeto novo com os MESMOS
-      // valores, ou seja, nada. Assumir uma conversa não mexia no número.
+
+      // Atualiza o detalhe apenas se a ação foi feita na conversa aberta. A
+      // linha já será relida abaixo; abrir cada conversa só para transferi-la
+      // transformaria um clique rápido em duas consultas desnecessárias.
+      if (conversationId === activeId) {
+        const loaded = await loadConversationAction(conversationId, { markRead: false });
+        if (loaded) guardarConversa(conversationId, loaded);
+      }
       await refreshList(tab, search);
+
+      const targetName = assignees.find((person) => person.userId === targetUserId)?.name;
       toast.success(
         action === "assumir"
           ? "Conversa assumida"
+          : action === "transferir"
+            ? `Conversa transferida${targetName ? ` para ${targetName}` : ""}`
           : action === "devolver"
             ? "Conversa devolvida para a fila"
             : action === "resolver"
@@ -593,6 +635,10 @@ export function InboxView({
               : "Conversa reaberta",
       );
     });
+  }
+
+  function assignment(action: Exclude<AssignmentAction, "transferir">) {
+    if (detail) assignmentFor(detail.conversationId, action);
   }
 
   function toggleAiPause() {
@@ -739,6 +785,27 @@ export function InboxView({
               );
             })}
           </div>
+
+          {tab === "todos" ? (
+            <label className="flex items-center gap-2 text-caption text-ink-secondary">
+              <span className="shrink-0">Ver conversas de</span>
+              <Select
+                size="sm"
+                value={assigneeFilter}
+                onChange={(event) => changeAssignee(event.target.value as AssigneeFilter)}
+                className="min-w-0"
+                aria-label="Filtrar conversas por atendente"
+              >
+                <option value="all">Toda a equipe</option>
+                <option value="unassigned">Sem atendente</option>
+                {assignees.map((person) => (
+                  <option key={person.userId} value={`user:${person.userId}`}>
+                    {person.userId === currentUserId ? "Eu mesmo" : person.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          ) : null}
         </div>
 
         {list.length === 0 ? (
@@ -758,6 +825,12 @@ export function InboxView({
                   active={conversation.id === activeId}
                   opened={conversation.id === selectedId}
                   onOpen={() => open(conversation.id)}
+                  currentUserId={currentUserId}
+                  assignees={assignees}
+                  pending={acting}
+                  onAssignment={(action, targetUserId) =>
+                    assignmentFor(conversation.id, action, targetUserId)
+                  }
                 />
               </li>
             ))}
@@ -844,12 +917,32 @@ export function InboxView({
                   <Button variant="secondary" size="sm" className="h-11 md:h-8" loading={acting} onClick={() => assignment("reabrir")}>
                     Reabrir
                   </Button>
-                ) : mine ? (
+                ) : (
                   <>
-                    <Button variant="ghost" size="sm" className="h-11 md:h-8" loading={acting} onClick={() => assignment("devolver")}>
-                      <span className="hidden sm:inline">Devolver à fila</span>
-                      <span className="sm:hidden">Devolver</span>
-                    </Button>
+                    {!mine ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="h-11 md:h-8"
+                        loading={acting}
+                        aria-label="Assumir conversa"
+                        onClick={() => assignment("assumir")}
+                      >
+                        <UserPlus aria-hidden />
+                        <span className="hidden sm:inline">Assumir</span>
+                      </Button>
+                    ) : null}
+                    <TransferControl
+                      assignees={assignees}
+                      currentUserId={currentUserId}
+                      assignedUserId={detail.assignedUserId}
+                      pending={acting}
+                      showLabel
+                      onTransfer={(targetUserId) =>
+                        assignmentFor(detail.conversationId, "transferir", targetUserId)
+                      }
+                      onQueue={() => assignment("devolver")}
+                    />
                     <Button
                       variant="secondary"
                       size="sm"
@@ -862,18 +955,6 @@ export function InboxView({
                       <span className="hidden sm:inline">Resolver</span>
                     </Button>
                   </>
-                ) : (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="h-11 md:h-8"
-                    loading={acting}
-                    aria-label="Assumir conversa"
-                    onClick={() => assignment("assumir")}
-                  >
-                    <UserPlus aria-hidden />
-                    <span className="hidden sm:inline">Assumir</span>
-                  </Button>
                 )}
               </div>
             </header>
@@ -1288,11 +1369,19 @@ function ConversationRow({
   active,
   opened,
   onOpen,
+  currentUserId,
+  assignees,
+  pending,
+  onAssignment,
 }: {
   conversation: ConversationItem;
   active: boolean;
   opened: boolean;
   onOpen: () => void;
+  currentUserId: number;
+  assignees: InboxAssignee[];
+  pending: boolean;
+  onAssignment: (action: AssignmentAction, targetUserId?: number) => void;
 }) {
   const naoLidas = conversation.unreadCount;
   const previa = previaDaConversa(conversation);
@@ -1300,91 +1389,227 @@ function ConversationRow({
   const PreviaIcon = MEDIA_ICON[conversation.lastMessageType ?? "text"];
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-current={active ? "true" : undefined}
+    <div
       className={cn(
-        "flex w-full items-center gap-3 border-l-[3px] py-3 pr-3 pl-[9px] text-left transition-colors duration-[120ms]",
+        "flex w-full items-center border-l-[3px] transition-colors duration-[120ms]",
         "border-l-transparent hover:bg-surface-sunken",
         active && "md:border-l-accent md:bg-accent-soft md:hover:bg-accent-soft",
         opened && "border-l-accent bg-accent-soft hover:bg-accent-soft",
       )}
     >
-      <span className="relative shrink-0">
-        <Avatar name={conversation.customerName} src={conversation.photoUrl} size="lg" />
-        {/* Selo do canal, no padrão que todo aplicativo de mensagem usa. */}
-        <span
-          title={conversation.channel === "whatsapp" ? "WhatsApp" : conversation.channel}
-          className="absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full bg-[#25D366] ring-2 ring-surface-raised"
-        >
-          <WhatsAppGlyph />
-        </span>
-      </span>
-
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline justify-between gap-2">
-          <span className={cn("truncate text-label text-ink", naoLidas > 0 && "font-semibold")}>
-            {conversation.customerName}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-current={active ? "true" : undefined}
+        className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-1 pl-[9px] text-left"
+      >
+        <span className="relative shrink-0">
+          <Avatar name={conversation.customerName} src={conversation.photoUrl} size="lg" />
+          {/* Selo do canal, no padrão que todo aplicativo de mensagem usa. */}
+          <span
+            title={conversation.channel === "whatsapp" ? "WhatsApp" : conversation.channel}
+            className="absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full bg-[#25D366] ring-2 ring-surface-raised"
+          >
+            <WhatsAppGlyph />
           </span>
-          {conversation.lastMessageAt ? (
-            <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-              {horaDaLista(conversation.lastMessageAt)}
-            </span>
-          ) : null}
         </span>
 
-        <span className="mt-0.5 flex items-center gap-1.5">
-          {/* O tique é o de verdade, com o status da última mensagem. Antes era
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline justify-between gap-2">
+            <span className={cn("truncate text-label text-ink", naoLidas > 0 && "font-semibold")}>
+              {conversation.customerName}
+            </span>
+            {conversation.lastMessageAt ? (
+              <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
+                {horaDaLista(conversation.lastMessageAt)}
+              </span>
+            ) : null}
+          </span>
+
+          <span className="mt-0.5 flex items-center gap-1.5">
+            {/* O tique é o de verdade, com o status da última mensagem. Antes era
               um <Check> cinza fixo: uma mensagem que FALHOU ficava idêntica a
               uma entregue, e ninguém reenviava porque nada dizia que precisava. */}
-          {daCasa && conversation.lastMessageAt ? (
-            <span className="flex shrink-0 items-center text-ink-tertiary">
-              <DeliveryTick status={conversation.lastMessageStatus ?? "sent"} />
+            {daCasa && conversation.lastMessageAt ? (
+              <span className="flex shrink-0 items-center text-ink-tertiary">
+                <DeliveryTick status={conversation.lastMessageStatus ?? "sent"} />
+              </span>
+            ) : null}
+            {PreviaIcon ? <PreviaIcon className="size-3 shrink-0 text-ink-tertiary" aria-hidden /> : null}
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-caption",
+                naoLidas > 0 ? "text-ink" : "text-ink-secondary",
+              )}
+            >
+              {daCasa && conversation.lastMessageAt ? <span className="text-ink-tertiary">Você: </span> : null}
+              {previa.texto}
             </span>
-          ) : null}
-          {PreviaIcon ? <PreviaIcon className="size-3 shrink-0 text-ink-tertiary" aria-hidden /> : null}
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-caption",
-              naoLidas > 0 ? "text-ink" : "text-ink-secondary",
-            )}
-          >
-            {/* "Você:" separa num relance o que a clínica respondeu do que a
-                cliente ainda está esperando resposta. */}
-            {daCasa && conversation.lastMessageAt ? <span className="text-ink-tertiary">Você: </span> : null}
-            {previa.texto}
+            {naoLidas > 0 ? (
+              <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
+                {naoLidas > 99 ? "99+" : naoLidas}
+              </span>
+            ) : null}
           </span>
-          {naoLidas > 0 ? (
-            <span className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular">
-              {naoLidas > 99 ? "99+" : naoLidas}
-            </span>
-          ) : null}
-        </span>
 
-        <span className="mt-1 flex flex-wrap items-center gap-1">
-          {conversation.aiPaused ? (
-            <Badge tone="attention">
-              <Pause className="size-3" aria-hidden />
-              IA pausada
-            </Badge>
-          ) : conversation.controlledBy === "ai" ? (
-            <Badge tone="info">
-              <Bot className="size-3" aria-hidden />
-              IA atendendo
-            </Badge>
-          ) : null}
-          {conversation.assignedUserName ? (
-            <Badge tone="neutral">
-              <User className="size-3" aria-hidden />
-              {conversation.assignedUserName.split(" ")[0]}
-            </Badge>
-          ) : conversation.lastAssignedUserName ? (
-            <Badge tone="neutral">Antes: {conversation.lastAssignedUserName.split(" ")[0]}</Badge>
-          ) : null}
+          <span className="mt-1 flex flex-wrap items-center gap-1">
+            {conversation.aiPaused ? (
+              <Badge tone="attention">
+                <Pause className="size-3" aria-hidden />
+                IA pausada
+              </Badge>
+            ) : conversation.controlledBy === "ai" ? (
+              <Badge tone="info">
+                <Bot className="size-3" aria-hidden />
+                IA atendendo
+              </Badge>
+            ) : null}
+            {conversation.assignedUserName ? (
+              <Badge tone="neutral">
+                <User className="size-3" aria-hidden />
+                {conversation.assignedUserName.split(" ")[0]}
+              </Badge>
+            ) : conversation.lastAssignedUserName ? (
+              <Badge tone="neutral">Antes: {conversation.lastAssignedUserName.split(" ")[0]}</Badge>
+            ) : null}
+          </span>
         </span>
+      </button>
+
+      <span className="flex shrink-0 items-center gap-1 pr-2">
+        {conversation.status === "closed" ? (
+          <QuickAction
+            label="Reabrir conversa"
+            disabled={pending}
+            onClick={() => onAssignment("reabrir")}
+          >
+            <Play aria-hidden />
+          </QuickAction>
+        ) : (
+          <>
+            {conversation.assignedUserId == null ? (
+              <QuickAction
+                label="Assumir conversa"
+                disabled={pending}
+                emphasized
+                onClick={() => onAssignment("assumir")}
+              >
+                <UserPlus aria-hidden />
+              </QuickAction>
+            ) : (
+              <TransferControl
+                assignees={assignees}
+                currentUserId={currentUserId}
+                assignedUserId={conversation.assignedUserId}
+                pending={pending}
+                onTransfer={(targetUserId) => onAssignment("transferir", targetUserId)}
+                onQueue={() => onAssignment("devolver")}
+              />
+            )}
+            <QuickAction
+              label="Finalizar conversa"
+              disabled={pending}
+              onClick={() => onAssignment("resolver")}
+            >
+              <CheckCircle2 aria-hidden />
+            </QuickAction>
+          </>
+        )}
       </span>
+    </div>
+  );
+}
+
+function QuickAction({
+  label,
+  disabled,
+  emphasized = false,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  emphasized?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={cn(
+        "inline-flex size-8 items-center justify-center rounded-control border transition-colors pointer-coarse:size-11 [&_svg]:size-4",
+        emphasized
+          ? "border-accent/25 bg-accent-soft text-accent hover:bg-accent hover:text-white"
+          : "border-line bg-surface-raised text-ink-secondary hover:border-accent/30 hover:bg-accent-soft hover:text-accent",
+        "disabled:pointer-events-none disabled:opacity-45",
+      )}
+    >
+      {children}
     </button>
+  );
+}
+
+/**
+ * O seletor ocupa visualmente o espaço de um botão. No celular, o select
+ * nativo abre a lista do sistema; no desktop, um clique mostra a equipe. Assim
+ * a transferência não exige abrir a conversa nem navegar por outro painel.
+ */
+function TransferControl({
+  assignees,
+  currentUserId,
+  assignedUserId,
+  pending,
+  showLabel = false,
+  onTransfer,
+  onQueue,
+}: {
+  assignees: InboxAssignee[];
+  currentUserId: number;
+  assignedUserId: number | null;
+  pending: boolean;
+  showLabel?: boolean;
+  onTransfer: (targetUserId: number) => void;
+  onQueue: () => void;
+}) {
+  return (
+    <span
+      title={assignedUserId == null ? "Atribuir conversa" : "Transferir conversa"}
+      className={cn(
+        "relative inline-flex items-center justify-center gap-2 rounded-control border border-line bg-surface-raised text-ink-secondary transition-colors hover:border-accent/30 hover:bg-accent-soft hover:text-accent",
+        showLabel ? "h-11 px-3 text-label md:h-8" : "size-8 pointer-coarse:size-11",
+        pending && "opacity-45",
+      )}
+    >
+      <ArrowLeftRight className="size-4" aria-hidden />
+      {showLabel ? <span className="hidden lg:inline">Transferir</span> : null}
+      <select
+        value=""
+        disabled={pending}
+        aria-label={assignedUserId == null ? "Atribuir conversa" : "Transferir conversa"}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === "queue") onQueue();
+          else if (value.startsWith("user:")) onTransfer(Number(value.slice("user:".length)));
+        }}
+        className="absolute inset-0 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      >
+        <option value="" disabled>
+          {assignedUserId == null ? "Atribuir para…" : "Transferir para…"}
+        </option>
+        {assignees
+          .filter((person) => person.userId !== assignedUserId)
+          .map((person) => (
+            <option key={person.userId} value={`user:${person.userId}`}>
+              {person.userId === currentUserId ? "Eu mesmo" : person.name}
+            </option>
+          ))}
+        {assignedUserId != null ? <option value="queue">Devolver para a fila</option> : null}
+      </select>
+    </span>
   );
 }
 

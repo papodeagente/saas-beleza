@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import { requireSession } from "@/server/auth";
-import { countByTab, type InboxTab, listConversations } from "@/server/services/inbox-service";
+import {
+  countByTab,
+  type InboxTab,
+  listConversations,
+  listInboxAssignees,
+} from "@/server/services/inbox-service";
 import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { loadConversationAction } from "./actions";
 import { InboxView } from "./inbox-view";
@@ -30,9 +35,10 @@ export default async function InboxPage({
   // impressão de inbox vazio enquanto há gente esperando.
   const tab: InboxTab = requestedTab ?? (counts.meus === 0 && counts.fila > 0 ? "fila" : "meus");
 
-  const [conversations, connection] = await Promise.all([
+  const [conversations, connection, assignees] = await Promise.all([
     listConversations(ctx, { tab }),
     getConnection(ctx),
+    listInboxAssignees(ctx),
   ]);
 
   const requested = params.conversa ? Number(params.conversa) : null;
@@ -55,6 +61,7 @@ export default async function InboxPage({
       initialSelectedId={selectedId}
       initialTab={tab}
       currentUserId={ctx.userId}
+      assignees={assignees}
       whatsappConnected={connection?.status === "connected"}
       canSupervise={ctx.role === "owner" || ctx.role === "admin"}
       // Sempre verdadeiro aqui porque a própria página já devolve

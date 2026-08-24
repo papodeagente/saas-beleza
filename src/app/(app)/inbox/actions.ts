@@ -1,12 +1,13 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/db";
-import { conversations } from "@/db/schema";
+import { conversations, organizationMembers } from "@/db/schema";
 import { requireRole, requireSession } from "@/server/auth";
 import { clearUnread } from "@/server/services/conversation-resolver";
+import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
   type ConversationDetail,
   type InboxTab,
@@ -224,15 +225,23 @@ type SerializedConversation = Omit<
   "lastMessageAt"
 > & { lastMessageAt: string | null };
 
+const listSchema = z.object({
+  tab: z.enum(["meus", "fila", "todos", "resolvidas"]),
+  search: z.string().trim().max(100).optional(),
+  assignee: z.union([z.literal("all"), z.literal("unassigned"), idSchema]).optional(),
+});
+
 export async function listConversationsAction(input: {
   tab: InboxTab;
   search?: string;
+  assignee?: "all" | "unassigned" | number;
 }): Promise<InboxListResult> {
   try {
     const ctx = await requireSession();
     requireRole(ctx, "staff");
+    const data = listSchema.parse(input);
     const [rows, counts] = await Promise.all([
-      listConversations(ctx, { tab: input.tab, search: input.search }),
+      listConversations(ctx, data),
       countByTab(ctx),
     ]);
     return {
@@ -294,7 +303,12 @@ export async function sendMessageAction(input: unknown): Promise<InboxResult> {
 
 const assignSchema = z.object({
   conversationId: idSchema,
-  action: z.enum(["assumir", "devolver", "resolver", "reabrir"]),
+  action: z.enum(["assumir", "transferir", "devolver", "resolver", "reabrir"]),
+  targetUserId: idSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.action === "transferir" && data.targetUserId == null) {
+    ctx.addIssue({ code: "custom", message: "Escolha para quem deseja transferir." });
+  }
 });
 
 /**
@@ -309,13 +323,61 @@ export async function updateAssignmentAction(input: unknown): Promise<InboxResul
     requireRole(ctx, "staff");
     const data = assignSchema.parse(input);
 
+    const [conversation] = await db
+      .select({ assignedUserId: conversations.assignedUserId, lastAssignedUserId: conversations.lastAssignedUserId })
+      .from(conversations)
+      .where(and(eq(conversations.id, data.conversationId), eq(conversations.organizationId, ctx.organizationId)))
+      .limit(1);
+    if (!conversation) return { ok: false, error: "Conversa não encontrada." };
+
+    if (data.action === "transferir") {
+      const [target] = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, ctx.organizationId),
+            eq(organizationMembers.userId, data.targetUserId!),
+            inArray(organizationMembers.role, ["owner", "admin", "staff"]),
+          ),
+        )
+        .limit(1);
+      if (!target) return { ok: false, error: "Esse atendente não pertence à sua equipe." };
+    }
+
+    const previousOwner = conversation.assignedUserId ?? conversation.lastAssignedUserId;
+
     const patch =
       data.action === "assumir"
-        ? { assignedUserId: ctx.userId, assignedAt: new Date(), status: "open" as const, resolvedAt: null, controlledBy: "human" as const }
+        ? {
+            assignedUserId: ctx.userId,
+            assignedAt: new Date(),
+            status: "open" as const,
+            resolvedAt: null,
+            resolvedByUserId: null,
+            controlledBy: "human" as const,
+            lastAssignedUserId:
+              conversation.assignedUserId && conversation.assignedUserId !== ctx.userId
+                ? conversation.assignedUserId
+                : conversation.lastAssignedUserId,
+          }
+        : data.action === "transferir"
+          ? {
+              assignedUserId: data.targetUserId!,
+              assignedAt: new Date(),
+              status: "open" as const,
+              resolvedAt: null,
+              resolvedByUserId: null,
+              controlledBy: "human" as const,
+              lastAssignedUserId:
+                conversation.assignedUserId && conversation.assignedUserId !== data.targetUserId
+                  ? conversation.assignedUserId
+                  : conversation.lastAssignedUserId,
+            }
         : data.action === "devolver"
-          ? { assignedUserId: null, lastAssignedUserId: ctx.userId, assignedAt: null }
+          ? { assignedUserId: null, lastAssignedUserId: previousOwner ?? ctx.userId, assignedAt: null }
           : data.action === "resolver"
-            ? { status: "closed" as const, resolvedAt: new Date(), resolvedByUserId: ctx.userId, lastAssignedUserId: ctx.userId, assignedUserId: null }
+            ? { status: "closed" as const, resolvedAt: new Date(), resolvedByUserId: ctx.userId, lastAssignedUserId: previousOwner ?? ctx.userId, assignedUserId: null }
             : { status: "open" as const, resolvedAt: null, resolvedByUserId: null, assignedUserId: ctx.userId };
 
     const result = await db
@@ -325,11 +387,11 @@ export async function updateAssignmentAction(input: unknown): Promise<InboxResul
       .returning({ id: conversations.id });
     if (result.length === 0) return { ok: false, error: "Conversa não encontrada." };
 
+    await publishInboxEvent(ctx.organizationId, { type: "assignment", conversationId: data.conversationId });
     revalidatePath("/inbox");
     return { ok: true };
   } catch (error) {
-    console.error(error);
-    return { ok: false, error: "Não foi possível atualizar a conversa." };
+    return { ok: false, error: mensagemDeErro(error, "Não foi possível atualizar a conversa.") };
   }
 }
 

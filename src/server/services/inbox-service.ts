@@ -9,6 +9,7 @@ import {
   customerTags,
   customers,
   messages,
+  organizationMembers,
   payments,
   professionals,
   services,
@@ -31,6 +32,31 @@ import { brPhoneVariants } from "@/server/services/outbound-conversation-service
  */
 
 export type InboxTab = "meus" | "fila" | "todos" | "resolvidas";
+
+export type InboxAssignee = {
+  userId: number;
+  name: string;
+  role: "owner" | "admin" | "staff";
+};
+
+/** Pessoas que de fato podem operar o Inbox e receber uma transferência. */
+export async function listInboxAssignees(ctx: TenantContext): Promise<InboxAssignee[]> {
+  const rows = await db
+    .select({ userId: users.id, name: users.name, role: organizationMembers.role })
+    .from(organizationMembers)
+    .innerJoin(users, eq(users.id, organizationMembers.userId))
+    .where(
+      and(
+        eq(organizationMembers.organizationId, ctx.organizationId),
+        inArray(organizationMembers.role, ["owner", "admin", "staff"]),
+      ),
+    )
+    .orderBy(asc(users.name));
+
+  // O banco já filtrou; a guarda deixa o estreitamento explícito também para
+  // o TypeScript, sem fingir um tipo por coerção.
+  return rows.filter((row): row is InboxAssignee => row.role !== "professional");
+}
 
 export type ConversationListItem = {
   id: number;
@@ -76,10 +102,21 @@ function tabFilter(ctx: TenantContext, tab: InboxTab) {
 
 export async function listConversations(
   ctx: TenantContext,
-  options: { tab?: InboxTab; search?: string } = {},
+  options: {
+    tab?: InboxTab;
+    search?: string;
+    /** Filtro adicional da visão Todos; as outras abas já definem o dono. */
+    assignee?: "all" | "unassigned" | number;
+  } = {},
 ): Promise<ConversationListItem[]> {
   const tab = options.tab ?? "meus";
   const search = options.search?.trim();
+  const assigneeFilter =
+    tab !== "todos" || options.assignee == null || options.assignee === "all"
+      ? undefined
+      : options.assignee === "unassigned"
+        ? isNull(conversations.assignedUserId)
+        : eq(conversations.assignedUserId, options.assignee);
 
   /**
    * A última mensagem de CADA conversa, uma consulta por linha exibida.
@@ -171,6 +208,7 @@ export async function listConversations(
         // de fila. Misturar os dois enche a fila de clientes com ruído.
         eq(conversations.isGroup, false),
         tabFilter(ctx, tab),
+        assigneeFilter,
         search
           ? or(
               ilike(customers.name, `%${search}%`),

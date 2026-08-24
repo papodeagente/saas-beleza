@@ -2,7 +2,7 @@ import "server-only";
 import { getRedis } from "@/server/queues/redis";
 
 export type InboxEvent = {
-  type: "message" | "status" | "reaction" | "deleted";
+  type: "message" | "status" | "reaction" | "deleted" | "assignment";
   conversationId?: number;
 };
 
