@@ -1,3 +1,6 @@
+import { randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
+import { generateAccountCode } from "@/lib/account-code";
 import { addDays, addMinutes, setHours, setMinutes, subDays } from "date-fns";
 import { sql } from "drizzle-orm";
 import { db, pool } from "./index";
@@ -12,7 +15,19 @@ import * as s from "./schema";
  */
 
 const TZ = "America/Sao_Paulo";
-const PASSWORD_HASH = "$2b$12$k9Yg2c/sC3nKfqf1gXEWp.uoG0LQfOknQZzNtm1AcR3KsGdQZviuC"; // "lumina123"
+/**
+ * Senha da demonstração, sorteada a cada execução.
+ *
+ * Era um hash fixo no código, com a senha em claro no comentário e repetida no
+ * README de um repositório público. Como este seed roda contra um banco que
+ * hospeda contas reais, aquela linha era uma credencial válida publicada — e a
+ * conta de demonstração é dona de uma organização com dados e WhatsApp ligado.
+ *
+ * Agora a senha existe apenas no banco em que o seed rodou, e é impressa no
+ * console de quem o executou.
+ */
+const DEMO_PASSWORD = `${randomBytes(6).toString("base64url")}-${randomBytes(4).toString("base64url")}`;
+const PASSWORD_HASH = bcrypt.hashSync(DEMO_PASSWORD, 12);
 
 async function reset() {
   await db.execute(sql`
@@ -28,12 +43,59 @@ async function reset() {
   `);
 }
 
+/**
+ * Trava contra apagar o que é real.
+ *
+ * O seed existe para demonstração e começa truncando o banco inteiro. Isso era
+ * inofensivo enquanto o banco só tinha a clínica de exemplo — mas o mesmo
+ * Postgres passou a hospedar contas de verdade e o acesso de plataforma. Um
+ * `pnpm db:seed` distraído apagaria tudo, sem pergunta e sem volta.
+ *
+ * A checagem é boba de propósito: qualquer coisa fora do cenário de
+ * demonstração (outra clínica, um administrador de plataforma) exige que a
+ * pessoa diga em voz alta, pela variável de ambiente, que é isso mesmo que
+ * quer.
+ */
+async function confirmarQuePodeApagar() {
+  if (process.env.SEED_APAGAR_TUDO === "sim") return;
+
+  const orgs = await db.select({ id: s.organizations.id, slug: s.organizations.slug }).from(s.organizations);
+  const forasteiras = orgs.filter((o) => o.slug !== "clinica-lumina" && !o.slug.startsWith("demo-"));
+  const [admin] = await db.select({ id: s.platformAdmins.id }).from(s.platformAdmins).limit(1);
+
+  if (forasteiras.length === 0 && !admin) return;
+
+  const motivos: string[] = [];
+  if (forasteiras.length > 0) {
+    motivos.push(
+      `${forasteiras.length} clínica(s) que não são de demonstração: ${forasteiras.map((o) => o.slug).join(", ")}`,
+    );
+  }
+  if (admin) motivos.push("acesso de administrador da plataforma");
+
+  console.error(
+    [
+      "",
+      "  O seed apaga TODAS as tabelas do banco antes de recriar a demonstração.",
+      `  Este banco tem ${motivos.join(" e ")}.`,
+      "",
+      `  Banco alvo: ${(process.env.DATABASE_URL ?? "").replace(/:[^@]*@/, ":****@")}`,
+      "",
+      "  Se é isso mesmo que você quer, rode de novo com:",
+      "    SEED_APAGAR_TUDO=sim pnpm db:seed",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+
 async function main() {
+  await confirmarQuePodeApagar();
   await reset();
 
   const [org] = await db
     .insert(s.organizations)
-    .values({ name: "Clínica Lumina", slug: "clinica-lumina", timezone: TZ })
+    .values({ publicId: generateAccountCode(), name: "Clínica Lumina", slug: "clinica-lumina", timezone: TZ })
     .returning();
   const orgId = org.id;
 
@@ -448,7 +510,17 @@ async function main() {
       (select count(*) from commissions) as comissoes
   `);
   console.log("Clínica Lumina criada:", counts.rows[0]);
-  console.log("Login: mariana@clinicalumina.com.br / lumina123");
+  anunciarAcesso();
+}
+
+// A senha só é útil se quem rodou o seed a enxergar.
+function anunciarAcesso() {
+  console.log("");
+  console.log("  Demonstração criada.");
+  console.log("    login: mariana@clinicalumina.com.br");
+  console.log(`    senha: ${DEMO_PASSWORD}`);
+  console.log("  Anote: ela é sorteada a cada seed e não fica gravada em lugar nenhum.");
+  console.log("");
 }
 
 main()

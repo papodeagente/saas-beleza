@@ -2,6 +2,7 @@ import "server-only";
 import { addDays, addMonths, addYears } from "date-fns";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { generateAccountCode } from "@/lib/account-code";
 import {
   branches,
   organizationMembers,
@@ -72,6 +73,8 @@ export type CreateAccountInput = {
 export type CreateAccountResult = {
   organizationId: number;
   slug: string;
+  /** Código da conta, para o operador já passar ao cliente. */
+  publicId: string;
   /** Quem responde pela conta. O autocadastro abre a sessão com este id. */
   ownerUserId: number;
   ownerReused: boolean;
@@ -145,10 +148,36 @@ export async function createAccount(
       slug = `${preferido}-${i}`;
     }
 
-    const [organization] = await tx
-      .insert(organizations)
-      .values({ name: clinicName, slug, timezone: input.timezone })
-      .returning();
+    /**
+     * Código da conta.
+     *
+     * O insert mira o conflito no próprio código e não aborta a transação
+     * quando ele acontece: no Postgres, um erro de unicidade invalidaria tudo
+     * que já foi escrito aqui, e não haveria como tentar de novo lá dentro.
+     * Com `on conflict do nothing`, o insert simplesmente não devolve linha, e
+     * o laço tenta outro código.
+     *
+     * Conferir antes com um SELECT não resolveria: entre a consulta e a
+     * escrita cabe outra transação gravando o mesmo valor. Quem decide é o
+     * índice único.
+     *
+     * Cinco tentativas: com 32^8 possibilidades, falhar cinco vezes seguidas
+     * deixou de ser azar e virou defeito — melhor falhar visível.
+     */
+    let organization: typeof organizations.$inferSelect | undefined;
+    for (let tentativa = 0; tentativa < 5 && !organization; tentativa += 1) {
+      [organization] = await tx
+        .insert(organizations)
+        .values({ name: clinicName, slug, publicId: generateAccountCode(), timezone: input.timezone })
+        .onConflictDoNothing({ target: organizations.publicId })
+        .returning();
+    }
+    if (!organization) {
+      throw new CreateAccountError(
+        "Não consegui gerar um código para a conta. Tente de novo.",
+        "ACCOUNT_CODE_EXHAUSTED",
+      );
+    }
 
     // Pelo painel, e-mail conhecido vincula o login existente (dona de duas
     // clínicas) em vez de recusar o cadastro. Nada do cadastro antigo é
@@ -243,6 +272,7 @@ export async function createAccount(
     return {
       organizationId: organization.id,
       slug,
+      publicId: organization.publicId,
       ownerUserId: ownerId,
       ownerReused: Boolean(existente),
       trialEndsAt,

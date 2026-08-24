@@ -218,8 +218,15 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
               ) : null}
 
               <div className="mt-4 border-t border-line pt-3">
-                <h3 className="text-section">Endereço</h3>
+                <h3 className="text-section">Identificação</h3>
                 <dl className="mt-1">
+                  {/* Dois identificadores com propósitos diferentes: o código é
+                      interno e serve ao suporte; o slug é o endereço que a
+                      cliente final enxerga. Rotular os dois evita a pergunta
+                      "qual código?" no meio do atendimento. */}
+                  <DataRow label="Código da conta">
+                    <span className="tracking-[0.08em] tabular">{organization.publicId}</span>
+                  </DataRow>
                   <DataRow label="Slug">
                     <span className="tabular">{organization.slug}</span>
                   </DataRow>

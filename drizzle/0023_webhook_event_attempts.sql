@@ -1,0 +1,1 @@
+ALTER TABLE "whatsapp_webhook_events" ADD COLUMN "attempts" integer DEFAULT 0 NOT NULL;

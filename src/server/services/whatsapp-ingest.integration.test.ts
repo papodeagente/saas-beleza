@@ -1,10 +1,15 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, pool } from "@/db";
 import * as s from "@/db/schema";
 import type { NormalizedMessage } from "@/server/whatsapp/normalizer";
-import { ingestMessage } from "./whatsapp-message-service";
+import {
+  applyStatusUpdate,
+  ingestMessage,
+  MensagemAindaNaoGravadaError,
+} from "./whatsapp-message-service";
 
 /**
  * Ingestão de mensagem contra o Postgres real.
@@ -38,6 +43,7 @@ function message(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage 
     mediaMimeType: null,
     mediaFileName: null,
     quotedExternalId: null,
+    status: null,
     sentAt: new Date(),
     ...overrides,
   };
@@ -46,7 +52,7 @@ function message(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage 
 beforeAll(async () => {
   const [org] = await db
     .insert(s.organizations)
-    .values({ name: "Ingest", slug: SUFFIX, timezone: "America/Sao_Paulo" })
+    .values({ publicId: generateAccountCode(), name: "Ingest", slug: SUFFIX, timezone: "America/Sao_Paulo" })
     .returning();
   organizationId = org.id;
 
@@ -216,5 +222,58 @@ describe("ingestão de mensagem recebida", () => {
     expect(saved.direction).toBe("outbound");
     expect(saved.sender).toBe("user");
     expect(saved.senderUserId).toBeNull();
+  });
+});
+
+/**
+ * Status: o provedor manda, o banco obedece — só que nunca para trás.
+ *
+ * Estes dois defeitos foram medidos em produção em 24/08/2026: 627 mensagens
+ * de saída paradas em "enviada" enquanto a uazapi respondia "Read" para elas,
+ * e 50 confirmações de entrega processadas contra linha inexistente, perdidas
+ * para sempre porque o handler devolvia em silêncio.
+ */
+describe("status do provedor", () => {
+  const jid = "5511922221111@s.whatsapp.net";
+
+  it("grava o status que a uazapi informa em vez de cravar 'enviada'", async () => {
+    const result = await ingestMessage(
+      connection,
+      message({ externalId: "STATUS_READ_1", remoteJid: jid, phone: "5511922221111", fromMe: true, body: "confirmado", status: "read" }),
+    );
+    const [saved] = await db.select().from(s.messages).where(eq(s.messages.id, result.messageId!));
+    expect(saved.status).toBe("read");
+  });
+
+  it("cura retroativamente a mensagem presa quando a reconciliação relê o status", async () => {
+    const msg = message({ externalId: "STATUS_PRESA_1", remoteJid: jid, phone: "5511922221111", fromMe: true, body: "oi" });
+    const primeira = await ingestMessage(connection, msg);
+    const [antes] = await db.select().from(s.messages).where(eq(s.messages.id, primeira.messageId!));
+    expect(antes.status).toBe("sent");
+
+    // Segunda passada: é o que o /message/find faz ao reabrir a conversa.
+    const releitura = await ingestMessage(connection, { ...msg, status: "read" });
+    expect(releitura.isNew).toBe(false);
+    expect(releitura.isUpdated).toBe(true);
+
+    const [depois] = await db.select().from(s.messages).where(eq(s.messages.id, primeira.messageId!));
+    expect(depois.status).toBe("read");
+  });
+
+  it("nunca regride de lida para enviada", async () => {
+    const msg = message({ externalId: "STATUS_MONOTONO_1", remoteJid: jid, phone: "5511922221111", fromMe: true, body: "oi", status: "read" });
+    const criada = await ingestMessage(connection, msg);
+    await ingestMessage(connection, { ...msg, status: "sent" });
+
+    const [saved] = await db.select().from(s.messages).where(eq(s.messages.id, criada.messageId!));
+    expect(saved.status).toBe("read");
+  });
+
+  it("recusa a confirmação de uma mensagem que ainda não existe, para ela ser reentregue", async () => {
+    // O `return` silencioso de antes marcava o evento como processado com
+    // sucesso: a confirmação sumia e a mensagem ficava "enviada" para sempre.
+    await expect(applyStatusUpdate(connection, "NUNCA_GRAVADA_1", "delivered")).rejects.toBeInstanceOf(
+      MensagemAindaNaoGravadaError,
+    );
   });
 });

@@ -46,6 +46,19 @@ export const transactionKind = pgEnum("transaction_kind", ["income", "expense"])
 export const transactionStatus = pgEnum("transaction_status", ["pending", "paid", "overdue", "cancelled"]);
 export const conversationControl = pgEnum("conversation_control", ["ai", "human", "waiting"]);
 export const conversationStatus = pgEnum("conversation_status", ["open", "closed"]);
+/**
+ * Quem começou a conversa: a clínica pela tela, ou uma automação.
+ *
+ * Existe separado de `startedByUserId` porque a automação não tem usuário. As
+ * duas alternativas foram descartadas de propósito: um "usuário de sistema" na
+ * tabela `users` apareceria na lista da equipe, no seletor de responsável e nas
+ * permissões — dado falso que todo o resto do produto teria de aprender a
+ * esconder; e continuar contando por `startedByUserId` deixa o envio automático
+ * INVISÍVEL para o teto de vazão, que é exatamente o furo que permitiu a
+ * rajada. Aqui a coluna nomeia a ORIGEM, e `startedByUserId` continua nomeando
+ * a pessoa quando existe uma.
+ */
+export const conversationOrigin = pgEnum("conversation_origin", ["user", "automation"]);
 export const messageDirection = pgEnum("message_direction", ["inbound", "outbound"]);
 export const messageSender = pgEnum("message_sender", ["customer", "user", "ai", "system"]);
 export const waConnectionStatus = pgEnum("wa_connection_status", [
@@ -122,6 +135,22 @@ export const organizations = pgTable("organizations", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  /**
+   * Código da conta, no formato XXXX-XXXX.
+   *
+   * É o identificador que o cliente dita para o suporte e que o operador da
+   * plataforma usa para achar a conta. Não é o id (sequencial, revela o tamanho
+   * do SaaS e se confunde ao ser lido) nem o slug (muda junto com o nome da
+   * clínica). Este nunca muda.
+   *
+   * Sem `.default()` aqui de propósito: assim o TypeScript exige o valor em
+   * todo insert e nenhum caminho novo nasce sem código. O banco também tem um
+   * DEFAULT (migration 0025), que cobre só o insert feito por SQL cru, fora da
+   * aplicação — ele não aparece neste schema porque o drizzle-kit compara
+   * snapshots, não o banco, e declará-lo aqui derrubaria a exigência do
+   * compilador.
+   */
+  publicId: text("public_id").notNull().unique(),
   timezone: text("timezone").notNull().default("America/Sao_Paulo"),
   /**
    * Suspensão é decisão da plataforma (inadimplência, abuso) e bloqueia o
@@ -688,6 +717,13 @@ export const whatsappWebhookEvents = pgTable(
     payload: jsonb("payload").notNull(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
     error: text("error"),
+    // Tentativas já gastas com este evento.
+    //
+    // A rota passou a devolver 503 quando a confirmação de entrega chega antes
+    // da mensagem existir, para que a uazapi reentregue e a segunda tentativa
+    // encontre a linha. Sem um teto, um evento que NUNCA vai casar (confirmação
+    // de mensagem de um chat que não ingerimos) seria reentregue para sempre.
+    attempts: integer("attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -793,7 +829,23 @@ export const automationRules = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("automation_rules_org_idx").on(t.organizationId, t.active)],
+  (t) => [
+    index("automation_rules_org_idx").on(t.organizationId, t.active),
+    /**
+     * Uma automação ATIVA por gatilho, por conta.
+     *
+     * A checagem em `createAutomationRule` é a que dá a mensagem legível; este
+     * índice é o que torna a regra verdadeira sob concorrência — dois cliques
+     * simultâneos passariam pelos dois SELECTs e gravariam as duas linhas. Foi
+     * assim que a conta 550 acumulou as regras 1, 2 e 3 no mesmo gatilho e a
+     * mesma cliente recebeu o mesmo lembrete três vezes (disparos 1, 4 e 7,
+     * agendamento 1326). Parcial em `active` de propósito: regra pausada é
+     * histórico, e histórico pode repetir gatilho à vontade.
+     */
+    uniqueIndex("automation_rules_active_trigger_unique")
+      .on(t.organizationId, t.trigger)
+      .where(sql`${t.active}`),
+  ],
 );
 
 /** Livro-razão de disparos: a chave única impede mensagem duplicada. */
@@ -815,14 +867,28 @@ export const automationDispatches = pgTable(
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
     status: automationDispatchStatus("status").notNull().default("processing"),
     attempts: integer("attempts").notNull().default(1),
+    /** Instante da última tentativa. É o relógio do recuo progressivo. */
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
     message: text("message").notNull(),
+    /** Motivo em português, o que a dona do salão lê na tela. */
     error: text("error"),
+    /**
+     * Código da falha. É por ele que a varredura decide RETENTAR ou desistir —
+     * "número não tem WhatsApp" não melhora com insistência, e `ENVIO_INCERTO`
+     * (o provedor aceitou e algo quebrou depois) não pode ser retentado nunca,
+     * sob pena de a cliente receber a mesma mensagem duas vezes.
+     */
+    errorCode: text("error_code"),
+    /** Erro cru do provedor (status + corpo). O `error` é para gente; este é para depurar. */
+    errorDetail: text("error_detail"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("automation_dispatch_source_unique").on(t.ruleId, t.sourceType, t.sourceId),
     index("automation_dispatch_org_idx").on(t.organizationId, t.createdAt),
+    // Varredura de retentativa: procura por situação e pela hora da última tentativa.
+    index("automation_dispatch_retry_idx").on(t.status, t.lastAttemptAt),
   ],
 );
 
@@ -858,6 +924,15 @@ export const conversations = pgTable(
      * clínica movimentada estouraria o limite só por RECEBER mensagem.
      */
     startedByUserId: bigint("started_by_user_id", { mode: "number" }).references(() => users.id),
+    /**
+     * Origem da conversa que NÓS abrimos. Nulo quando ela nasceu de mensagem
+     * recebida — que continua não contando para o teto de vazão.
+     *
+     * Esta coluna, e não `startedByUserId`, é o contador: a automação envia sem
+     * usuário, então enquanto a contagem olhava para o autor humano o disparo
+     * automático abria conversas ilimitadas sem nunca aparecer no limite.
+     */
+    startedBy: conversationOrigin("started_by"),
     controlledBy: conversationControl("controlled_by").notNull().default("ai"),
     /**
      * Fila do inbox. Regra herdada do entur-os-crm: mensagem nova joga a

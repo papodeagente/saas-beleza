@@ -1,3 +1,4 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { addDays, setHours, setMinutes } from "date-fns";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -32,7 +33,7 @@ type Fixture = {
 async function createTenant(name: string): Promise<Fixture> {
   const [org] = await db
     .insert(s.organizations)
-    .values({ name, slug: `${name}-${SUFFIX}`, timezone: "America/Sao_Paulo" })
+    .values({ publicId: generateAccountCode(), name, slug: `${name}-${SUFFIX}`, timezone: "America/Sao_Paulo" })
     .returning();
 
   const [user] = await db
@@ -111,6 +112,7 @@ async function createTenant(name: string): Promise<Fixture> {
       organizationId: org.id,
       organizationName: name,
       organizationSlug: org.slug,
+      organizationCode: "TEST-0000",
       timezone: "America/Sao_Paulo",
       userId: user.id,
       userName: user.name,

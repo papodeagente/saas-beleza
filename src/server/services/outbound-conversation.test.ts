@@ -1,3 +1,4 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { randomBytes } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +62,7 @@ async function conversasDaConta() {
 beforeAll(async () => {
   const [org] = await db
     .insert(s.organizations)
-    .values({ name: "Conversa ativa", slug: SUFFIX, timezone: "America/Sao_Paulo" })
+    .values({ publicId: generateAccountCode(), name: "Conversa ativa", slug: SUFFIX, timezone: "America/Sao_Paulo" })
     .returning();
   organizationId = org.id;
 
@@ -88,6 +89,7 @@ beforeAll(async () => {
     organizationId,
     organizationName: "Conversa ativa",
     organizationSlug: SUFFIX,
+    organizationCode: "TEST-0000",
     timezone: "America/Sao_Paulo",
     userId,
     userName: "Mariana",

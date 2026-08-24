@@ -32,7 +32,10 @@ export default function ModuleError({
         </p>
         {error.digest ? (
           <p className="mt-3 text-meta text-ink-tertiary">
-            Código para suporte: <span className="tabular">{error.digest}</span>
+            {/* "Código do erro", não "código para suporte": o produto agora tem
+                também o código da conta, e dois códigos com o mesmo nome viram
+                a pergunta "qual código?" no meio do atendimento. */}
+            Código do erro: <span className="tabular">{error.digest}</span>
           </p>
         ) : null}
         <div className="mt-6 flex items-center justify-center gap-2">

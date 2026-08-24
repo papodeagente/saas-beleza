@@ -54,7 +54,7 @@ export function AccountFilters({
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar por nome ou endereço"
+          placeholder="Buscar por código, nome ou endereço"
           className="pl-8"
           aria-label="Buscar conta"
         />

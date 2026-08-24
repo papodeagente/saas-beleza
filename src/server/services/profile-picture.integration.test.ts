@@ -1,3 +1,4 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, pool } from "@/db";
@@ -28,11 +29,11 @@ let orgB = 0;
 beforeAll(async () => {
   const [a] = await db
     .insert(s.organizations)
-    .values({ name: `Clínica A ${SUFFIX}`, slug: `a-${SUFFIX}` })
+    .values({ publicId: generateAccountCode(), name: `Clínica A ${SUFFIX}`, slug: `a-${SUFFIX}` })
     .returning({ id: s.organizations.id });
   const [b] = await db
     .insert(s.organizations)
-    .values({ name: `Clínica B ${SUFFIX}`, slug: `b-${SUFFIX}` })
+    .values({ publicId: generateAccountCode(), name: `Clínica B ${SUFFIX}`, slug: `b-${SUFFIX}` })
     .returning({ id: s.organizations.id });
   orgA = a.id;
   orgB = b.id;

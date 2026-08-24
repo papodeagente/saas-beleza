@@ -2,6 +2,7 @@ import { addDays, addMonths, startOfMonth, subMonths } from "date-fns";
 import { eq, like, sql } from "drizzle-orm";
 import { db, pool } from "../src/db";
 import * as s from "../src/db/schema";
+import { generateAccountCode } from "../src/lib/account-code";
 
 /**
  * Dados da camada de plataforma para o painel do super admin.
@@ -19,7 +20,15 @@ import * as s from "../src/db/schema";
  * separadamente, o painel se contradiria.
  */
 
-const ADMIN_EMAIL = "mariana@clinicalumina.com.br";
+/**
+ * Quem recebe acesso de plataforma ao rodar o seed.
+ *
+ * Era a dona da clínica de demonstração, o que dava ao painel do SaaS inteiro a
+ * mesma senha publicada na documentação de demonstração. Agora é o dono do
+ * produto, e um ambiente diferente pode apontar para outra pessoa pela variável
+ * de ambiente.
+ */
+const ADMIN_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL ?? "bruno@entur.com.br").trim().toLowerCase();
 
 /** PRNG determinístico: rodar o seed duas vezes dá o mesmo cenário. */
 function makeRandom(seed: number) {
@@ -174,10 +183,13 @@ async function main() {
   // ---- Acesso de plataforma ----------------------------------------------
   const [admin] = await db.select().from(s.users).where(eq(s.users.email, ADMIN_EMAIL)).limit(1);
   if (admin) {
-    await db
-      .insert(s.platformAdmins)
-      .values({ userId: admin.id })
-      .onConflictDoNothing();
+    await db.insert(s.platformAdmins).values({ userId: admin.id }).onConflictDoNothing();
+  } else {
+    // Silêncio aqui viraria um painel sem dono: melhor dizer o que faltou.
+    console.warn(
+      `[seed-platform] nenhum usuário com o e-mail ${ADMIN_EMAIL}: ninguém recebeu acesso de plataforma. ` +
+        "Crie a conta e rode scripts/definir-super-admin.ts.",
+    );
   }
 
   // ---- Provedor de pagamento (desligado até o token chegar) ---------------
@@ -248,7 +260,7 @@ async function main() {
 
     const [org] = await db
       .insert(s.organizations)
-      .values({ name: nome, slug, timezone: "America/Sao_Paulo", createdAt: entrada })
+      .values({ publicId: generateAccountCode(), name: nome, slug, timezone: "America/Sao_Paulo", createdAt: entrada })
       .returning();
 
     const cycle: "monthly" | "yearly" = random() < 0.25 ? "yearly" : "monthly";

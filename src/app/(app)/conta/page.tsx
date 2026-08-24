@@ -3,6 +3,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, DataRow } from "@/components/ui/card";
 import { requireSession } from "@/server/auth";
+import { AccountCode } from "./account-code";
 
 export const metadata = { title: "Minha conta" };
 export const dynamic = "force-dynamic";
@@ -41,6 +42,19 @@ export default async function AccountPage() {
           <dl className="mt-4 border-t border-line pt-2">
             <DataRow label="E-mail">{ctx.userEmail}</DataRow>
             <DataRow label="Clínica">{ctx.organizationName}</DataRow>
+            {/* O código vem antes do fuso porque é o dado que alguém procura
+                aqui com pressa, no meio de uma ligação com o suporte. */}
+            <DataRow label="Código da conta">
+              {/* A explicação fica colada no dado que ela explica. Solta ao pé
+                  do cartão, virava a segunda frase cinza seguida e se
+                  confundia com a descrição do papel logo abaixo. */}
+              <span className="flex flex-col items-end gap-0.5">
+                <AccountCode code={ctx.organizationCode} />
+                <span className="text-meta text-ink-tertiary">
+                  informe no suporte; não muda nunca
+                </span>
+              </span>
+            </DataRow>
             <DataRow label="Fuso horário">{ctx.timezone}</DataRow>
           </dl>
 

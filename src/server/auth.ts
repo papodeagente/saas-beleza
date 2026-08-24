@@ -21,6 +21,8 @@ export type TenantContext = {
   organizationId: number;
   organizationName: string;
   organizationSlug: string;
+  /** Código público da conta, o que o cliente dita ao suporte. */
+  organizationCode: string;
   timezone: string;
   userId: number;
   userName: string;
@@ -90,6 +92,7 @@ export async function getSession(): Promise<TenantContext | null> {
       organizationId: organizations.id,
       organizationName: organizations.name,
       organizationSlug: organizations.slug,
+      organizationCode: organizations.publicId,
       timezone: organizations.timezone,
     })
     .from(sessions)

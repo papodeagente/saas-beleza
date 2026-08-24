@@ -148,6 +148,41 @@
       "when": 1787540400000,
       "tag": "0020_birthday_automations",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787568402647,
+      "tag": "0021_lying_drax",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787568496362,
+      "tag": "0022_automation_dedupe_por_ocorrencia",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1787568703479,
+      "tag": "0023_webhook_event_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787569574806,
+      "tag": "0024_unknown_carnage",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1787569575806,
+      "tag": "0025_codigo_conta_default",
+      "breakpoints": true
     }
   ]
 }

@@ -129,7 +129,7 @@ export default async function AccountsPage({
               <EmptyState
                 icon={Building2}
                 title="Nenhuma conta com esse nome"
-                description={`Não encontramos nada para "${query}". A busca cobre o nome e o endereço (slug) da clínica.`}
+                description={`Não encontramos nada para "${query}". A busca cobre o código da conta, o nome e o endereço (slug) da clínica.`}
               />
             ) : filter === "todas" ? (
               <EmptyState
@@ -187,8 +187,12 @@ export default async function AccountsPage({
                             </Badge>
                           ) : null}
                         </span>
-                        <span className="mt-0.5 block truncate text-caption text-ink-secondary">
-                          /{account.slug}
+                        {/* Código antes do endereço público: é por ele que o
+                            operador confere se achou a conta que o cliente ditou. */}
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-caption text-ink-secondary">
+                          <span className="tracking-[0.08em] text-ink tabular">{account.publicId}</span>
+                          <span aria-hidden>·</span>
+                          <span className="truncate">/{account.slug}</span>
                         </span>
                       </span>
 

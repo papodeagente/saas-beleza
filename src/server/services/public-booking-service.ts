@@ -41,6 +41,7 @@ function publicContext(org: typeof organizations.$inferSelect): TenantContext {
     organizationId: org.id,
     organizationName: org.name,
     organizationSlug: org.slug,
+    organizationCode: org.publicId,
     timezone: org.timezone,
     userId: 0,
     userName: "Agendamento online",

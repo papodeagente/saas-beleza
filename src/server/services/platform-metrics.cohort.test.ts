@@ -1,3 +1,4 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, pool } from "@/db";
@@ -46,7 +47,7 @@ async function marco(semanasAtras: number): Promise<Marco> {
 async function criarConta(nome: string, cadastro: Date) {
   const [org] = await db
     .insert(s.organizations)
-    .values({
+    .values({ publicId: generateAccountCode(),
       name: nome,
       slug: `${nome}-${SUFFIX}`,
       timezone: TZ,

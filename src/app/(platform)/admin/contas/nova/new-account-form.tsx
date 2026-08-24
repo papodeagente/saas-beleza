@@ -70,7 +70,9 @@ export function NewAccountForm({ planos }: { planos: Plano[] }) {
       });
 
       if (resultado.ok) {
-        toast.success(resultado.message);
+        // O código entra na confirmação porque é o que o operador precisa
+        // passar ao cliente agora, não depois de abrir a conta.
+        toast.success(`${resultado.message} Código da conta: ${resultado.publicId}.`);
         router.push(`/admin/contas/${resultado.organizationId}`);
       } else if (resultado.fields) {
         setErros(resultado.fields);

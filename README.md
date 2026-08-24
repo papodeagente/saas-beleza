@@ -20,7 +20,8 @@ pnpm db:seed                 # cria a Clínica Lumina de demonstração
 pnpm dev
 ```
 
-Login da demonstração: `mariana@clinicalumina.com.br` / `lumina123`
+O seed sorteia a senha da conta de demonstração e a imprime no console ao terminar —
+ela existe só naquele banco e nunca neste repositório, que é público.
 Página pública de agendamento: `/agendar/clinica-lumina`
 
 ## Comandos

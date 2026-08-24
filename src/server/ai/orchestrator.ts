@@ -92,6 +92,7 @@ export async function systemContext(organizationId: number): Promise<TenantConte
       id: organizations.id,
       name: organizations.name,
       slug: organizations.slug,
+      publicId: organizations.publicId,
       timezone: organizations.timezone,
     })
     .from(organizations)
@@ -103,6 +104,7 @@ export async function systemContext(organizationId: number): Promise<TenantConte
     organizationId: org.id,
     organizationName: org.name,
     organizationSlug: org.slug,
+    organizationCode: org.publicId,
     timezone: org.timezone,
     // Zero em vez de um id real: o histórico registra a IA como autora, e
     // nenhuma ação fica creditada a uma pessoa que não a executou.

@@ -438,7 +438,7 @@ export async function resumeAccountAction(input: unknown): Promise<ActionResult>
  * está errado.
  */
 export type CreateAccountActionResult =
-  | { ok: true; message: string; organizationId: number }
+  | { ok: true; message: string; organizationId: number; publicId: string }
   | { ok: false; error: string; fields?: Record<string, string> };
 
 const createAccountSchema = z.object({
@@ -476,6 +476,9 @@ export async function createAccountAction(input: unknown): Promise<CreateAccount
     return {
       ok: true,
       organizationId: resultado.organizationId,
+      // Quem cadastra é quem vai passar o código adiante: devolver aqui evita
+      // ter que abrir a conta de novo só para descobri-lo.
+      publicId: resultado.publicId,
       message: resultado.ownerReused
         ? `${parsed.data.clinicName} cadastrada. ${parsed.data.ownerName} já tinha login e foi vinculada como responsável — a senha dela não mudou.`
         : `${parsed.data.clinicName} cadastrada.`,

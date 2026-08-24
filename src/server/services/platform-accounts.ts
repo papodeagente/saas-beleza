@@ -1,6 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { normalizeAccountCode } from "@/lib/account-code";
 import {
   appointments,
   organizationMembers,
@@ -31,6 +32,8 @@ export type AccountRow = {
   id: number;
   name: string;
   slug: string;
+  /** Código que o cliente dita ao suporte. */
+  publicId: string;
   createdAt: Date;
   suspendedAt: Date | null;
   planName: string | null;
@@ -63,8 +66,26 @@ export async function listAccounts(
 
   const conditions = [];
   if (query?.trim()) {
-    const term = `%${query.trim()}%`;
-    conditions.push(or(ilike(organizations.name, term), ilike(organizations.slug, term))!);
+    const bruto = query.trim();
+    const term = `%${bruto}%`;
+    /**
+     * Quando o texto digitado é um código de conta, a busca é exata.
+     *
+     * Quem digita aqui costuma estar ao telefone com o cliente, que acabou de
+     * ditar o código. Tratar isso como busca parcial devolveria uma lista para
+     * conferir; casar exato leva direto à conta certa — inclusive quando a
+     * pessoa escreveu sem hífen, em minúsculas, ou trocou O por 0.
+     */
+    const codigo = normalizeAccountCode(bruto);
+    conditions.push(
+      codigo
+        ? or(
+            eq(organizations.publicId, codigo),
+            ilike(organizations.name, term),
+            ilike(organizations.slug, term),
+          )!
+        : or(ilike(organizations.name, term), ilike(organizations.slug, term))!,
+    );
   }
   if (filter === "pagantes") conditions.push(inArray(subscriptions.status, ["active", "past_due"]));
   if (filter === "teste") conditions.push(eq(subscriptions.status, "trialing"));
@@ -77,6 +98,7 @@ export async function listAccounts(
       id: organizations.id,
       name: organizations.name,
       slug: organizations.slug,
+      publicId: organizations.publicId,
       createdAt: organizations.createdAt,
       suspendedAt: organizations.suspendedAt,
       planName: plans.name,

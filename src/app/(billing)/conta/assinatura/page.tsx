@@ -104,8 +104,16 @@ export default async function SubscriptionGatePage() {
   const plan = access.reason === "suspended" ? null : (await listPublicPlans())[0];
   const cta = plan ? planCta(plan, "monthly") : null;
 
+  /**
+   * O código vai no assunto do e-mail.
+   *
+   * Esta tela é o fim da linha de uma conta bloqueada, e o único caminho
+   * oferecido é falar com o suporte. Nome de clínica se repete entre contas;
+   * o código não. Mandá-lo já no assunto poupa a primeira troca de mensagens
+   * inteira — justamente quando a pessoa está sem acesso e impaciente.
+   */
   const supportHref = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
-    `Assinatura da ${ctx.organizationName}`,
+    `Assinatura da ${ctx.organizationName} (conta ${ctx.organizationCode})`,
   )}`;
 
   /**
@@ -128,7 +136,13 @@ export default async function SubscriptionGatePage() {
 
       <Card className="px-5 py-5">
         <h1 className="text-display text-ink">{situation.title}</h1>
-        <p className="mt-1 text-caption text-ink-tertiary">{ctx.organizationName}</p>
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 text-caption text-ink-tertiary">
+          <span>{ctx.organizationName}</span>
+          <span aria-hidden>·</span>
+          <span>
+            conta <span className="tracking-[0.08em] tabular">{ctx.organizationCode}</span>
+          </span>
+        </p>
         <p className="mt-3 text-body text-ink-secondary">{situation.lead}</p>
         {situation.detail ? (
           <p className="mt-4 rounded-control bg-surface px-3 py-2 text-label font-normal text-ink-secondary">
@@ -187,8 +201,10 @@ export default async function SubscriptionGatePage() {
       <Card className="mt-4 px-5 py-4">
         <h2 className="text-card text-ink">Falar com a gente</h2>
         <p className="mt-1 text-body text-ink-secondary">
-          Escreva para <span className="text-ink">{SUPPORT_EMAIL}</span> contando o nome da sua
-          clínica. Quem responde é quem faz o produto.
+          Escreva para <span className="text-ink">{SUPPORT_EMAIL}</span> com o código da sua conta,{" "}
+          <span className="tracking-[0.08em] text-ink tabular">{ctx.organizationCode}</span>. Nome de
+          clínica se repete; o código não, então a conversa começa já sabendo qual é a sua. Quem
+          responde é quem faz o produto.
         </p>
         {/* Dois botões grandes para o MESMO mailto viram ruído — mas o botão só
             sai quando o cartão do plano já mostrou um acima. Na conta suspensa
