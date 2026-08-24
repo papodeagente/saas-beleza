@@ -20,7 +20,7 @@ const TELAS = [
   {
     id: "hoje",
     aba: "Hoje",
-    url: "app.lumina.com.br/hoje",
+    url: "agendadeunha.com.br/hoje",
     titulo: "O dia inteiro em três segundos",
     texto:
       "Quantos atendimentos, quanto está previsto entrar, quem ainda não confirmou e o que precisa da sua atenção agora.",
@@ -28,7 +28,7 @@ const TELAS = [
   {
     id: "agenda",
     aba: "Agenda",
-    url: "app.lumina.com.br/agenda",
+    url: "agendadeunha.com.br/agenda",
     titulo: "Uma agenda que recusa horário impossível",
     texto:
       "Intervalo entre atendimentos, folga, bloqueio e sala ocupada saem da conta antes de o horário ser oferecido.",
@@ -36,7 +36,7 @@ const TELAS = [
   {
     id: "inbox",
     aba: "Inbox",
-    url: "app.lumina.com.br/inbox",
+    url: "agendadeunha.com.br/inbox",
     titulo: "A conversa e a ficha da cliente lado a lado",
     texto:
       "A atendente responde, vê o histórico e marca o horário na mesma tela, sem pedir o que a clínica já sabe.",
@@ -44,7 +44,7 @@ const TELAS = [
   {
     id: "agente",
     aba: "Agente de IA",
-    url: "app.lumina.com.br/agente",
+    url: "agendadeunha.com.br/agente",
     titulo: "Você decide o que a IA pode fazer",
     texto:
       "Cada ação do agente liga e desliga separadamente, e tudo que ele fez fica registrado com autoria.",
@@ -52,7 +52,7 @@ const TELAS = [
   {
     id: "financeiro",
     aba: "Financeiro",
-    url: "app.lumina.com.br/financeiro",
+    url: "agendadeunha.com.br/financeiro",
     titulo: "O mês fechado sem planilha",
     texto:
       "Receita por serviço, contas a pagar e a comissão de cada profissional, calculada a partir do atendimento.",
@@ -60,14 +60,14 @@ const TELAS = [
   {
     id: "clientes",
     aba: "Clientes",
-    url: "app.lumina.com.br/clientes",
+    url: "agendadeunha.com.br/clientes",
     titulo: "A ficha que a recepção consulta em pé",
     texto: "Histórico, faltas, preferências e quando é hora de chamar de volta.",
   },
   {
     id: "catalogo",
     aba: "Catálogo",
-    url: "app.lumina.com.br/catalogo",
+    url: "agendadeunha.com.br/catalogo",
     titulo: "Preço, duração, custo e margem",
     texto:
       "O catálogo define quanto tempo cada serviço ocupa na agenda e quanto ele deixa de verdade.",

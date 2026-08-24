@@ -284,7 +284,7 @@ export default async function LandingPage() {
                 é o pior caso de repaint justamente onde está a maior parte do
                 tráfego. */}
             <div className="animate-fade-in mockup-tilt [animation-delay:200ms] lg:animate-mockup-in">
-              <BrowserFrame url="app.lumina.com.br/hoje">
+              <BrowserFrame url="agendadeunha.com.br/hoje">
           {/* eslint-disable-next-line @next/next/no-img-element -- os sete prints
               já saem daqui em WebP de 1600px (316KB somados). Passar por next/image
               exigiria o sharp em runtime, que não está declarado no package.json e

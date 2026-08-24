@@ -1,26 +1,32 @@
 import IORedis from "ioredis";
 import { getSession } from "@/server/auth";
-import { inboxChannel } from "@/server/services/inbox-events";
+import { getLocalInboxBus, inboxChannel } from "@/server/services/inbox-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const encoder = new TextEncoder();
 
-/** Canal autenticado de eventos do Inbox (Server-Sent Events). */
+/**
+ * Canal autenticado de eventos do Inbox (Server-Sent Events).
+ *
+ * Duas fontes, mesma semântica: com REDIS_URL o canal atravessa instâncias
+ * (produção); sem, ele assina o barramento em processo — que num servidor
+ * único entrega o mesmo resultado. Responder 503 na ausência de Redis, como
+ * era antes, deixava o desenvolvimento sem tempo real nenhum e escondia
+ * regressões do caminho vivo até o deploy.
+ */
 export async function GET(request: Request) {
   const ctx = await getSession();
   if (!ctx || ctx.role === "professional") {
     return new Response("Não autorizado", { status: 401 });
   }
 
+  const channel = inboxChannel(ctx.organizationId);
   const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) return new Response("Tempo real indisponível", { status: 503 });
 
-  let subscriber: IORedis | null = new IORedis(redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-  });
+  let subscriber: IORedis | null = null;
+  let localHandler: ((payload: string) => void) | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let closed = false;
 
@@ -28,6 +34,10 @@ export async function GET(request: Request) {
     if (closed) return;
     closed = true;
     if (heartbeat) clearInterval(heartbeat);
+    if (localHandler) {
+      getLocalInboxBus().off(channel, localHandler);
+      localHandler = null;
+    }
     const current = subscriber;
     subscriber = null;
     if (current) {
@@ -42,15 +52,24 @@ export async function GET(request: Request) {
         if (!closed) controller.enqueue(encoder.encode(chunk));
       };
 
-      subscriber!.on("message", (_channel, message) => {
-        send(`data: ${message}\n\n`);
-      });
-      subscriber!.on("error", (error) => {
-        console.warn("[inbox realtime] conexão de leitura:", error.message);
-      });
-
       try {
-        await subscriber!.subscribe(inboxChannel(ctx.organizationId));
+        if (redisUrl) {
+          subscriber = new IORedis(redisUrl, {
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+          });
+          subscriber.on("message", (_channel, message) => {
+            send(`data: ${message}\n\n`);
+          });
+          subscriber.on("error", (error) => {
+            console.warn("[inbox realtime] conexão de leitura:", error.message);
+          });
+          await subscriber.subscribe(channel);
+        } else {
+          localHandler = (payload: string) => send(`data: ${payload}\n\n`);
+          getLocalInboxBus().on(channel, localHandler);
+        }
+
         // Confirma a conexão e faz o cliente sincronizar uma vez, fechando a
         // pequena janela entre o HTML inicial e a assinatura do canal.
         send(`event: ready\ndata: {}\n\n`);
