@@ -750,6 +750,41 @@ export function InboxView({
     [],
   );
 
+  /**
+   * Aquece a aba onde o ponteiro pousou.
+   *
+   * Meus, Fila e Todos saem do retrato que já está na memória e não pedem
+   * nada. Sobra "Finalizadas", a única pergunta que ainda viaja ao servidor:
+   * medida em produção, 488ms de "Carregando conversas…" na primeira visita.
+   * Buscar no pouso do ponteiro cobre esse intervalo com o tempo que a mão
+   * leva entre parar e clicar.
+   *
+   * Os mesmos 120ms das linhas, e pela mesma razão: server action sai numa
+   * fila única, então aquecer QUALQUER aba atravessada poria trabalho
+   * especulativo na frente do próximo clique. Só aquece onde o ponteiro parou,
+   * e só o que ainda não sabemos responder.
+   */
+  const abaQuente = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const desarmarAba = useCallback(() => {
+    if (abaQuente.current) {
+      clearTimeout(abaQuente.current);
+      abaQuente.current = null;
+    }
+  }, []);
+  const armarAba = useCallback(
+    (alvo: Tab) => {
+      desarmarAba();
+      if (alvo === tab || linhasPara(alvo, search, assigneeFilter) != null) return;
+      abaQuente.current = setTimeout(() => {
+        void carregarLista(alvo, search, assigneeFilter).catch(() => undefined);
+      }, 120);
+    },
+    [desarmarAba, tab, search, assigneeFilter, linhasPara, carregarLista],
+  );
+  // Um temporizador pendente ao desmontar chamaria server action de tela que
+  // já saiu.
+  useEffect(() => desarmarAba, [desarmarAba]);
+
   /** O primeiro alvo de toque é o topo da lista: chega aquecido. */
   useEffect(() => {
     const primeiras = list.slice(0, 6).map((c) => c.id);
@@ -1082,6 +1117,10 @@ export function InboxView({
                   role="tab"
                   aria-selected={active}
                   onClick={() => changeTab(item.id)}
+                  onPointerEnter={() => armarAba(item.id)}
+                  onPointerLeave={desarmarAba}
+                  onFocus={() => armarAba(item.id)}
+                  onBlur={desarmarAba}
                   className={cn(
                     "flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-control px-1 py-1.5 text-meta font-medium transition-colors",
                     active

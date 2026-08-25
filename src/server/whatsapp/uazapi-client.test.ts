@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recipientId, requestMessageHistory, sendPresence, sendText } from "./uazapi-client";
+import { recipientId, requestMessageHistory, sendMedia, sendPresence, sendText } from "./uazapi-client";
 
 describe("destinatário uazapi", () => {
   it("remove apenas o sufixo do contato telefônico tradicional", () => {
@@ -79,5 +79,62 @@ describe("pedido de histórico antigo", () => {
     expect(chamadas[0].url).toBe("https://instancia.test/message/history-sync");
     // Podar o sufixo fazia o pedido não encontrar o chat e falhar em silêncio.
     expect(chamadas[0].body).toMatchObject({ number: "5511999999999@s.whatsapp.net", mode: "history", count: 100 });
+  });
+});
+
+/**
+ * Marcar como lida ao responder.
+ *
+ * A conversa continuava em negrito no celular do dono depois de a atendente
+ * responder pelo sistema — e o contador de não lidas do aparelho não zerava
+ * por lá. `readchat` limpa a conversa e `readmessages` põe o tique azul no que
+ * a cliente escreveu. Os dois campos existem em `/send/text` e `/send/media`
+ * (openapi da uazapi), e só devem sair quando quem respondeu foi gente.
+ */
+describe("responder marca como lida", () => {
+  it("envia readchat e readmessages quando a resposta é de uma pessoa", async () => {
+    const chamadas = capturarChamadas();
+    await sendText(CREDS, "5511999999999@s.whatsapp.net", "já te retorno", { markRead: true });
+    expect(chamadas[0].body.readchat).toBe(true);
+    expect(chamadas[0].body.readmessages).toBe(true);
+  });
+
+  it("omite os dois campos no envio automático", async () => {
+    // Lembrete e resposta do agente não leram nada: apagar o não lido do
+    // aparelho aqui esconderia justamente a mensagem que precisa de gente.
+    const chamadas = capturarChamadas();
+    await sendText(CREDS, "5511999999999@s.whatsapp.net", "seu horário é amanhã");
+    expect(chamadas[0].body).not.toHaveProperty("readchat");
+    expect(chamadas[0].body).not.toHaveProperty("readmessages");
+  });
+
+  it("vale também para mídia", async () => {
+    const chamadas = capturarChamadas();
+    await sendMedia(CREDS, "5511999999999@s.whatsapp.net", {
+      type: "image",
+      file: "https://exemplo.test/foto.jpg",
+      markRead: true,
+    });
+    expect(chamadas[0].url).toBe("https://instancia.test/send/media");
+    expect(chamadas[0].body.readchat).toBe(true);
+  });
+});
+
+describe("pedido de histórico antigo", () => {
+  it("ancora na mensagem mais antiga que já temos", async () => {
+    // Sem âncora a uazapi parte do acervo DELA: numa conversa que ela nunca
+    // viu não há de onde partir e o pedido volta 400 "âncora insuficiente".
+    const chamadas = capturarChamadas({ ok: true });
+    await requestMessageHistory(CREDS, "5511999999999@s.whatsapp.net", 100, "MSG-MAIS-ANTIGA");
+    expect(chamadas[0].url).toBe("https://instancia.test/message/history-sync");
+    expect(chamadas[0].body.messageid).toBe("MSG-MAIS-ANTIGA");
+    // JID inteiro: podado, o pedido morria sem erro visível.
+    expect(chamadas[0].body.number).toBe("5511999999999@s.whatsapp.net");
+  });
+
+  it("omite a âncora quando não temos nenhuma mensagem", async () => {
+    const chamadas = capturarChamadas({ ok: true });
+    await requestMessageHistory(CREDS, "5511999999999@s.whatsapp.net", 100, null);
+    expect(chamadas[0].body).not.toHaveProperty("messageid");
   });
 });

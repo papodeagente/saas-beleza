@@ -264,7 +264,7 @@ export async function sendText(
   creds: UazapiCredentials,
   to: string,
   text: string,
-  opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean; delayMs?: number },
+  opts?: { replyId?: string; mentions?: string[]; linkPreview?: boolean; delayMs?: number; markRead?: boolean },
 ): Promise<SendResult> {
   /**
    * `delay` é o atraso NATIVO: a uazapi segura a mensagem e mostra
@@ -284,6 +284,17 @@ export async function sendText(
       mentions: opts?.mentions?.length ? opts.mentions.join(",") : undefined,
       linkPreview: opts?.linkPreview,
       delay: delay > 0 ? delay : undefined,
+      /**
+       * Responder é ler — é o que o WhatsApp faz no aparelho.
+       *
+       * Sem isto a conversa continuava em negrito no celular do dono depois de
+       * a atendente responder pelo sistema, e o aparelho ficava com um contador
+       * de não lidas que ninguém conseguia zerar de lá. `readchat` limpa a
+       * conversa; `readmessages` põe o tique azul no que a cliente mandou.
+       * Só vai quando quem envia é gente: disparo automático não leu nada.
+       */
+      readchat: opts?.markRead ? true : undefined,
+      readmessages: opts?.markRead ? true : undefined,
     },
     TIMEOUT_MS + delay,
   );
@@ -319,6 +330,8 @@ export async function sendMedia(
     fileName?: string;
     mimetype?: string;
     replyId?: string;
+    /** Ver `markRead` em `sendText`: responder é ler, quando quem responde é gente. */
+    markRead?: boolean;
   },
 ): Promise<SendResult> {
   const resp = await request(creds, "POST", "/send/media", {
@@ -329,6 +342,8 @@ export async function sendMedia(
     docName: media.fileName,
     mimetype: media.mimetype,
     replyid: media.replyId,
+    readchat: media.markRead ? true : undefined,
+    readmessages: media.markRead ? true : undefined,
   });
   const messageId = extractMessageId(resp);
   if (!messageId) throw new UazapiError("uazapi /send/media respondeu sem messageid", 500, JSON.stringify(resp).slice(0, 300));
@@ -499,11 +514,23 @@ export async function requestMessageHistory(
   creds: UazapiCredentials,
   chatId: string,
   count = 100,
+  /**
+   * Mensagem a partir da qual o WhatsApp deve olhar para trás.
+   *
+   * Sem âncora a uazapi usa "a mensagem mais antiga conhecida LOCALMENTE desse
+   * chat" (documentado em /message/history-sync) — o acervo dela, que não é o
+   * nosso: numa conversa que ela nunca viu não há âncora nenhuma, e o pedido
+   * volta 400 "âncora insuficiente". Mandando a mensagem mais antiga que NÓS
+   * temos, o pedido tem de onde partir e busca o bloco anterior a ela, que é
+   * exatamente o que falta na tela.
+   */
+  anchorMessageId?: string | null,
 ): Promise<void> {
   await request(creds, "POST", "/message/history-sync", {
     number: chatId.trim(),
     mode: "history",
     count: Math.max(1, Math.min(100, count)),
+    messageid: anchorMessageId?.trim() || undefined,
   });
 }
 

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { presenceAction, sendMediaAction } from "./actions";
+import { sendMediaAction } from "./actions";
 
 /**
  * Compositor do inbox.
@@ -140,12 +140,29 @@ export function Composer({
     };
   }, [midia]);
 
+  /**
+   * Avisa a cliente que estamos escrevendo.
+   *
+   * Vai por rota própria, e não por server action, porque server action sai
+   * numa fila única: um aviso a cada três segundos de digitação punha meio
+   * segundo de rede na frente do próximo toque da atendente. `keepalive`
+   * garante que o último aviso ainda saia se a tela mudar no mesmo instante.
+   */
+  function avisarPresenca(presence: "composing" | "recording") {
+    void fetch("/api/inbox/presenca", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId, presence }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }
+
   function avisarDigitando() {
     const agora = Date.now();
     // Um aviso a cada três segundos basta para manter o "digitando" aceso.
     if (agora - ultimaPresenca.current < 3000) return;
     ultimaPresenca.current = agora;
-    void presenceAction({ conversationId, presence: "composing" });
+    avisarPresenca("composing");
   }
 
   /**
@@ -248,7 +265,7 @@ export function Composer({
       recorder.current = rec;
       setSegundos(0);
       setGravando(true);
-      void presenceAction({ conversationId, presence: "recording" });
+      avisarPresenca("recording");
     } catch {
       toast.error("Não consegui acessar o microfone. Verifique a permissão do navegador.");
     }

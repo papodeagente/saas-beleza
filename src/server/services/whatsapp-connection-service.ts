@@ -1,8 +1,8 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne, or } from "drizzle-orm";
 import { db } from "@/db";
-import { whatsappConnections } from "@/db/schema";
+import { organizations, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
 import {
   connectInstance,
@@ -104,6 +104,38 @@ export type SaveConnectionInput = {
   instanceToken?: string;
 };
 
+/**
+ * Nome da outra conta que já usa esta instância, ou nulo se estiver livre.
+ *
+ * Devolve o NOME e não um booleano porque quem cola o token precisa saber onde
+ * o número está preso para poder soltá-lo — "já está em uso" sem dizer onde é
+ * um beco sem saída para o suporte.
+ */
+async function donoDaInstancia(
+  organizationId: number,
+  token: string,
+  instanceId: string | null,
+): Promise<string | null> {
+  const mesmaInstancia = instanceId
+    ? or(eq(whatsappConnections.instanceToken, token), eq(whatsappConnections.instanceId, instanceId))
+    : eq(whatsappConnections.instanceToken, token);
+  const [outra] = await db
+    .select({ nome: organizations.name })
+    .from(whatsappConnections)
+    .innerJoin(organizations, eq(organizations.id, whatsappConnections.organizationId))
+    .where(
+      and(
+        mesmaInstancia,
+        ne(whatsappConnections.organizationId, organizationId),
+        // Conexão desligada não segura o número: é assim que uma clínica que
+        // trocou de plataforma consegue levar o próprio aparelho embora.
+        eq(whatsappConnections.active, true),
+      ),
+    )
+    .limit(1);
+  return outra?.nome ?? null;
+}
+
 export async function saveConnection(ctx: TenantContext, input: SaveConnectionInput): Promise<ConnectionView> {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   if (!baseUrl) throw new Error("Informe a URL do servidor uazapi.");
@@ -115,6 +147,21 @@ export async function saveConnection(ctx: TenantContext, input: SaveConnectionIn
   // Valida antes de gravar: token errado é o erro mais comum, e descobrir isso
   // só quando a primeira mensagem não chega custa caro.
   const status = await getStatus({ baseUrl, token });
+
+  // Um número de WhatsApp atende UMA conta.
+  //
+  // Sem esta trava, duas contas apontando para a mesma instância recebem o
+  // mesmo webhook e gravam a mesma conversa duas vezes — cada atendente
+  // enxergando as clientes da outra. Está acontecendo hoje entre duas contas
+  // desta base (mesmo token, mesmo número, 3.300 mensagens espelhadas), e o
+  // banco não tinha como impedir. A comparação é pela instância, não pelo
+  // token: emitir um token novo para o mesmo aparelho não o torna outro.
+  const jaEmUso = await donoDaInstancia(ctx.organizationId, token, status.instanceId);
+  if (jaEmUso) {
+    throw new Error(
+      `Este WhatsApp já está conectado na conta ${jaEmUso}. Um número atende uma conta por vez: desconecte-o de lá antes de conectar aqui.`,
+    );
+  }
 
   const values = {
     organizationId: ctx.organizationId,

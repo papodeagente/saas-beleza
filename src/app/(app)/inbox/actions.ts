@@ -21,7 +21,6 @@ import {
 import { syncProfilePictures } from "@/server/services/profile-picture-service";
 import {
   deleteFromInbox,
-  notifyPresence,
   fetchMediaUrl,
   reactFromInbox,
   sendFromInbox,
@@ -611,23 +610,6 @@ export async function transcribeAction(
     return { ok: true, text };
   } catch (error) {
     return { ok: false, error: mensagemDeErro(error, "Não foi possível transcrever.") };
-  }
-}
-
-const presenceSchema = z.object({
-  conversationId: idSchema,
-  presence: z.enum(["composing", "recording", "paused"]),
-});
-
-/** Mostra "digitando" para o cliente. Melhor esforço: falha aqui não interessa. */
-export async function presenceAction(input: unknown): Promise<void> {
-  try {
-    const ctx = await requireSession();
-    requireRole(ctx, "staff");
-    const data = presenceSchema.parse(input);
-    await notifyPresence(ctx.organizationId, data.conversationId, data.presence);
-  } catch {
-    /* silencioso de propósito */
   }
 }
 

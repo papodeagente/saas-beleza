@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
@@ -261,7 +261,7 @@ export async function syncConversationHistory(
    * Uma vez por hora por conversa: o pedido acorda o aparelho, e insistir não
    * traz o histórico mais rápido.
    */
-  await maybeRequestOlderHistory(connection, conversation.remoteJid);
+  await maybeRequestOlderHistory(connection, conversation.remoteJid, organizationId, conversationId);
 
   if (conversationIds.size > 0) await publishInboxEvent(organizationId, { type: "message", conversationId });
   return imported;
@@ -269,7 +269,12 @@ export async function syncConversationHistory(
 
 const localHistoryRequests = new Map<string, number>();
 
-async function maybeRequestOlderHistory(connection: ConnectionRow, remoteJid: string): Promise<void> {
+async function maybeRequestOlderHistory(
+  connection: ConnectionRow,
+  remoteJid: string,
+  organizationId: number,
+  conversationId: number,
+): Promise<void> {
   const key = `${connection.id}:${remoteJid}`;
   const redis = getRedis();
   if (redis) {
@@ -280,7 +285,23 @@ async function maybeRequestOlderHistory(connection: ConnectionRow, remoteJid: st
     if (Date.now() - last < 3_600_000) return;
     localHistoryRequests.set(key, Date.now());
   }
-  await requestMessageHistory(credentialsOf(connection), remoteJid, 100).catch((error) => {
+  // A âncora é a mensagem mais antiga que já temos: o pedido busca o bloco
+  // ANTERIOR a ela. Sem isso a uazapi ancorava no acervo dela — e em conversa
+  // que ela nunca viu não havia âncora nenhuma.
+  const [maisAntiga] = await db
+    .select({ externalId: messages.externalId })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.organizationId, organizationId),
+        eq(messages.conversationId, conversationId),
+        isNotNull(messages.externalId),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messages.id))
+    .limit(1);
+
+  await requestMessageHistory(credentialsOf(connection), remoteJid, 100, maisAntiga?.externalId).catch((error) => {
     console.warn("[whatsapp] histórico antigo não solicitado:", error instanceof Error ? error.message : error);
   });
 }
@@ -474,6 +495,11 @@ export async function sendMessageToConversation(
   if (!connection) throw new Error("Nenhuma conexão de WhatsApp configurada.");
 
   const credentials = credentialsOf(connection);
+  // Só a resposta escrita por uma pessoa marca a conversa como lida no
+  // aparelho. Lembrete e resposta do agente saem sem ler: se a cliente
+  // escreveu algo que ninguém abriu ainda, esse "não lido" é justamente o que
+  // faz alguém olhar.
+  const respostaDeGente = options.sender === "user";
   const result = options.media
     ? await sendMedia(credentials, conversation.remoteJid, {
         type: options.media.type,
@@ -482,10 +508,12 @@ export async function sendMessageToConversation(
         fileName: options.media.fileName,
         mimetype: options.media.mimeType,
         replyId: options.replyToExternalId,
+        markRead: respostaDeGente,
       })
     : await sendText(credentials, conversation.remoteJid, body, {
         replyId: options.replyToExternalId,
         delayMs: options.delayMs,
+        markRead: respostaDeGente,
       });
 
   const now = new Date();
