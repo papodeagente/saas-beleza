@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recipientId, requestMessageHistory, sendMedia, sendPresence, sendText } from "./uazapi-client";
+import {
+  listAddressBook,
+  recipientId,
+  requestMessageHistory,
+  sendMedia,
+  sendPresence,
+  sendText,
+} from "./uazapi-client";
 
 describe("destinatário uazapi", () => {
   it("remove apenas o sufixo do contato telefônico tradicional", () => {
@@ -136,5 +143,36 @@ describe("pedido de histórico antigo", () => {
     const chamadas = capturarChamadas({ ok: true });
     await requestMessageHistory(CREDS, "5511999999999@s.whatsapp.net", 100, null);
     expect(chamadas[0].body).not.toHaveProperty("messageid");
+  });
+});
+
+/**
+ * Agenda do aparelho.
+ *
+ * É de onde o WhatsApp tira o nome que aparece na tela. Sem ela a aba Membros
+ * só conseguia nomear quem já tinha escrito no privado.
+ */
+describe("agenda do aparelho", () => {
+  it("lê nome e JID, pedindo só quem está salvo", async () => {
+    const chamadas = capturarChamadas({
+      contacts: [
+        { jid: "556799813556@s.whatsapp.net", contact_name: "Oswaldo Fernandes", contact_FirstName: "Oswaldo" },
+        { jid: "5584911112222@s.whatsapp.net", contact_name: "", contact_FirstName: "Marlene" },
+      ],
+    });
+    const agenda = await listAddressBook(CREDS, { limit: 1000, offset: 0 });
+    expect(chamadas[0].url).toBe("https://instancia.test/contacts/list");
+    // "all" traria também os desconhecidos, com o nome mascarado.
+    expect(chamadas[0].body.contactScope).toBe("address_book");
+    expect(agenda).toEqual([
+      { jid: "556799813556@s.whatsapp.net", name: "Oswaldo Fernandes" },
+      // Sem `contact_name`, o primeiro nome ainda serve.
+      { jid: "5584911112222@s.whatsapp.net", name: "Marlene" },
+    ]);
+  });
+
+  it("descarta linha sem nome ou sem identificador", async () => {
+    capturarChamadas({ contacts: [{ jid: "", contact_name: "Fulano" }, { jid: "5584@s.whatsapp.net" }] });
+    expect(await listAddressBook(CREDS)).toEqual([]);
   });
 });

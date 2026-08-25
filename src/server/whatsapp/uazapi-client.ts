@@ -606,6 +606,37 @@ export async function findChats(
     .filter((row) => Boolean(row.jid));
 }
 
+export type AddressBookEntry = { jid: string; name: string };
+
+/**
+ * A agenda do aparelho pareado — de onde o WhatsApp tira o nome que você vê.
+ *
+ * `/chat/find` só conhece quem já trocou mensagem com a gente (1.243 pessoas
+ * nesta conta); a agenda tem 2.711. É a diferença entre a aba Membros mostrar
+ * "Dona Marlene" ou "(84) 9812-9480" para quem nunca escreveu no privado.
+ *
+ * `contactScope: "address_book"` de propósito: em "all" o provedor devolve
+ * também os desconhecidos, com o nome mascarado ("+55∙∙∙∙∙∙∙∙00"), que não é
+ * nome de ninguém.
+ */
+export async function listAddressBook(
+  creds: UazapiCredentials,
+  params: { limit?: number; offset?: number } = {},
+): Promise<AddressBookEntry[]> {
+  const resp = await request(creds, "POST", "/contacts/list", {
+    limit: params.limit ?? 1000,
+    offset: params.offset ?? 0,
+    contactScope: "address_book",
+  });
+  const rows = Array.isArray(resp) ? resp : asArray(get(resp, "contacts"));
+  return rows
+    .map((row) => ({
+      jid: firstString(get(row, "jid"), get(row, "chatid")),
+      name: firstString(get(row, "contact_name"), get(row, "contact_FirstName"), get(row, "name")).trim(),
+    }))
+    .filter((row) => Boolean(row.jid) && Boolean(row.name));
+}
+
 // ---------------------------------------------------------------------------
 // Ficha do contato
 // ---------------------------------------------------------------------------

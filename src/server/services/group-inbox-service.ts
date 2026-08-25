@@ -16,7 +16,7 @@ import { syncConversationHistory } from "@/server/services/whatsapp-message-serv
 import { syncProviderChats } from "@/server/services/provider-chat-sync";
 import { getRedis } from "@/server/queues/redis";
 import { digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
-import { findChats, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
+import { findChats, listAddressBook, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
 import { listGroups, type Group, type GroupParticipant } from "@/server/whatsapp/uazapi-groups";
 
 /**
@@ -497,6 +497,9 @@ const ROSTER_LIMIT = 400;
 /** Páginas de conversas diretas varridas para montar o catálogo de nomes. */
 const PAGINA_CONTATOS = 500;
 const MAX_PAGINAS_CONTATOS = 4;
+/** A agenda do aparelho pareado. 2.711 contatos nesta conta, 1,4s por página. */
+const PAGINA_AGENDA = 1000;
+const MAX_PAGINAS_AGENDA = 5;
 
 /** Guarda o retrato do grupo para a próxima abertura já ter nome e tamanho. */
 async function upsertGroupSnapshots(
@@ -569,6 +572,35 @@ async function syncIdentityDirectory(
     }
 
     if (chats.length < PAGINA_CONTATOS) break;
+  }
+
+  /**
+   * Depois das conversas, a AGENDA do aparelho — e ela vem por cima.
+   *
+   * As conversas só conhecem quem já escreveu para nós; a agenda tem quem a
+   * clínica salvou, que é justamente o nome que o WhatsApp mostra na tela do
+   * celular. Medido nesta conta: 1.243 pessoas pelas conversas, 2.711 na
+   * agenda. Quando as duas conhecem alguém, vale o da agenda: foi um humano
+   * que escreveu aquele nome.
+   */
+  for (let pagina = 0; pagina < MAX_PAGINAS_AGENDA; pagina += 1) {
+    const contatos = await listAddressBook(creds, {
+      limit: PAGINA_AGENDA,
+      offset: pagina * PAGINA_AGENDA,
+    });
+    if (contatos.length === 0) break;
+
+    for (const contato of contatos) {
+      const phone = phoneFromJid(contato.jid);
+      // Contato salvo com o próprio número no lugar do nome não traduz nada —
+      // e o provedor ainda devolve mascarado ("+55∙∙∙∙∙∙∙∙00") quem não está
+      // salvo. Nenhum dos dois é nome de gente.
+      if (contato.name.includes("∙")) continue;
+      if (digitsOnly(contato.name) && digitsOnly(contato.name) === phone) continue;
+      encontrados.set(identidadeBase(contato.jid), { phone, name: contato.name });
+    }
+
+    if (contatos.length < PAGINA_AGENDA) break;
   }
 
   const linhas = [...encontrados.entries()].map(([jid, dados]) => ({
