@@ -332,7 +332,7 @@ describe("fio do grupo", () => {
  * era uma coluna de telefones.
  */
 describe("nomes dos membros do grupo", () => {
-  const FONE_CLIENTE = "5584911112222";
+  const FONE_CLIENTE = "5584981112222";
   const FONE_CONHECIDO = "5584933334444";
   const LID = "999888777@lid";
 
@@ -380,6 +380,18 @@ describe("nomes dos membros do grupo", () => {
       { jid: "111222333@lid", phone: "5584955556666", displayName: null, isAdmin: false, isSuperAdmin: false },
     ]);
     expect(pessoa.displayName).toBeNull();
+  });
+
+  it("encontra a pessoa mesmo com e sem o nono dígito", async () => {
+    // O provedor entrega o mesmo aparelho ora com 12 dígitos, ora com 13:
+    // nesta base são 2.239 de um jeito e 678 do outro. Comparar texto com
+    // texto fazia da mesma pessoa duas — e a que tinha nome nunca aparecia.
+    // Forma antiga do MESMO aparelho: sem o nono dígito.
+    const semNono = "558481112222";
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: "555444333@lid", phone: semNono, displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBe("Dona Marlene");
   });
 
   it("não toca em quem já veio com nome do provedor", async () => {

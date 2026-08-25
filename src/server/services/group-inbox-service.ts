@@ -12,10 +12,11 @@ import { whichHavePictures } from "@/server/services/profile-picture-service";
 import type { TenantContext } from "@/server/auth";
 import { credentialsOf, getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { resolveConversation } from "@/server/services/conversation-resolver";
+import { brPhoneVariants } from "@/server/services/outbound-conversation-service";
 import { syncConversationHistory } from "@/server/services/whatsapp-message-service";
 import { syncProviderChats } from "@/server/services/provider-chat-sync";
 import { getRedis } from "@/server/queues/redis";
-import { digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
+import { canonicalBrPhone, digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
 import { findChats, listAddressBook, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
 import { listGroups, type Group, type GroupParticipant } from "@/server/whatsapp/uazapi-groups";
 
@@ -877,7 +878,17 @@ export async function nomearParticipantes(
   participantes: GroupParticipant[],
 ): Promise<GroupParticipant[]> {
   const jids = [...new Set(participantes.map((p) => p.jid).filter(Boolean))];
-  const fones = [...new Set(participantes.map((p) => p.phone).filter((f): f is string => Boolean(f)))];
+  /**
+   * Telefone casa por TODAS as formas, não pelo texto exato.
+   *
+   * O provedor entrega o mesmo aparelho ora com o nono dígito, ora sem: nesta
+   * base são 2.239 identidades com 12 dígitos e 678 com 13. Comparar string
+   * com string deixava "558481225696" e "5584981225696" como duas pessoas
+   * diferentes — e a da direita, que tem nome, nunca era encontrada.
+   */
+  const fones = [
+    ...new Set(participantes.flatMap((p) => brPhoneVariants(p.phone)).filter(Boolean)),
+  ];
   if (jids.length === 0 && fones.length === 0) return participantes;
 
   const [identidades, clientes] = await Promise.all([
@@ -903,19 +914,26 @@ export async function nomearParticipantes(
       : Promise.resolve([]),
   ]);
 
+  // Os dois lados entram no mapa pela MESMA forma canônica: é o que faz o
+  // aparelho de 12 dígitos encontrar o nome guardado com 13.
   const porJid = new Map<string, string>();
   const porFone = new Map<string, string>();
   for (const i of identidades) {
     if (i.jid) porJid.set(i.jid, i.name);
-    if (i.phone) porFone.set(i.phone, i.name);
+    const chave = canonicalBrPhone(i.phone);
+    if (chave) porFone.set(chave, i.name);
   }
   // A ficha da clínica entra por último e por isso vence: é o nome que a
   // atendente escreveu para essa pessoa.
-  for (const c of clientes) if (c.phone) porFone.set(c.phone, c.name);
+  for (const c of clientes) {
+    const chave = canonicalBrPhone(c.phone);
+    if (chave) porFone.set(chave, c.name);
+  }
 
   return participantes.map((p) => {
     if (p.displayName) return p;
-    const nome = (p.phone ? porFone.get(p.phone) : undefined) ?? porJid.get(p.jid);
+    const chave = canonicalBrPhone(p.phone);
+    const nome = (chave ? porFone.get(chave) : undefined) ?? porJid.get(p.jid);
     return nome ? { ...p, displayName: nome } : p;
   });
 }
