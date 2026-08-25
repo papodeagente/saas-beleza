@@ -760,6 +760,14 @@ export const whatsappGroups = pgTable(
     lastSummary: text("last_summary"),
     lastSummaryAt: timestamp("last_summary_at", { withTimezone: true }),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    /** Retrato do provedor — ver ProviderChatSnapshot. Cache, não verdade. */
+    providerPreview: text("provider_preview"),
+    providerPreviewType: text("provider_preview_type"),
+    providerLastSender: text("provider_last_sender"),
+    providerLastAt: timestamp("provider_last_at", { withTimezone: true }),
+    providerUnread: integer("provider_unread"),
+    providerArchived: boolean("provider_archived").notNull().default(false),
+    providerSyncedAt: timestamp("provider_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -896,6 +904,29 @@ export const automationDispatches = pgTable(
 // Inbox
 // ---------------------------------------------------------------------------
 
+/**
+ * Retrato que o WhatsApp tem do chat, guardado para a lista abrir sem esperar
+ * a rede.
+ *
+ * `/chat/find` devolve, numa chamada só, o que o aparelho mostra na lista:
+ * última mensagem, tipo, quem falou, quando e quantas faltam ler. Sem guardar
+ * isso, a tela só sabia falar das conversas cujas mensagens passaram pelo
+ * nosso webhook — 271 dos 298 grupos apareciam como "sem mensagens por aqui"
+ * enquanto o telefone sabia o que tinha sido dito em cada um.
+ *
+ * É CACHE, não fonte da verdade: quando existe mensagem nossa mais recente,
+ * ela vence. Estes campos preenchem o buraco do histórico que nunca passou
+ * por aqui.
+ */
+export type ProviderChatSnapshot = {
+  preview: string | null;
+  previewType: string | null;
+  lastSender: string | null;
+  lastAt: Date | null;
+  unread: number;
+  archived: boolean;
+};
+
 export const conversations = pgTable(
   "conversations",
   {
@@ -956,6 +987,14 @@ export const conversations = pgTable(
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
     lastOutboundAt: timestamp("last_outbound_at", { withTimezone: true }),
+    /** Retrato do provedor — ver ProviderChatSnapshot. Cache, não verdade. */
+    providerPreview: text("provider_preview"),
+    providerPreviewType: text("provider_preview_type"),
+    providerLastSender: text("provider_last_sender"),
+    providerLastAt: timestamp("provider_last_at", { withTimezone: true }),
+    providerUnread: integer("provider_unread"),
+    providerArchived: boolean("provider_archived").notNull().default(false),
+    providerSyncedAt: timestamp("provider_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

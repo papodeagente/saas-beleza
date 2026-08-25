@@ -513,6 +513,26 @@ export type FoundChat = {
   isGroup: boolean;
   /** Timestamp bruto da última mensagem, em segundos ou milissegundos. */
   lastMessageTimestamp: number | null;
+  /**
+   * O que o WhatsApp mostra na lista de conversas — e que este cliente
+   * descartava.
+   *
+   * Sem estes campos a tela só conseguia falar das conversas cujas mensagens
+   * passaram pelo nosso webhook: 271 dos 298 grupos apareciam como "sem
+   * mensagens por aqui" enquanto o aparelho sabia exatamente o que tinha sido
+   * dito, por quem, quando e quantas faltavam ler. `/chat/find` devolve tudo
+   * isso em UMA chamada (300 chats em 1,8s, medido) — mais rápido que o
+   * `/group/list` paginado que trazia 50 sem nada disso.
+   */
+  preview: string | null;
+  /** Tipo bruto do provedor: Conversation, ImageMessage, ReactionMessage… */
+  previewType: string | null;
+  /** Quem mandou a última mensagem. Em grupo é o que vira "Fulano: …". */
+  lastSender: string | null;
+  unreadCount: number;
+  archived: boolean;
+  /** Miniatura da foto. Expira — serve para semear o cache, não para exibir. */
+  imagePreviewUrl: string | null;
 };
 
 /** Lista os chats mais recentes conhecidos pela instância. */
@@ -531,11 +551,21 @@ export async function findChats(
   return rows
     .map((row) => {
       const groupValue = get(row, "wa_isGroup");
+      const arquivado = get(row, "wa_archived");
       return {
         jid: firstString(get(row, "wa_chatid"), get(row, "chatid"), get(row, "jid")),
         name: firstString(get(row, "name"), get(row, "wa_contactName"), get(row, "wa_name")) || null,
         isGroup: groupValue === true || groupValue === 1 || String(groupValue).toLowerCase() === "true",
         lastMessageTimestamp: asNumber(get(row, "wa_lastMsgTimestamp")) ?? null,
+        // O campo se chama `TextVote` porque acumula o texto da mensagem E o
+        // voto de enquete; para a lista os dois são a mesma coisa: a última
+        // linha dita naquele chat.
+        preview: firstString(get(row, "wa_lastMessageTextVote")) || null,
+        previewType: firstString(get(row, "wa_lastMessageType")) || null,
+        lastSender: firstString(get(row, "wa_lastMessageSender")) || null,
+        unreadCount: asNumber(get(row, "wa_unreadCount")) ?? 0,
+        archived: arquivado === true || String(arquivado).toLowerCase() === "true",
+        imagePreviewUrl: firstString(get(row, "imagePreview"), get(row, "image")) || null,
       };
     })
     .filter((row) => Boolean(row.jid));
