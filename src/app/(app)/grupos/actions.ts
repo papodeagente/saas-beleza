@@ -11,6 +11,7 @@ import {
 } from "@/server/services/scheduled-group-messages";
 import {
   classifyGroup,
+  forgetGroup,
   getGroupThread,
   listGroupInbox,
   rememberGroupSize,
@@ -39,9 +40,15 @@ import {
 /**
  * Gestão de grupos.
  *
- * Tudo aqui fala direto com a uazapi, sem espelho no banco: a fonte da verdade
- * é o WhatsApp, e um cache local só criaria divergência — alguém entra ou sai
- * pelo celular e a tela passaria a mentir.
+ * As ações de GESTÃO (criar, entrar, sair, promover) falam direto com a uazapi:
+ * a fonte da verdade é o WhatsApp, e responder do banco faria a tela mentir
+ * sobre quem está dentro.
+ *
+ * A LISTA é o contrário, e de propósito: ela lê do banco e nunca espera o
+ * provedor, porque abrir a tela não pode custar uma chamada de rede. O banco é
+ * cache declarado, atualizado pela rota `/api/grupos/sincronizar` — que fica
+ * FORA daqui de propósito: o navegador despacha server actions uma de cada
+ * vez, e uma busca de vinte segundos aqui congelaria todo clique seguinte.
  */
 
 export type GroupResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -172,7 +179,12 @@ export async function updateGroupAction(input: unknown): Promise<GroupResult<Gro
 export async function leaveGroupAction(groupJid: unknown): Promise<GroupResult<true>> {
   try {
     const jid = jidSchema.parse(groupJid);
+    const ctx = await requireSession();
     await leaveGroup(await credentials(), jid);
+    // A lista lê do banco: sem apagar a linha, o grupo do qual acabamos de sair
+    // continuaria aparecendo até a próxima sincronização completa.
+    await forgetGroup(ctx, jid);
+    revalidatePath("/grupos");
     return { ok: true, data: true };
   } catch (error) {
     console.error(error);
@@ -364,7 +376,9 @@ export async function summarizeGroupAction(
       .object({ jid: z.string().trim().endsWith("@g.us"), hours: z.number().int().min(1).max(168).default(48) })
       .parse(input);
 
-    const thread = await getGroupThread(ctx, data.jid);
+    // O resumo é a única leitura que vale esperar o WhatsApp: resumir metade da
+    // conversa seria pior do que demorar.
+    const thread = await getGroupThread(ctx, data.jid, { reconcile: true });
     const corte = Date.now() - data.hours * 3_600_000;
     const recentes = thread.messages.filter((m) => m.createdAt.getTime() >= corte);
 

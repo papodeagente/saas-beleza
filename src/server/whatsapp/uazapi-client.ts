@@ -533,6 +533,13 @@ export type FoundChat = {
   archived: boolean;
   /** Miniatura da foto. Expira — serve para semear o cache, não para exibir. */
   imagePreviewUrl: string | null;
+  /**
+   * A identidade opaca (`@lid`) desta MESMA pessoa, quando o chat é direto.
+   *
+   * É a única ponte barata entre o `@lid` que assina as mensagens de grupo e um
+   * nome legível: aqui a linha traz os dois lados do par de uma vez.
+   */
+  chatLid: string | null;
 };
 
 /** Lista os chats mais recentes conhecidos pela instância. */
@@ -566,6 +573,7 @@ export async function findChats(
         unreadCount: asNumber(get(row, "wa_unreadCount")) ?? 0,
         archived: arquivado === true || String(arquivado).toLowerCase() === "true",
         imagePreviewUrl: firstString(get(row, "imagePreview"), get(row, "image")) || null,
+        chatLid: firstString(get(row, "wa_chatlid")) || null,
       };
     })
     .filter((row) => Boolean(row.jid));

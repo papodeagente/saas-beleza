@@ -1429,6 +1429,45 @@ export const whatsappProfilePictures = pgTable(
   (t) => [uniqueIndex("wa_profile_pictures_unique").on(t.organizationId, t.jid)],
 );
 
+/**
+ * Quem é `66700892492020@lid`.
+ *
+ * Em grupo o WhatsApp não diz o telefone de quem falou: diz uma identidade
+ * opaca (`@lid`), diferente para cada pessoa e sem nada legível dentro. Sem uma
+ * tradução, a lista de grupos só teria dois caminhos, e os dois são ruins:
+ * mostrar o número cru (que não diz nada a ninguém) ou omitir o autor (e aí
+ * "Amanhã fecha" perde metade do sentido, porque em grupo importa quem disse).
+ *
+ * A tradução sai de graça de uma observação: quem fala nos grupos do dono
+ * costuma ter conversa direta com ele, e a lista de conversas do aparelho
+ * entrega o par `@lid` ↔ nome nessa conversa. Uma varredura das conversas
+ * diretas vira este catálogo — 1.243 nomes na conta medida, que resolveram 54
+ * dos 90 remetentes de grupo (60%).
+ *
+ * Os 40% restantes não têm conserto barato (é gente que nunca falou direto com
+ * o dono), e a lista trata isso como o normal que é: sem nome, mostra só a
+ * mensagem. Nunca o número.
+ */
+export const whatsappIdentities = pgTable(
+  "whatsapp_identities",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id),
+    /** Como o WhatsApp chama esta pessoa: `<id>@lid` ou `<fone>@s.whatsapp.net`. */
+    jid: text("jid").notNull(),
+    /** Só dígitos, quando o JID carrega telefone. Nulo em LID. */
+    phone: text("phone"),
+    name: text("name").notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("wa_identities_org_jid_unique").on(t.organizationId, t.jid),
+    index("wa_identities_org_phone_idx").on(t.organizationId, t.phone),
+  ],
+);
+
 export const signupAttempts = pgTable(
   "signup_attempts",
   {

@@ -3,11 +3,17 @@
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
+  BarChart3,
   CalendarClock,
   Check,
+  Contact,
   Copy,
   Crown,
+  FileText,
   ImageDown,
+  Image as ImageIcon,
+  MapPin,
+  Mic,
   Link2,
   Lock,
   LogOut,
@@ -22,11 +28,13 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Smile,
   Sparkles,
   TriangleAlert,
   UserMinus,
   UserPlus,
   Users,
+  Video,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -74,6 +82,19 @@ import { loadMediaAction, syncPhotosAction } from "@/app/(app)/inbox/actions";
 type Classification = "none" | "radar" | "opportunity" | "private";
 type Filtro = Classification | "all";
 
+type PreviewKind =
+  | "text"
+  | "photo"
+  | "video"
+  | "audio"
+  | "document"
+  | "sticker"
+  | "poll"
+  | "location"
+  | "contact"
+  | "reaction"
+  | "other";
+
 type GroupItem = {
   jid: string;
   name: string;
@@ -82,8 +103,11 @@ type GroupItem = {
   classification: Classification;
   pinned: boolean;
   conversationId: number | null;
-  lastMessageAt: string | null;
+  /** Date atravessa a fronteira do servidor como Date; da action, como texto. */
+  lastMessageAt: string | Date | null;
   lastMessagePreview: string | null;
+  lastMessageKind: PreviewKind | null;
+  lastMessageSender: string | null;
   lastMessageFromMe: boolean;
   unreadCount: number;
   awaitingReply: boolean;
@@ -134,7 +158,58 @@ const CLASSIFICACOES: Array<{ id: Classification; label: string; icon: typeof Ra
 
 const PAGE_SIZE = 30;
 
-function tempoRelativo(iso: string): string {
+/**
+ * O ícone da prévia.
+ *
+ * No WhatsApp a legenda da foto ocupa a linha e o ícone conta que era foto.
+ * Sem ele, "Chegou hoje" e "Foto" ficam com o mesmo peso e a lista perde a
+ * pista mais rápida de leitura. Texto e reação não ganham ícone: o texto é o
+ * caso comum, e "Reagiu com ❤️" já se explica.
+ */
+const ICONE_DA_PREVIA: Partial<Record<PreviewKind, typeof ImageIcon>> = {
+  photo: ImageIcon,
+  video: Video,
+  audio: Mic,
+  document: FileText,
+  sticker: Smile,
+  poll: BarChart3,
+  location: MapPin,
+  contact: Contact,
+};
+
+/** O retrato do WhatsApp é considerado velho depois disto e vale rebuscar. */
+const RETRATO_VELHO_S = 300;
+
+type Sincronia =
+  | { ok: true; data: { grupos?: number; jaEmAndamento?: boolean; importadas?: number } }
+  | { ok: false; error: string };
+
+/**
+ * Pede ao servidor a ida ao WhatsApp — por rota, não por server action.
+ *
+ * O navegador despacha server actions UMA DE CADA VEZ. Enquanto uma busca de
+ * vinte segundos ocupava essa fila, trocar de gaveta ou digitar na busca ficava
+ * parado atrás dela, e a lista sumia atrás do esqueleto pelo tempo inteiro
+ * (23 s medidos na conta do dono). Numa rota comum o pedido sai na hora e a
+ * tela continua respondendo enquanto a busca acontece.
+ */
+async function pedirSincronia(jid?: string): Promise<Sincronia> {
+  try {
+    const resposta = await fetch("/api/grupos/sincronizar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(jid ? { jid } : {}),
+    });
+    const corpo = (await resposta.json().catch(() => null)) as Sincronia | null;
+    return corpo ?? { ok: false, error: "Não foi possível falar com o servidor." };
+  } catch {
+    // Rede caiu no meio: quem pediu explicitamente merece o aviso, e o disparo
+    // automático simplesmente não faz nada — nunca uma promessa não tratada.
+    return { ok: false, error: "Sem conexão com o servidor." };
+  }
+}
+
+function tempoRelativo(iso: string | Date): string {
   const minutos = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (minutos < 1) return "agora";
   if (minutos < 60) return `${minutos} min`;
@@ -145,20 +220,45 @@ function tempoRelativo(iso: string): string {
   return format(new Date(iso), "d MMM", { locale: ptBR });
 }
 
-export function GruposView({ connected, canManage }: { connected: boolean; canManage: boolean }) {
-  const [items, setItems] = useState<GroupItem[]>([]);
-  const [counts, setCounts] = useState<Record<Filtro, number>>({
-    all: 0,
-    none: 0,
-    radar: 0,
-    opportunity: 0,
-    private: 0,
-  });
+/** A primeira página, já montada pelo servidor. */
+type PaginaInicial = {
+  items: GroupItem[];
+  total: number;
+  counts: Record<Filtro, number>;
+  snapshotAgeSeconds: number | null;
+};
+
+export function GruposView({
+  connected,
+  canManage,
+  inicial,
+}: {
+  connected: boolean;
+  canManage: boolean;
+  inicial?: PaginaInicial | null;
+}) {
+  const [items, setItems] = useState<GroupItem[]>(inicial?.items ?? []);
+  const [counts, setCounts] = useState<Record<Filtro, number>>(
+    inicial?.counts ?? {
+      all: 0,
+      none: 0,
+      radar: 0,
+      opportunity: 0,
+      private: 0,
+    },
+  );
   const [filtro, setFiltro] = useState<Filtro>("all");
   const [busca, setBusca] = useState("");
   const [offset, setOffset] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [carregando, setCarregando] = useState(connected);
+  const [total, setTotal] = useState(inicial?.total ?? 0);
+  const [carregando, setCarregando] = useState(connected && !inicial);
+  const [sincronizando, setSincronizando] = useState(false);
+  // `undefined` = a lista ainda não voltou; `null` = voltou e nunca houve
+  // retrato. Sem essa distinção o sync dispararia no mount de toda abertura,
+  // antes de saber se havia motivo.
+  const [retratoIdade, setRetratoIdade] = useState<number | null | undefined>(
+    inicial ? inicial.snapshotAgeSeconds : undefined,
+  );
   const [buscandoFotos, buscarFotos] = useTransition();
   const [selecionado, setSelecionado] = useState<string | null>(null);
   const [criando, setCriando] = useState(false);
@@ -184,16 +284,90 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
       setItems(resultado.data.items as GroupItem[]);
       setTotal(resultado.data.total);
       setCounts(resultado.data.counts as Record<Filtro, number>);
+      setRetratoIdade(resultado.data.snapshotAgeSeconds);
       setOffset(proximoOffset);
     },
     [],
   );
 
+  /**
+   * Buscar no WhatsApp é caro (vinte segundos na conta medida) e por isso ficou
+   * FORA do caminho de abertura: a lista já pintou do banco quando isto começa,
+   * e quando termina ela se repinta com o que chegou.
+   */
+  const sincronizar = useCallback(
+    async (avisar: boolean) => {
+      setSincronizando(true);
+      try {
+        const resultado = await pedirSincronia();
+        if (!resultado.ok) {
+          if (avisar) toast.error(resultado.error);
+          return;
+        }
+        if (avisar) {
+          toast.success(
+            resultado.data.jaEmAndamento
+              ? "Já tem uma atualização em andamento."
+              : `${resultado.data.grupos ?? 0} grupos atualizados.`,
+          );
+        }
+        await carregarRef.current();
+      } finally {
+        setSincronizando(false);
+      }
+    },
+    [],
+  );
+
+  // O sync termina depois; quando terminar, recarrega o que a tela mostra
+  // AGORA — que pode não ser mais a gaveta nem a busca de quando ele começou.
+  const carregarRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    carregarRef.current = () => carregar(filtro, busca, offset, true);
+  }, [carregar, filtro, busca, offset]);
+
+  /**
+   * O que a lista JÁ mostra, para não refazer a consulta que o servidor fez.
+   *
+   * Guardar "já usei a página do servidor" num sinalizador que se apaga na
+   * primeira passada não funciona: o React remonta os efeitos, e a segunda
+   * passada encontrava o sinalizador apagado e recarregava tudo — a lista que
+   * tinha vindo pronta no HTML piscava para esqueleto por meio segundo
+   * (medido) antes de voltar igual. Guardar a CONSULTA em vez do sinalizador
+   * torna a decisão idempotente: mesma gaveta e mesma busca, nada a fazer.
+   */
+  const consultaNaTela = useRef<string | null>(inicial ? "all|" : null);
+
   useEffect(() => {
     if (!connected) return;
-    const timer = setTimeout(() => void carregar(filtro, busca, 0), busca ? 400 : 0);
+    const consulta = `${filtro}|${busca}`;
+    if (consultaNaTela.current === consulta) return;
+    const timer = setTimeout(() => {
+      consultaNaTela.current = consulta;
+      void carregar(filtro, busca, 0);
+    }, busca ? 400 : 0);
     return () => clearTimeout(timer);
   }, [busca, filtro, connected, carregar]);
+
+  /**
+   * Uma sincronização por abertura de tela, e só quando o retrato está velho.
+   * `null` é o caso de conta nova: nunca buscamos nada, então vale buscar.
+   */
+  const jaSincronizou = useRef(false);
+  useEffect(() => {
+    if (!connected || jaSincronizou.current || retratoIdade === undefined) return;
+    if (retratoIdade !== null && retratoIdade < RETRATO_VELHO_S) return;
+    // Fora do quadro atual de propósito: é trabalho de fundo, e começar dentro
+    // do efeito faria a tela renderizar de novo antes mesmo de ter aparecido.
+    // A marca fica DENTRO do disparo: marcá-la aqui fora fazia a remontagem
+    // dos efeitos cancelar o único agendamento e nunca mais fazer outro — a
+    // busca automática simplesmente não acontecia.
+    const id = window.setTimeout(() => {
+      jaSincronizou.current = true;
+      void sincronizar(false);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [connected, retratoIdade, sincronizar]);
 
   useEffect(() => {
     if (!connected) return;
@@ -292,9 +466,9 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
             <Button
               variant="ghost"
               size="sm"
-              title="Recarregar do WhatsApp"
-              loading={carregando}
-              onClick={() => carregar(filtro, busca, 0)}
+              title="Buscar no WhatsApp as conversas novas dos grupos"
+              loading={sincronizando || carregando}
+              onClick={() => void sincronizar(true)}
             >
               <RefreshCw aria-hidden />
             </Button>
@@ -367,7 +541,7 @@ export function GruposView({ connected, canManage }: { connected: boolean; canMa
           </ul>
         )}
 
-        {filtro === "all" && total > PAGE_SIZE ? (
+        {total > PAGE_SIZE ? (
           <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2">
             <Button
               variant="ghost"
@@ -452,6 +626,7 @@ function GroupRow({
   onOpen: () => void;
 }) {
   const classe = CLASSIFICACOES.find((c) => c.id === group.classification);
+  const IconePrevia = group.lastMessageKind ? ICONE_DA_PREVIA[group.lastMessageKind] : undefined;
 
   return (
     <button
@@ -490,10 +665,21 @@ function GroupRow({
           {group.participantCount > 0 ? (
             <span className="shrink-0 text-caption text-ink-tertiary tabular">{group.participantCount}</span>
           ) : null}
+          {IconePrevia ? <IconePrevia className="size-3.5 shrink-0 text-ink-tertiary" aria-hidden /> : null}
+          {/* A descrição do grupo já ocupou este lugar e enganava: texto fixo
+              parado onde todo mundo procura a última fala. Sem última mensagem
+              conhecida, o honesto é dizer que não há. */}
           <span className="min-w-0 flex-1 truncate text-caption text-ink-secondary">
-            {group.lastMessagePreview
-              ? `${group.lastMessageFromMe ? "Você: " : ""}${group.lastMessagePreview}`
-              : (group.description ?? "Sem mensagens por aqui")}
+            {group.lastMessagePreview ? (
+              <>
+                {group.lastMessageSender ? (
+                  <span className="text-ink-tertiary">{group.lastMessageSender}: </span>
+                ) : null}
+                {group.lastMessagePreview}
+              </>
+            ) : (
+              <span className="text-ink-tertiary">Sem mensagens recentes</span>
+            )}
           </span>
           {group.unreadCount > 0 ? (
             /* `text-[10px]` estava fora da escala do produto (o menor degrau é
@@ -550,6 +736,7 @@ function GroupWorkspace({
   const [conversationId, setConversationId] = useState<number | null>(group.conversationId);
   const [resumo, setResumo] = useState<string | null>(null);
   const [carregandoDetalhe, setCarregandoDetalhe] = useState(true);
+  const [carregandoConversa, setCarregandoConversa] = useState(true);
   const [agendadas, setAgendadas] = useState(0);
   const [resumindo, startResumindo] = useTransition();
   const [classificando, startClassificando] = useTransition();
@@ -561,24 +748,58 @@ function GroupWorkspace({
     setThread(conversa.data.messages as ThreadMessage[]);
   }, [group.jid]);
 
-  // O componente é remontado a cada grupo (key={jid}), então o estado já nasce
-  // carregando: mudar isso dentro do efeito seria render em cascata à toa.
+  /**
+   * O fio primeiro, a ficha do grupo depois — e cada um pinta quando chega.
+   *
+   * Os dois pedidos estavam num `Promise.all` com um `.then` só, e o navegador
+   * despacha server actions uma de cada vez: o fio, que sai do Postgres em
+   * ~300 ms, só aparecia quando o `/group/info` (2,1 s a 2,8 s medidos na
+   * uazapi) terminasse. Um grupo com 66 mensagens JÁ GRAVADAS ficava com o
+   * painel vazio dizendo "buscando no WhatsApp" enquanto a lista, ao lado,
+   * mostrava a última fala. Pedir o fio primeiro e tratar cada resposta na hora
+   * é o que faz o painel abrir com o que já é nosso.
+   *
+   * O componente é remontado a cada grupo (key={jid}), então o estado já nasce
+   * carregando: mudar isso dentro do efeito seria render em cascata à toa.
+   */
   useEffect(() => {
     let ativo = true;
-    void Promise.all([getGroupAction(group.jid), groupThreadAction(group.jid)]).then(([info, conversa]) => {
+    void groupThreadAction(group.jid).then((conversa) => {
       if (!ativo) return;
-      setCarregandoDetalhe(false);
-      if (info.ok) setDetalhe(info.data as GroupDetail);
-      else toast.error(info.error);
+      setCarregandoConversa(false);
       if (conversa.ok) {
         setConversationId(conversa.data.conversationId);
         setThread(conversa.data.messages as ThreadMessage[]);
       }
     });
+    void getGroupAction(group.jid).then((info) => {
+      if (!ativo) return;
+      setCarregandoDetalhe(false);
+      if (info.ok) setDetalhe(info.data as GroupDetail);
+      else toast.error(info.error);
+    });
     return () => {
       ativo = false;
     };
   }, [group.jid]);
+
+  /**
+   * Depois de pintar, busca no WhatsApp o que ainda não está aqui. Fora do
+   * quadro atual pelo mesmo motivo da lista: é trabalho de fundo, e o painel
+   * não pode esperar por ele para mostrar o que já tem.
+   */
+  useEffect(() => {
+    let ativo = true;
+    const id = window.setTimeout(() => {
+      void pedirSincronia(group.jid).then((r) => {
+        if (ativo && r.ok && (r.data.importadas ?? 0) > 0) void carregarThread();
+      });
+    }, 0);
+    return () => {
+      ativo = false;
+      window.clearTimeout(id);
+    };
+  }, [group.jid, carregarThread]);
 
   // O webhook avisa pelo mesmo canal autenticado do Inbox. A reconciliação a
   // cada 30 s cobre oscilações sem exigir qualquer mudança na instância.
@@ -750,6 +971,8 @@ function GroupWorkspace({
             jid={group.jid}
             conversationId={conversationId}
             messages={thread}
+            carregando={carregandoConversa}
+            ultimaConhecida={group}
             onSent={() => void carregarThread()}
           />
         ) : null}
@@ -785,11 +1008,16 @@ function GroupThread({
   jid,
   conversationId,
   messages,
+  carregando,
+  ultimaConhecida,
   onSent,
 }: {
   jid: string;
   conversationId: number | null;
   messages: ThreadMessage[];
+  carregando: boolean;
+  /** O que a lista já sabe do grupo, para o vazio não contradizer a linha. */
+  ultimaConhecida: Pick<GroupItem, "lastMessagePreview" | "lastMessageSender" | "lastMessageAt">;
   onSent: () => void;
 }) {
   const [texto, setTexto] = useState("");
@@ -829,7 +1057,23 @@ function GroupThread({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6">
-        {messages.length === 0 ? (
+        {messages.length === 0 && carregando ? (
+          <p className="mx-auto max-w-[560px] rounded-card bg-surface-sunken px-4 py-6 text-center text-caption text-ink-secondary">
+            Buscando no WhatsApp o que já foi dito aqui…
+          </p>
+        ) : messages.length === 0 && ultimaConhecida.lastMessagePreview ? (
+          /* A lista mostra a última fala e este painel dizia que nada tinha
+             chegado: duas telas contando histórias diferentes sobre o mesmo
+             grupo. O painel agora repete o que a lista sabe e explica a
+             diferença — a fala está no aparelho, ainda não no nosso acervo. */
+          <p className="mx-auto max-w-[560px] rounded-card bg-surface-sunken px-4 py-6 text-center text-caption text-ink-secondary">
+            No WhatsApp, a última mensagem daqui é
+            {ultimaConhecida.lastMessageSender ? ` de ${ultimaConhecida.lastMessageSender}` : ""}
+            {ultimaConhecida.lastMessageAt ? `, há ${tempoRelativo(ultimaConhecida.lastMessageAt)}` : ""}:{" "}
+            <span className="text-ink">“{ultimaConhecida.lastMessagePreview}”</span>. O histórico ainda está sendo
+            trazido do aparelho e aparece aqui assim que chegar.
+          </p>
+        ) : messages.length === 0 ? (
           <p className="mx-auto max-w-[560px] rounded-card bg-surface-sunken px-4 py-6 text-center text-caption text-ink-secondary">
             Nenhuma mensagem deste grupo chegou por aqui ainda. Elas aparecem conforme o grupo se movimenta.
           </p>

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { requireSession } from "@/server/auth";
 import {
+  LIMITE_DA_LISTA,
   countByTab,
   type InboxTab,
   listConversations,
@@ -35,8 +36,20 @@ export default async function InboxPage({
   // impressão de inbox vazio enquanto há gente esperando.
   const tab: InboxTab = requestedTab ?? (counts.meus === 0 && counts.fila > 0 ? "fila" : "meus");
 
+  /**
+   * A primeira lista já vem no escopo que o cliente vai usar.
+   *
+   * Meus, Fila e Todos são fatias das conversas ABERTAS: carregar as abertas
+   * uma vez deixa a troca de aba sem nenhuma ida ao servidor. Só "Finalizadas"
+   * (status diferente) e caixa acima do teto de linhas continuam vindo já
+   * recortadas — recortar um retrato parcial no cliente mentiria sobre quantas
+   * conversas cada aba tem.
+   */
+  const retratoCompleto = counts.todos <= LIMITE_DA_LISTA;
+  const escopo = tab !== "resolvidas" && retratoCompleto ? "abertas" : "aba";
+
   const [conversations, connection, assignees] = await Promise.all([
-    listConversations(ctx, { tab }),
+    listConversations(ctx, escopo === "abertas" ? { tab: "todos" } : { tab }),
     getConnection(ctx),
     listInboxAssignees(ctx),
   ]);
@@ -47,15 +60,35 @@ export default async function InboxPage({
   // O detalhe padrão existe para o desktop, onde os dois painéis convivem. No
   // celular a seleção começa vazia: a lista é a tela, e abrir uma conversa é
   // uma navegação com volta — sem isso a lista fica inalcançável.
-  const defaultId = selectedId ?? conversations[0]?.id ?? null;
-  const initialDetail = defaultId ? await loadConversationAction(defaultId) : null;
+  const visiveis =
+    escopo === "abertas"
+      ? conversations.filter((c) =>
+          tab === "meus" ? c.assignedUserId === ctx.userId : tab === "fila" ? c.assignedUserId == null : true,
+        )
+      : conversations;
+  const defaultId = selectedId ?? visiveis[0]?.id ?? null;
+  /**
+   * Marca lida só quando a conversa foi PEDIDA (`?conversa=`).
+   *
+   * A primeira da lista é escolha da tela, não da atendente — a mesma razão
+   * pela qual a troca de aba abre a primeira com `marcarLida: false`. E o preço
+   * de errar aqui subiu: o crachá agora é o maior entre o nosso não lido e o do
+   * aparelho, então abrir a página apagava um "27 esperando" que ninguém leu.
+   */
+  const initialDetail = defaultId
+    ? await loadConversationAction(defaultId, { markRead: selectedId != null })
+    : null;
 
   return (
     <InboxView
       conversations={conversations.map((c) => ({
         ...c,
         lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+        providerLastAt: c.providerLastAt?.toISOString() ?? null,
+        lastActivityAt: c.lastActivityAt?.toISOString() ?? null,
       }))}
+      initialScope={escopo}
+      retratoCompleto={retratoCompleto}
       counts={counts}
       initialDetail={initialDetail}
       // Sem detalhe não há o que abrir: repassar um id que o servidor não

@@ -18,6 +18,7 @@ import {
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { MEDIA_LABEL, textoVisivel } from "./previa";
 import { type InboxDetail, loadMediaAction } from "./actions";
 import { MessageActions } from "./message-actions";
 
@@ -43,31 +44,10 @@ export const MEDIA_ICON: Partial<Record<string, typeof ImageIcon>> = {
   contact: Contact,
 };
 
-/** Como a mensagem sem texto se anuncia — na bolha e na prévia da lista. */
-export const MEDIA_LABEL: Partial<Record<string, string>> = {
-  image: "Foto",
-  video: "Vídeo",
-  audio: "Mensagem de voz",
-  ptt: "Mensagem de voz",
-  document: "Documento",
-  sticker: "Figurinha",
-  location: "Localização",
-  contact: "Contato",
-  unsupported: "Mensagem não suportada",
-};
-
-/**
- * O corpo que a atendente deve ver.
- *
- * O ingestor grava `[áudio]`, `[imagem]` e afins como corpo das mensagens sem
- * texto — é marcador interno para busca e log, não frase. Imprimi-lo embaixo do
- * rótulo "Mensagem de voz" mostrava o encanamento do produto para quem só quer
- * atender.
- */
-export function textoVisivel(body: string | null | undefined): string {
-  const texto = (body ?? "").trim();
-  return /^\[[^\]]*\]$/.test(texto) ? "" : texto;
-}
+// Rótulo e limpeza do corpo moram em `previa.ts` — módulo sem React, para que
+// a regra da prévia da lista possa ser provada por teste. Aqui só se reexporta
+// o que a bolha e a lista já importavam deste arquivo.
+export { MEDIA_LABEL, textoVisivel } from "./previa";
 
 /** Tamanho estimado do menu de ações — o suficiente para decidir onde ele cabe. */
 const ALTURA_DO_MENU = 220;

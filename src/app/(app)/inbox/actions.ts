@@ -12,6 +12,8 @@ import { publishInboxEvent } from "@/server/services/inbox-events";
 import {
   type ConversationDetail,
   type InboxTab,
+  LIMITE_DA_LISTA,
+  clearProviderUnread,
   countByTab,
   getConversation,
   listConversations,
@@ -200,6 +202,9 @@ export async function loadConversationAction(
     const [detail] = await Promise.all([
       getConversation(ctx, conversationId),
       options.markRead !== false ? clearUnread(ctx.organizationId, conversationId) : null,
+      // O crachá da lista é o maior entre o nosso não lido e o do aparelho;
+      // sem zerar os dois, abrir a conversa apagava só metade do número.
+      options.markRead !== false ? clearProviderUnread(ctx.organizationId, conversationId) : null,
     ]);
     if (!detail) return null;
 
@@ -232,13 +237,34 @@ export async function loadConversationAction(
  * de atualizar em silêncio; no caminho da troca de aba, derruba a tela inteira.
  */
 export type InboxListResult =
-  | { ok: true; rows: SerializedConversation[]; counts: Awaited<ReturnType<typeof countByTab>> }
+  | {
+      ok: true;
+      /**
+       * "abertas" = TODAS as conversas abertas, sem filtro de aba: Meus, Fila e
+       * Todos são fatias deste mesmo conjunto e o cliente as recorta sozinho,
+       * sem voltar ao servidor. "aba" = a lista já veio recortada, porque a
+       * pergunta não cabia no retrato (busca, Finalizadas, ou caixa grande
+       * demais para o teto de linhas).
+       */
+      escopo: "abertas" | "aba";
+      rows: SerializedConversation[];
+      counts: Awaited<ReturnType<typeof countByTab>>;
+    }
   | { ok: false; error: string };
 
 type SerializedConversation = Omit<
   Awaited<ReturnType<typeof listConversations>>[number],
-  "lastMessageAt"
-> & { lastMessageAt: string | null };
+  "lastMessageAt" | "providerLastAt" | "lastActivityAt"
+> & { lastMessageAt: string | null; providerLastAt: string | null; lastActivityAt: string | null };
+
+function serializeRow(row: Awaited<ReturnType<typeof listConversations>>[number]): SerializedConversation {
+  return {
+    ...row,
+    lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
+    providerLastAt: row.providerLastAt?.toISOString() ?? null,
+    lastActivityAt: row.lastActivityAt?.toISOString() ?? null,
+  };
+}
 
 const listSchema = z.object({
   tab: z.enum(["meus", "fila", "todos", "resolvidas"]),
@@ -246,6 +272,21 @@ const listSchema = z.object({
   assignee: z.union([z.literal("all"), z.literal("unassigned"), idSchema]).optional(),
 });
 
+/**
+ * Uma consulta serve as três abas de conversa aberta.
+ *
+ * Meus, Fila e Todos são o MESMO conjunto — conversas abertas — recortado por
+ * quem é o dono. Perguntar de novo ao servidor a cada clique de aba é pagar
+ * uma viagem inteira para receber um subconjunto do que já estava na tela.
+ * Aqui o servidor devolve as abertas uma vez e o cliente recorta.
+ *
+ * Duas perguntas continuam sendo do servidor, porque não cabem no retrato:
+ * a busca (procura em toda a caixa, não nas 100 linhas carregadas) e
+ * "Finalizadas" (status diferente, conjunto disjunto). E uma terceira, rara:
+ * caixa com mais conversas abertas do que o teto de linhas — aí o retrato
+ * seria parcial e um recorte no cliente MENTIRIA sobre quantas há em cada aba,
+ * então cada aba volta a perguntar.
+ */
 export async function listConversationsAction(input: {
   tab: InboxTab;
   search?: string;
@@ -255,15 +296,19 @@ export async function listConversationsAction(input: {
     const ctx = await requireSession();
     requireRole(ctx, "staff");
     const data = listSchema.parse(input);
+    const daAba = Boolean(data.search) || data.tab === "resolvidas";
+
     const [rows, counts] = await Promise.all([
-      listConversations(ctx, data),
+      listConversations(ctx, daAba ? data : { tab: "todos" }),
       countByTab(ctx),
     ]);
-    return {
-      ok: true,
-      rows: rows.map((row) => ({ ...row, lastMessageAt: row.lastMessageAt?.toISOString() ?? null })),
-      counts,
-    };
+
+    if (!daAba && counts.todos > LIMITE_DA_LISTA) {
+      const recortadas = await listConversations(ctx, data);
+      return { ok: true, escopo: "aba", rows: recortadas.map(serializeRow), counts };
+    }
+
+    return { ok: true, escopo: daAba ? "aba" : "abertas", rows: rows.map(serializeRow), counts };
   } catch (error) {
     return { ok: false, error: mensagemDeErro(error, "Não foi possível atualizar a lista.") };
   }

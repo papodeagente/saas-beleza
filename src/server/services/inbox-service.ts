@@ -76,6 +76,24 @@ export type ConversationListItem = {
   /** Situação de entrega da última mensagem de saída. */
   lastMessageStatus: string | null;
   lastMessageTranscription: string | null;
+  /**
+   * Retrato do provedor: o que o aparelho sabe da última linha desta conversa.
+   *
+   * Entra como RESERVA, nunca por cima: a lista compara `providerLastAt` com a
+   * data da nossa última mensagem e só usa o retrato quando ele é mais novo.
+   * Sem isso, conversa cujo histórico nunca passou pelo nosso webhook aparecia
+   * vazia enquanto o telefone sabia a frase, quem falou e quantas faltavam ler.
+   */
+  providerPreview: string | null;
+  providerPreviewType: string | null;
+  providerLastAt: Date | null;
+  providerUnread: number | null;
+  /**
+   * A maior entre a data da nossa última mensagem e a do retrato. É por ela que
+   * a lista se ordena — ordenar só pela nossa jogava para o fim conversas que
+   * acabaram de falar no aparelho.
+   */
+  lastActivityAt: Date | null;
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
@@ -86,6 +104,16 @@ export type ConversationListItem = {
    */
   photoUrl: string | null;
 };
+
+/**
+ * Teto de linhas da lista.
+ *
+ * Exportado porque o Inbox carrega TODAS as conversas abertas de uma vez e
+ * fatia "Meus", "Fila" e "Todos" no cliente. Quem fatia precisa saber onde o
+ * retrato acaba: acima deste teto o subconjunto no cliente mentiria, e o
+ * caminho volta a ser uma consulta por aba.
+ */
+export const LIMITE_DA_LISTA = 100;
 
 function tabFilter(ctx: TenantContext, tab: InboxTab) {
   switch (tab) {
@@ -179,6 +207,19 @@ export async function listConversations(
       lastMessageType: lastMessage.messageType,
       lastMessageStatus: lastMessage.status,
       lastMessageTranscription: lastMessage.audioTranscription,
+      providerPreview: conversations.providerPreview,
+      providerPreviewType: conversations.providerPreviewType,
+      providerLastAt: conversations.providerLastAt,
+      providerUnread: conversations.providerUnread,
+      // `greatest` do Postgres IGNORA nulo (só devolve nulo se todos forem),
+      // que é exatamente o que se quer: conversa sem retrato mantém a nossa
+      // data, conversa sem mensagem nossa herda a do aparelho.
+      // `mapWith` não é enfeite: o drizzle desliga o conversor de data do
+      // driver e faz a conversão pela COLUNA. Uma expressão crua escapa disso e
+      // chega como texto — `lastActivityAt.toISOString()` explodia a página.
+      lastActivityAt: sql<Date | null>`greatest(${conversations.lastMessageAt}, ${conversations.providerLastAt})`.mapWith(
+        conversations.lastMessageAt,
+      ),
       assignedUserId: conversations.assignedUserId,
       assignedUserName: assignee.name,
       lastAssignedUserName: previous.name,
@@ -223,8 +264,10 @@ export async function listConversations(
           : undefined,
       ),
     )
-    .orderBy(desc(conversations.lastMessageAt))
-    .limit(100);
+    // Ordenar pela data EFETIVA. Pela nossa apenas, uma conversa cujo histórico
+    // só existe no aparelho caía para o fim da lista mesmo tendo falado agora.
+    .orderBy(sql`greatest(${conversations.lastMessageAt}, ${conversations.providerLastAt}) desc nulls last`)
+    .limit(LIMITE_DA_LISTA);
 
   return rows.map(({ remoteJid, temFoto, ...row }) => ({
     ...row,
@@ -247,6 +290,26 @@ export async function countByTab(ctx: TenantContext): Promise<InboxCounts> {
     .from(conversations)
     .where(and(eq(conversations.organizationId, ctx.organizationId), eq(conversations.isGroup, false)));
   return row ?? { meus: 0, fila: 0, todos: 0 };
+}
+
+/**
+ * Zera o não lido do RETRATO ao abrir a conversa.
+ *
+ * A lista mostra o maior entre o nosso não lido e o do aparelho — o nosso só
+ * conta o que passou pelo webhook, e nesta conta havia conversa com 27 no
+ * telefone e 6 aqui. Mas o retrato é uma fotografia periódica: sem esta
+ * escrita, abrir a conversa apagava só o nosso contador e o número do aparelho
+ * ressuscitava o crachá no primeiro refresh, até a próxima sincronização.
+ *
+ * Escrever aqui é honesto porque a abertura também manda a confirmação de
+ * leitura para o WhatsApp: o aparelho vai zerar de qualquer forma, e isto
+ * apenas antecipa o que a próxima fotografia confirmaria.
+ */
+export async function clearProviderUnread(organizationId: number, conversationId: number): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ providerUnread: 0 })
+    .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)));
 }
 
 export type ConversationMessage = {

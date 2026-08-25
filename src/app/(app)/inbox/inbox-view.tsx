@@ -34,7 +34,7 @@ import {
   Wallet,
 } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +58,7 @@ import {
   mesmoGrupo,
   textoVisivel,
 } from "./message-bubble";
+import { previaDaConversa } from "./previa";
 import {
   type InboxDetail,
   listConversationsAction,
@@ -86,6 +87,13 @@ type ConversationItem = {
   lastMessageType: string | null;
   lastMessageStatus: string | null;
   lastMessageTranscription: string | null;
+  /** O que o aparelho sabe desta conversa. Reserva, nunca verdade. */
+  providerPreview: string | null;
+  providerPreviewType: string | null;
+  providerLastAt: string | null;
+  providerUnread: number | null;
+  /** A maior entre a nossa data e a do aparelho — é ela que ordena a lista. */
+  lastActivityAt: string | null;
   assignedUserId: number | null;
   assignedUserName: string | null;
   lastAssignedUserName: string | null;
@@ -154,29 +162,44 @@ function horaDaLista(iso: string): string {
   return format(data, "dd/MM", { locale: ptBR });
 }
 
-/**
- * A frase da prévia na lista.
- *
- * Antes, mensagem sem corpo — foto, áudio, documento — deixava a linha vazia ou
- * mostrava o marcador interno `[áudio]`. Quem varre a fila fica sem saber se a
- * cliente mandou uma foto do resultado ou uma dúvida.
- */
-function previaDaConversa(conversation: ConversationItem): { texto: string; rotulo: string | null } {
-  const tipo = conversation.lastMessageType ?? "text";
-  const rotulo = MEDIA_LABEL[tipo] ?? null;
-  const corpo = textoVisivel(conversation.lastMessagePreview);
+/** Chave do retrato: as conversas abertas inteiras, antes de qualquer recorte. */
+const CHAVE_DAS_ABERTAS = "abertas";
 
-  if (tipo === "audio" || tipo === "ptt") {
-    // A transcrição é mais útil que o rótulo: diz o que foi pedido sem ouvir.
-    return { texto: conversation.lastMessageTranscription?.trim() || "Mensagem de voz", rotulo: "Mensagem de voz" };
-  }
-  if (corpo) return { texto: corpo, rotulo };
-  if (rotulo) return { texto: rotulo, rotulo };
-  return { texto: conversation.lastMessageAt ? "Mensagem" : "Sem mensagens", rotulo: null };
+/** Sempre o MESMO array vazio: um literal novo a cada render reaqueceria a lista. */
+const SEM_LINHAS: ConversationItem[] = [];
+
+/** Identidade de uma consulta que o servidor precisa responder recortada. */
+function chaveDaConsulta(tab: Tab, search: string, assignee: AssigneeFilter): string {
+  return `${tab}|${search}|${tab === "todos" ? assignee : "all"}`;
+}
+
+/**
+ * Meus, Fila e Todos a partir do MESMO conjunto.
+ *
+ * As três abas são conversas abertas recortadas por quem é o dono: "Meus" é o
+ * que está comigo, "Fila" o que não tem dono, "Todos" tudo. Recortar aqui é o
+ * que torna a troca de aba instantânea — antes cada clique refazia a consulta
+ * no servidor para receber um subconjunto do que já estava na tela.
+ */
+function fatiarAbertas(
+  abertas: ConversationItem[],
+  tab: Tab,
+  assignee: AssigneeFilter,
+  currentUserId: number,
+): ConversationItem[] {
+  const daAba = abertas.filter((c) =>
+    tab === "meus" ? c.assignedUserId === currentUserId : tab === "fila" ? c.assignedUserId == null : true,
+  );
+  if (tab !== "todos" || assignee === "all") return daAba;
+  if (assignee === "unassigned") return daAba.filter((c) => c.assignedUserId == null);
+  const userId = Number(assignee.slice("user:".length));
+  return daAba.filter((c) => c.assignedUserId === userId);
 }
 
 export function InboxView({
   conversations,
+  initialScope,
+  retratoCompleto,
   counts,
   initialDetail,
   initialSelectedId,
@@ -188,6 +211,14 @@ export function InboxView({
   canStartConversation,
 }: {
   conversations: ConversationItem[];
+  /** "abertas" = a lista veio inteira e as abas se recortam aqui; "aba" = já veio recortada. */
+  initialScope: "abertas" | "aba";
+  /**
+   * A caixa cabe no teto de linhas. Vem separado do escopo porque abrir direto
+   * em "Finalizadas" também devolve escopo "aba" — e isso não diz nada sobre o
+   * tamanho da caixa de conversas abertas.
+   */
+  retratoCompleto: boolean;
   counts: { meus: number; fila: number; todos: number };
   initialDetail: InboxDetail | null;
   initialSelectedId: number | null;
@@ -204,7 +235,25 @@ export function InboxView({
   const [termo, setTermo] = useState("");
   /** O que já virou consulta — atrasado em 300 ms para não pedir por tecla. */
   const [search, setSearch] = useState("");
-  const [list, setList] = useState<ConversationItem[]>(conversations);
+  /**
+   * O que o servidor devolveu, guardado por consulta.
+   *
+   * A chave "abertas" guarda TODAS as conversas abertas de uma vez: Meus, Fila
+   * e Todos são fatias dela e a troca entre as três não custa nenhuma ida ao
+   * servidor. As outras chaves são as perguntas que o retrato não responde —
+   * a busca (que procura a caixa inteira, não as 100 linhas carregadas) e
+   * Finalizadas (status disjunto) — e ficam guardadas como cache: voltar para
+   * Finalizadas pinta na hora e revalida por baixo.
+   */
+  const [listas, setListas] = useState<Record<string, ConversationItem[]>>(() => ({
+    [initialScope === "abertas" ? CHAVE_DAS_ABERTAS : chaveDaConsulta(initialTab, "", "all")]: conversations,
+  }));
+  /**
+   * Falso quando há mais conversas abertas do que o teto de linhas da lista.
+   * Aí o retrato é parcial e fatiar aqui MENTIRIA sobre o tamanho de cada aba:
+   * o servidor volta a responder aba por aba, como antes.
+   */
+  const [retratoServe, setRetratoServe] = useState(retratoCompleto);
   const [tabCounts, setTabCounts] = useState(counts);
   /** Na visão Todos, permite acompanhar uma pessoa sem criar outra aba. */
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
@@ -254,7 +303,8 @@ export function InboxView({
   const [, startSwitching] = useTransition();
   const [acting, startActing] = useTransition();
   const threadRef = useRef<HTMLDivElement>(null);
-  const listReqRef = useRef(0);
+  /** Uma sequência POR consulta: respostas de perguntas diferentes não se anulam. */
+  const listReqRef = useRef<Record<string, number>>({});
   const requestRef = useRef<number | null>(null);
   /** Botão de descer + contador do que chegou enquanto se lia o histórico. */
   const [longeDoFim, setLongeDoFim] = useState(false);
@@ -262,6 +312,39 @@ export function InboxView({
   const pertoDoFimRef = useRef(true);
   const conversaRolada = useRef<number | null>(null);
   const totalRenderizado = useRef(0);
+
+  /**
+   * O que a lista mostraria para uma pergunta — ou nulo, se ainda não sabemos.
+   *
+   * Uma função só, usada tanto para pintar quanto para decidir, na hora do
+   * clique, se a aba pedida já tem resposta na memória. Busca e Finalizadas vão
+   * ao servidor; as três abas de conversa aberta saem do retrato — zero
+   * requisição, zero espera.
+   */
+  /** Sob qual chave a resposta desta pergunta é guardada. */
+  const chaveGuardada = useCallback(
+    (proxTab: Tab, term: string, proxAssignee: AssigneeFilter): string =>
+      retratoServe && !term && proxTab !== "resolvidas"
+        ? CHAVE_DAS_ABERTAS
+        : chaveDaConsulta(proxTab, term, proxAssignee),
+    [retratoServe],
+  );
+  const linhasPara = useCallback(
+    (proxTab: Tab, term: string, proxAssignee: AssigneeFilter): ConversationItem[] | null => {
+      const chave = chaveGuardada(proxTab, term, proxAssignee);
+      const linhas = listas[chave];
+      if (linhas == null) return null;
+      return chave === CHAVE_DAS_ABERTAS ? fatiarAbertas(linhas, proxTab, proxAssignee, currentUserId) : linhas;
+    },
+    [listas, chaveGuardada, currentUserId],
+  );
+  const listaOuNulo = useMemo(
+    () => linhasPara(tab, search, assigneeFilter),
+    [linhasPara, tab, search, assigneeFilter],
+  );
+  /** Nada guardado para esta pergunta: a resposta ainda está a caminho. */
+  const listaCarregando = listaOuNulo === null;
+  const list = listaOuNulo ?? SEM_LINHAS;
 
   const activeId = selectedId ?? initialDetail?.conversationId ?? null;
   const detail = activeId == null ? null : (cache[activeId] ?? null);
@@ -373,39 +456,59 @@ export function InboxView({
   }
 
   /**
-   * Recarrega a lista.
+   * Pergunta a lista ao servidor e guarda a resposta na chave certa.
    *
    * A guarda de sequência não é preciosismo: sem ela, a resposta de uma
    * requisição antiga chegando depois de uma nova reescreve a lista com o
    * filtro errado. Foi reproduzido — clicar numa aba logo após a varredura
    * disparar deixava as conversas da aba anterior na tela por dez segundos, e
-   * clicar numa delas abria conversa que não pertencia ao filtro.
+   * clicar numa delas abria conversa que não pertencia ao filtro. A sequência é
+   * POR consulta: uma busca e uma revalidação do retrato correm juntas sem uma
+   * cancelar a outra, senão a chave da perdedora ficava eternamente vazia e a
+   * lista pulsava para sempre.
    */
-  const refreshList = useCallback(
+  const carregarLista = useCallback(
     async (
       nextTab: Tab,
       term: string,
-      nextAssignee: AssigneeFilter = assigneeFilter,
+      nextAssignee: AssigneeFilter,
     ): Promise<ConversationItem[] | null> => {
-      const meu = (listReqRef.current += 1);
+      const pedido = chaveDaConsulta(nextTab, term, nextAssignee);
+      const meu = (listReqRef.current[pedido] = (listReqRef.current[pedido] ?? 0) + 1);
       const resultado = await listConversationsAction({
         tab: nextTab,
         search: term || undefined,
         assignee: nextTab === "todos" ? assigneeFromFilter(nextAssignee) : "all",
       });
-      if (listReqRef.current !== meu) return null;
+      if (listReqRef.current[pedido] !== meu) return null;
       if (!resultado.ok) {
         toast.error(resultado.error);
         return null;
       }
       const linhas = resultado.rows as ConversationItem[];
-      setList(linhas);
+      // Busca e Finalizadas SEMPRE voltam recortadas; deixá-las decidir se o
+      // retrato serve derrubaria o caminho rápido das outras abas só porque
+      // alguém digitou uma letra na busca.
+      if (!term && nextTab !== "resolvidas") setRetratoServe(resultado.escopo === "abertas");
+      const chave = resultado.escopo === "abertas" ? CHAVE_DAS_ABERTAS : pedido;
+      setListas((prev) => {
+        // Termo de busca velho não vale cache: só a consulta em curso e as que
+        // não dependem do que está digitado sobrevivem.
+        const guardadas = Object.fromEntries(
+          Object.entries(prev).filter(([k]) => k === CHAVE_DAS_ABERTAS || k.split("|")[1] === ""),
+        );
+        return { ...guardadas, [chave]: linhas };
+      });
       // Os contadores viajam junto: antes eles vinham só no carregamento da
       // página e "Fila 3" continuava 3 enquanto chegavam mais dez.
       setTabCounts(resultado.counts);
-      return linhas;
+      // Devolve o que a ABA pediu, já recortado: quem chamou quer saber o que
+      // vai aparecer, não o conjunto inteiro de onde isso saiu.
+      return resultado.escopo === "abertas"
+        ? fatiarAbertas(linhas, nextTab, nextAssignee, currentUserId)
+        : linhas;
     },
-    [assigneeFilter],
+    [currentUserId],
   );
 
   const lastProviderSyncRef = useRef<{ conversationId: number; at: number } | null>(null);
@@ -422,17 +525,26 @@ export function InboxView({
    */
   const tabRef = useRef(tab);
   const searchRef = useRef(search);
+  const assigneeRef = useRef(assigneeFilter);
   const activeIdRef = useRef(activeId);
-  const refreshListRef = useRef(refreshList);
   const guardarConversaRef = useRef(guardarConversa);
   const cacheRef = useRef(cache);
+
+  /** Recarrega a consulta que está na tela — a única que interessa agora. */
+  const revalidar = useCallback(
+    () => carregarLista(tabRef.current, searchRef.current, assigneeRef.current),
+    [carregarLista],
+  );
+  const revalidarRef = useRef(revalidar);
+
   useEffect(() => {
     tabRef.current = tab;
     searchRef.current = search;
+    assigneeRef.current = assigneeFilter;
     activeIdRef.current = activeId;
-    refreshListRef.current = refreshList;
     guardarConversaRef.current = guardarConversa;
     cacheRef.current = cache;
+    revalidarRef.current = revalidar;
   });
 
   // O webhook publica no Redis e este canal autenticado avisa a tela assim que
@@ -459,7 +571,7 @@ export function InboxView({
           const loaded = await loadConversationAction(ativa, { markRead: false });
           if (loaded && activeIdRef.current === ativa) guardarConversaRef.current(ativa, loaded);
         }
-        await refreshListRef.current(tabRef.current, searchRef.current);
+        await revalidarRef.current();
         if (Date.now() - lastRecentSyncRef.current >= FALLBACK_POLL_MS) {
           lastRecentSyncRef.current = Date.now();
           await syncRecentInboxAction();
@@ -490,7 +602,7 @@ export function InboxView({
         alvo = undefined;
       }
       if (alvo != null && activeIdRef.current != null && alvo !== activeIdRef.current) {
-        void refreshListRef.current(tabRef.current, searchRef.current);
+        void revalidarRef.current();
         return;
       }
       void sync();
@@ -523,6 +635,7 @@ export function InboxView({
    * banco por letra digitada.
    */
   const montou = useRef(false);
+  const termoAplicado = useRef("");
   useEffect(() => {
     if (!montou.current) {
       // A primeira lista já veio renderizada pelo servidor; repetir a consulta
@@ -530,52 +643,77 @@ export function InboxView({
       montou.current = true;
       return;
     }
-    const timer = setTimeout(() => setSearch(termo), 300);
+    // O efeito também acorda quando a aba muda (a consulta depende dela), e aí
+    // o termo continua o mesmo: sem esta guarda, trocar de aba disparava a
+    // consulta DUAS vezes — uma pelo botão, outra por este temporizador.
+    if (termoAplicado.current === termo) return;
+    const timer = setTimeout(() => {
+      termoAplicado.current = termo;
+      setSearch(termo);
+      // A busca procura a caixa inteira, não as 100 linhas carregadas: é
+      // pergunta de servidor. Disparar daqui, e não de um efeito sobre
+      // `search`, evita o quadro extra de renderização entre uma coisa e outra.
+      if (linhasPara(tab, termo, assigneeFilter) == null) void carregarLista(tab, termo, assigneeFilter);
+    }, 300);
     return () => clearTimeout(timer);
-  }, [termo]);
+  }, [termo, tab, assigneeFilter, linhasPara, carregarLista]);
 
-  // A comparação com o termo já aplicado é o que impede a troca de aba de
-  // consultar duas vezes: `changeTab` já recarrega, e este efeito só reage a
-  // uma busca de fato nova.
-  const buscaAplicada = useRef(search);
-  useEffect(() => {
-    if (buscaAplicada.current === search) return;
-    buscaAplicada.current = search;
-    void refreshList(tab, search);
-  }, [search, tab, refreshList]);
+  /**
+   * Trocar de aba é só trocar de recorte.
+   *
+   * A lista pinta no mesmo quadro: as três abas de conversa aberta saem do
+   * retrato que já está na memória, sem nenhuma ida ao servidor. Só quando a
+   * pergunta não cabe no retrato (Finalizadas, busca, caixa grande) é que há
+   * uma consulta — e mesmo aí ela não bloqueia nada além da própria lista.
+   *
+   * Abrir a primeira conversa acontece DEPOIS, e nunca antes: era o segundo
+   * elo da corrente que a atendente esperava para ver a aba trocar.
+   */
+  function trocarPergunta(next: Tab, proxAssignee: AssigneeFilter) {
+    const prontas = linhasPara(next, search, proxAssignee);
+    if (prontas) {
+      abrirPrimeiraDaAba(prontas);
+      // Pintou do que estava guardado. Se a resposta guardada NÃO é a que a
+      // varredura de 30s vinha atualizando — voltar de "Finalizadas" para as
+      // abertas, por exemplo —, ela é de quando a atendente saiu dali e pode
+      // estar velha ao lado de um crachá recém-atualizado. Revalida por baixo,
+      // sem segurar a pintura. Entre Meus, Fila e Todos a chave é a MESMA, e aí
+      // continua sendo zero requisição.
+      if (chaveGuardada(next, search, proxAssignee) !== chaveGuardada(tab, search, assigneeFilter)) {
+        void carregarLista(next, search, proxAssignee).catch(() => undefined);
+      }
+      return;
+    }
+    const pedido = chaveDaConsulta(next, search, proxAssignee);
+    void carregarLista(next, search, proxAssignee)
+      .then((linhas) => {
+        // A resposta pode chegar depois de outro clique. A guarda de sequência
+        // do `carregarLista` é POR consulta e não cobre isto: a resposta de
+        // "Finalizadas" continua válida como lista, mas abrir a primeira dela
+        // enquanto a tela já mostra "Meus" põe no painel uma conversa que não
+        // está — nem pode estar — na lista ao lado. Reproduzido clicando
+        // "Finalizadas" e "Meus" em seguida: a aba dizia Meus, a URL apontava
+        // para uma conversa finalizada e nenhuma linha ficava marcada.
+        if (chaveDaConsulta(tabRef.current, searchRef.current, assigneeRef.current) !== pedido) return;
+        if (linhas) abrirPrimeiraDaAba(linhas);
+      })
+      // Segundo plano de verdade: rede caída aqui virava rejeição não tratada.
+      .catch(() => undefined);
+  }
 
   function changeTab(next: Tab) {
     setTab(next);
-    startSwitching(async () => {
-      const linhas = await refreshList(next, search);
-      if (!linhas || !doisPaineis) return;
-      // No desktop os dois painéis convivem: sem isto, trocar de aba deixava
-      // metade da tela em "Escolha uma conversa" mesmo com a lista cheia.
-      if (linhas.length === 0) {
-        setSelectedId(null);
-        syncUrl(null);
-        return;
-      }
-      // `marcarLida: false` porque ninguém escolheu esta conversa — a aba
-      // escolheu por ela. Marcar lida aqui apagava o não lido da primeira da
-      // Fila só porque alguém clicou na aba, e o número da Fila é justamente
-      // como a clínica sabe o que ainda está esperando resposta.
-      if (!linhas.some((c) => c.id === activeId)) open(linhas[0].id, { marcarLida: false });
-    });
+    // A ref anda junto com o estado, e não só no efeito pós-render: quem
+    // responder daqui a meio segundo precisa saber AGORA qual é a pergunta na
+    // tela, senão a comparação acima compararia com a aba anterior.
+    tabRef.current = next;
+    trocarPergunta(next, assigneeFilter);
   }
 
   function changeAssignee(next: AssigneeFilter) {
     setAssigneeFilter(next);
-    startSwitching(async () => {
-      const linhas = await refreshList("todos", search, next);
-      if (!linhas || !doisPaineis) return;
-      if (linhas.length === 0) {
-        setSelectedId(null);
-        syncUrl(null);
-      } else if (!linhas.some((conversation) => conversation.id === activeId)) {
-        open(linhas[0].id, { marcarLida: false });
-      }
-    });
+    assigneeRef.current = next;
+    trocarPergunta("todos", next);
   }
 
   function syncUrl(id: number | null) {
@@ -662,8 +800,16 @@ export function InboxView({
     // tela e sobreviveria à troca, fazendo a mensagem sair citando a fala de
     // outra cliente.
     setReply(null);
-    // Abrir zera o não lido; refletir na hora evita o contador fantasma.
-    if (marcarLida) setList((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
+    // Abrir zera o não lido; refletir na hora evita o contador fantasma. Zera
+    // os DOIS contadores porque o crachá mostra o maior deles — apagar só o
+    // nosso deixava o número do aparelho na tela de uma conversa já aberta.
+    if (marcarLida) {
+      setListas((prev) => {
+        const zerado = (c: ConversationItem) =>
+          c.id === id ? { ...c, unreadCount: 0, providerUnread: 0 } : c;
+        return Object.fromEntries(Object.entries(prev).map(([chave, linhas]) => [chave, linhas.map(zerado)]));
+      });
+    }
     requestRef.current = id;
     const jaAquecida = Boolean(cacheRef.current[id]);
     startSwitching(async () => {
@@ -682,13 +828,49 @@ export function InboxView({
         syncUrl(null);
       }
     });
-    sincronizarHistoricoEmFundo(id);
+    /**
+     * Reconciliar com a uazapi é viagem à rede externa, e as server actions
+     * saem do cliente numa fila ÚNICA e sequencial: enfileirá-la aqui atrasa
+     * TUDO que vier depois — medido, uma troca para "Finalizadas" logo em
+     * seguida ficava segundos parada esperando esta chamada terminar.
+     *
+     * Só quem a atendente abriu de propósito paga isso. Conversa escolhida
+     * pela aba (marcarLida: false) não: a varredura de 30 s reconcilia a
+     * conversa aberta de qualquer forma.
+     */
+    if (marcarLida) sincronizarHistoricoEmFundo(id);
+  }
+
+  /**
+   * A conversa que a aba escolhe quando a atendente não escolheu nenhuma.
+   *
+   * No desktop os dois painéis convivem, e sem isto trocar de aba deixava
+   * metade da tela em "Escolha uma conversa" com a lista cheia ao lado. Só
+   * roda a partir de uma troca de aba ou de responsável — nunca a partir de
+   * uma varredura periódica: uma conversa que saísse da aba porque outra
+   * pessoa a assumiu faria a tela pular sozinha no meio de uma leitura.
+   *
+   * `marcarLida: false` porque ninguém escolheu esta conversa — a aba escolheu
+   * por ela. Marcar lida aqui apagava o não lido da primeira da Fila só porque
+   * alguém clicou na aba, e esse número é como a clínica sabe quem espera.
+   */
+  function abrirPrimeiraDaAba(linhas: ConversationItem[]) {
+    // No celular a lista É a tela: abrir por conta própria tiraria a atendente
+    // de onde ela está.
+    if (!doisPaineis) return;
+    if (linhas.length === 0) {
+      setSelectedId(null);
+      syncUrl(null);
+      return;
+    }
+    if (linhas.some((c) => c.id === activeIdRef.current)) return;
+    open(linhas[0].id, { marcarLida: false });
   }
 
   async function reload(conversationId: number) {
     const loaded = await loadConversationAction(conversationId);
     if (loaded) guardarConversa(conversationId, loaded);
-    await refreshList(tab, search);
+    await revalidar();
   }
 
   function deliver(rascunho: Draft) {
@@ -754,7 +936,7 @@ export function InboxView({
         const loaded = await loadConversationAction(conversationId, { markRead: false });
         if (loaded) guardarConversa(conversationId, loaded);
       }
-      await refreshList(tab, search);
+      await revalidar();
 
       const targetName = assignees.find((person) => person.userId === targetUserId)?.name;
       toast.success(
@@ -850,9 +1032,15 @@ export function InboxView({
               className="w-full justify-center"
               disabled={!whatsappConnected}
               onStarted={(conversationId: number) => {
+                // A conversa recém-criada É a escolha: `open` acontece aqui e
+                // a lista chega depois, sem ninguém trocar a conversa por baixo
+                // — a abertura automática só age em troca de aba.
                 setTab("meus");
+                setTermo("");
+                setSearch("");
+                setAssigneeFilter("all");
                 open(conversationId);
-                void refreshList("meus", "");
+                void carregarLista("meus", "", "all");
               }}
             />
           ) : null}
@@ -944,11 +1132,16 @@ export function InboxView({
 
         {list.length === 0 ? (
           <p className="px-4 py-8 text-center text-caption text-ink-secondary">
-            {tab === "fila"
-              ? "Nenhuma conversa esperando atendimento."
-              : tab === "meus"
-                ? "Você não tem conversas atribuídas."
-                : "Nenhuma conversa aqui."}
+            {/* Lista vazia e lista a caminho são coisas diferentes: dizer
+                "nenhuma conversa" enquanto a resposta viaja faz a atendente
+                acreditar numa fila vazia que não está vazia. */}
+            {listaCarregando
+              ? "Carregando conversas…"
+              : tab === "fila"
+                ? "Nenhuma conversa esperando atendimento."
+                : tab === "meus"
+                  ? "Você não tem conversas atribuídas."
+                  : "Nenhuma conversa aqui."}
           </p>
         ) : (
           <ul>
@@ -1570,10 +1763,21 @@ function ConversationRow({
   pending: boolean;
   onAssignment: (action: AssignmentAction, targetUserId?: number) => void;
 }) {
-  const naoLidas = conversation.unreadCount;
+  /**
+   * Não lidas: o MAIOR entre o nosso contador e o do aparelho.
+   *
+   * O nosso só conta o que passou pelo webhook — nesta conta havia conversa com
+   * 27 esperando no telefone e 6 aqui, porque nada anterior à conexão chegou
+   * por aqui. O do aparelho, por sua vez, não sabe do que já foi lido só nesta
+   * tela. Nenhum dos dois inventa mensagem, então o maior é o único que nunca
+   * esconde alguém esperando resposta; abrir a conversa zera os dois, e por
+   * isso o crachá não ressuscita pelo retrato velho no refresh seguinte.
+   */
+  const naoLidas = Math.max(conversation.unreadCount, conversation.providerUnread ?? 0);
   const previa = previaDaConversa(conversation);
-  const daCasa = !conversation.lastMessageInbound;
-  const PreviaIcon = MEDIA_ICON[conversation.lastMessageType ?? "text"];
+  const daCasa = previa.daCasa;
+  const PreviaIcon = MEDIA_ICON[previa.tipo];
+  const quando = conversation.lastActivityAt;
 
   /**
    * Pousar de verdade, não atravessar: o mouse a caminho de outra linha
@@ -1642,9 +1846,9 @@ function ConversationRow({
             <span className={cn("truncate text-label text-ink", naoLidas > 0 && "font-semibold")}>
               {conversation.customerName}
             </span>
-            {conversation.lastMessageAt ? (
+            {quando ? (
               <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-                {horaDaLista(conversation.lastMessageAt)}
+                {horaDaLista(quando)}
               </span>
             ) : null}
           </span>
@@ -1653,7 +1857,7 @@ function ConversationRow({
             {/* O tique é o de verdade, com o status da última mensagem. Antes era
               um <Check> cinza fixo: uma mensagem que FALHOU ficava idêntica a
               uma entregue, e ninguém reenviava porque nada dizia que precisava. */}
-            {daCasa && conversation.lastMessageAt ? (
+            {daCasa ? (
               <span className="flex shrink-0 items-center text-ink-tertiary">
                 <DeliveryTick status={conversation.lastMessageStatus ?? "sent"} />
               </span>
@@ -1665,7 +1869,7 @@ function ConversationRow({
                 naoLidas > 0 ? "text-ink" : "text-ink-secondary",
               )}
             >
-              {daCasa && conversation.lastMessageAt ? <span className="text-ink-tertiary">Você: </span> : null}
+              {daCasa ? <span className="text-ink-tertiary">Você: </span> : null}
               {previa.texto}
             </span>
             {naoLidas > 0 ? (
