@@ -14,6 +14,7 @@ import {
   forgetGroup,
   getGroupThread,
   listGroupInbox,
+  nomearParticipantes,
   rememberGroupSize,
   toggleGroupPinned,
   type GroupInboxPage,
@@ -104,7 +105,10 @@ export async function getGroupAction(groupJid: unknown): Promise<GroupResult<Gro
     const group = await getGroup(await credentials(), jid, { inviteLink: true, pendingRequests: true });
     // A lista rápida não sabe o tamanho do grupo; aqui ele é conhecido.
     await rememberGroupSize(ctx, jid, group.participantCount);
-    return { ok: true, data: group };
+    // O provedor devolve todo participante sem nome: quem sabe quem é essa
+    // gente somos nós, pela ficha da clínica e por quem já falou nos grupos.
+    const participants = await nomearParticipantes(ctx.organizationId, group.participants);
+    return { ok: true, data: { ...group, participants } };
   } catch (error) {
     console.error(error);
     return { ok: false, error: describe(error) };

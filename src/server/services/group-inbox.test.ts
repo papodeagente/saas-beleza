@@ -1,3 +1,4 @@
+import { generateAccountCode } from "@/lib/account-code";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import {
   listGroupInbox,
   montarPrevia,
   montarPreviaLocal,
+  nomearParticipantes,
 } from "./group-inbox-service";
 
 /**
@@ -171,6 +173,7 @@ afterAll(async () => {
   await db.delete(s.whatsappGroups).where(eq(s.whatsappGroups.organizationId, organizationId));
   await db.delete(s.whatsappIdentities).where(eq(s.whatsappIdentities.organizationId, organizationId));
   await db.delete(s.whatsappConnections).where(eq(s.whatsappConnections.id, connectionId));
+  await db.delete(s.customers).where(eq(s.customers.organizationId, organizationId));
   await db.delete(s.organizations).where(eq(s.organizations.id, organizationId));
   await pool.end();
 });
@@ -318,5 +321,83 @@ describe("fio do grupo", () => {
     // Ordem cronológica de verdade: junho antes da fala de 45 minutos atrás.
     expect(corpos).toEqual(["isto foi dito em junho", "a mais recente"]);
     expect(fio.messages[0].createdAt.toISOString()).toBe("2026-06-08T14:19:58.000Z");
+  });
+});
+
+/**
+ * Nome de participante.
+ *
+ * O `/group/info` devolve `DisplayName` vazio para todo mundo — no aplicativo
+ * os nomes saem da agenda do aparelho, que não é nossa. Sem isto a aba Membros
+ * era uma coluna de telefones.
+ */
+describe("nomes dos membros do grupo", () => {
+  const FONE_CLIENTE = "5584911112222";
+  const FONE_CONHECIDO = "5584933334444";
+  const LID = "999888777@lid";
+
+  beforeAll(async () => {
+    await db.insert(s.customers).values({
+      organizationId,
+      name: "Dona Marlene",
+      phone: FONE_CLIENTE,
+    });
+    await db.insert(s.whatsappIdentities).values([
+      { organizationId, jid: `${FONE_CLIENTE}@s.whatsapp.net`, phone: FONE_CLIENTE, name: "marlene 💅" },
+      { organizationId, jid: `${FONE_CONHECIDO}@s.whatsapp.net`, phone: FONE_CONHECIDO, name: "Seu Zé" },
+      { organizationId, jid: LID, phone: null, name: "Tia Neide" },
+    ]);
+  });
+
+  it("usa a ficha da clínica na frente do nome do WhatsApp", async () => {
+    // As duas fontes conhecem esse telefone. Vence o nome que a atendente
+    // escreveu na ficha: é assim que ela chama a pessoa.
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: `${FONE_CLIENTE}@s.whatsapp.net`, phone: FONE_CLIENTE, displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBe("Dona Marlene");
+  });
+
+  it("cai no nome do WhatsApp quando não é cliente da casa", async () => {
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: `${FONE_CONHECIDO}@s.whatsapp.net`, phone: FONE_CONHECIDO, displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBe("Seu Zé");
+  });
+
+  it("reconhece quem só aparece por identificador interno", async () => {
+    // Em grupo o WhatsApp assina com `@lid`, sem telefone nenhum.
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: LID, phone: null, displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBe("Tia Neide");
+  });
+
+  it("deixa quem não conhecemos sem nome, para a tela mostrar o telefone", async () => {
+    // Nunca inventar: sem nome a tela imprime o telefone formatado, jamais o
+    // identificador interno.
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: "111222333@lid", phone: "5584955556666", displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBeNull();
+  });
+
+  it("não toca em quem já veio com nome do provedor", async () => {
+    const [pessoa] = await nomearParticipantes(organizationId, [
+      { jid: `${FONE_CLIENTE}@s.whatsapp.net`, phone: FONE_CLIENTE, displayName: "Nome do aparelho", isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBe("Nome do aparelho");
+  });
+
+  it("não vaza nome de outra conta", async () => {
+    const vizinha = await db
+      .insert(s.organizations)
+      .values({ publicId: generateAccountCode(), name: `Vizinha ${SUFFIX}`, slug: `vizinha-${SUFFIX}` })
+      .returning({ id: s.organizations.id });
+    const [pessoa] = await nomearParticipantes(vizinha[0].id, [
+      { jid: `${FONE_CLIENTE}@s.whatsapp.net`, phone: FONE_CLIENTE, displayName: null, isAdmin: false, isSuperAdmin: false },
+    ]);
+    expect(pessoa.displayName).toBeNull();
+    await db.delete(s.organizations).where(eq(s.organizations.id, vizinha[0].id));
   });
 });

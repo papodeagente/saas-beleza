@@ -17,7 +17,7 @@ import { syncProviderChats } from "@/server/services/provider-chat-sync";
 import { getRedis } from "@/server/queues/redis";
 import { digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
 import { findChats, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
-import { listGroups, type Group } from "@/server/whatsapp/uazapi-groups";
+import { listGroups, type Group, type GroupParticipant } from "@/server/whatsapp/uazapi-groups";
 
 /**
  * Caixa de entrada de grupos.
@@ -525,9 +525,11 @@ async function upsertGroupSnapshots(
         // A classificação é decisão da clínica e nunca é sobrescrita pela sincronia.
         name: sql`excluded.name`,
         description: sql`excluded.description`,
-        // A listagem rápida devolve zero participantes; nesse caso o número que
-        // já estava guardado vale mais do que sobrescrever com zero.
-        participantCount: sql`greatest(excluded.participant_count, ${whatsappGroups.participantCount})`,
+        // Zero significa "não perguntei", não "grupo vazio" — aí o número
+        // guardado vale mais. Mas quando a contagem vem de verdade ela MANDA,
+        // inclusive para baixo: com `greatest`, um grupo que encolheu ficaria
+        // preso no tamanho antigo para sempre.
+        participantCount: sql`case when excluded.participant_count > 0 then excluded.participant_count else ${whatsappGroups.participantCount} end`,
         lastSyncedAt: sql`excluded.last_synced_at`,
         updatedAt: new Date(),
       },
@@ -632,7 +634,17 @@ export async function syncGroupsFromProvider(ctx: TenantContext): Promise<GroupS
     : "OK";
   if (claimed !== "OK") return { grupos: 0, retratos: 0, nomes: 0, jaEmAndamento: true };
 
-  const roster = await listGroups(creds, { limit: ROSTER_LIMIT, offset: 0, withParticipants: false });
+  /**
+   * A lista vem COM participantes.
+   *
+   * Sem eles o provedor devolve zero para todo mundo, e o tamanho do grupo só
+   * era descoberto quando alguém abria aquele grupo: 261 dos 298 apareciam sem
+   * membro nenhum na conta do dono — a informação que a tela mais promete e
+   * menos entregava. Medido no acervo real: 1,7s e 311 KB sem participantes,
+   * 5,9s e 2,9 MB com eles, e aí os 298 vêm completos. São segundos de trabalho
+   * de FUNDO, numa rota própria, longe da fila de cliques.
+   */
+  const roster = await listGroups(creds, { limit: ROSTER_LIMIT, offset: 0, withParticipants: true });
   await upsertGroupSnapshots(ctx.organizationId, connection.id, roster.groups);
 
   /**
@@ -815,3 +827,63 @@ export async function getGroupThread(
   return { conversationId, messages: comHoraReal.reverse() };
 }
 
+
+/**
+ * Põe nome em quem o WhatsApp entrega como número.
+ *
+ * O `/group/info` devolve `DisplayName` vazio para TODO participante — no
+ * aplicativo os nomes vêm da agenda do aparelho, que não é nossa. A lista de
+ * membros virava uma coluna de telefones, inútil para reconhecer alguém.
+ *
+ * Duas fontes, nesta ordem: a ficha da própria clínica (é assim que a
+ * atendente chama a pessoa) e, depois, o nome que a pessoa usa no WhatsApp,
+ * aprendido de quem já falou em algum grupo. Quem não estiver em nenhuma das
+ * duas continua aparecendo pelo telefone — nunca por um identificador interno.
+ */
+export async function nomearParticipantes(
+  organizationId: number,
+  participantes: GroupParticipant[],
+): Promise<GroupParticipant[]> {
+  const jids = [...new Set(participantes.map((p) => p.jid).filter(Boolean))];
+  const fones = [...new Set(participantes.map((p) => p.phone).filter((f): f is string => Boolean(f)))];
+  if (jids.length === 0 && fones.length === 0) return participantes;
+
+  const [identidades, clientes] = await Promise.all([
+    jids.length + fones.length > 0
+      ? db
+          .select({ jid: whatsappIdentities.jid, phone: whatsappIdentities.phone, name: whatsappIdentities.name })
+          .from(whatsappIdentities)
+          .where(
+            and(
+              eq(whatsappIdentities.organizationId, organizationId),
+              or(
+                jids.length ? inArray(whatsappIdentities.jid, jids) : sql`false`,
+                fones.length ? inArray(whatsappIdentities.phone, fones) : sql`false`,
+              ),
+            ),
+          )
+      : Promise.resolve([]),
+    fones.length
+      ? db
+          .select({ phone: customers.phone, name: customers.name })
+          .from(customers)
+          .where(and(eq(customers.organizationId, organizationId), inArray(customers.phone, fones)))
+      : Promise.resolve([]),
+  ]);
+
+  const porJid = new Map<string, string>();
+  const porFone = new Map<string, string>();
+  for (const i of identidades) {
+    if (i.jid) porJid.set(i.jid, i.name);
+    if (i.phone) porFone.set(i.phone, i.name);
+  }
+  // A ficha da clínica entra por último e por isso vence: é o nome que a
+  // atendente escreveu para essa pessoa.
+  for (const c of clientes) if (c.phone) porFone.set(c.phone, c.name);
+
+  return participantes.map((p) => {
+    if (p.displayName) return p;
+    const nome = (p.phone ? porFone.get(p.phone) : undefined) ?? porJid.get(p.jid);
+    return nome ? { ...p, displayName: nome } : p;
+  });
+}
