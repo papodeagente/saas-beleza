@@ -5,6 +5,7 @@ import {
   boolean,
   check,
   date,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -33,6 +34,34 @@ export const appointmentStatus = pgEnum("appointment_status", [
   "no_show",
 ]);
 export const appointmentSource = pgEnum("appointment_source", ["admin", "public", "whatsapp", "ai"]);
+
+/** De onde veio a coordenada de uma unidade. */
+export const geoSource = pgEnum("geo_source", [
+  /** Digitada à mão pela clínica. */
+  "manual",
+  /** Endereço normalizado a partir do CEP (ViaCEP). */
+  "cep",
+  /** Centro do município, quando só se sabe a cidade. */
+  "municipio",
+  /** A clínica arrastou o pino no mapa. */
+  "pino",
+]);
+
+/**
+ * Quão fina é a coordenada. Isto vai para a TELA, não fica só no banco.
+ *
+ * Uma unidade posicionada no centro do município não pode aparecer ordenada
+ * por distância como se fosse endereço exato: "a 800m de você" quando o dado
+ * real é "nesta cidade" é mentira para quem está escolhendo onde ir, e é o erro
+ * clássico de marketplace geolocalizado.
+ */
+export const geoPrecision = pgEnum("geo_precision", [
+  "exata",
+  "rua",
+  "bairro",
+  "cidade",
+  "nenhuma",
+]);
 export const actorType = pgEnum("actor_type", ["user", "ai", "automation", "public", "system"]);
 export const paymentMethod = pgEnum("payment_method", [
   "pix",
@@ -160,8 +189,79 @@ export const organizations = pgTable("organizations", {
    */
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspendedReason: text("suspended_reason"),
+
+  /**
+   * Aparece no diretório público de manicures?
+   *
+   * Nasce FALSO e é assim de propósito. Publicar endereço, telefone e tabela
+   * de preços de um negócio real num diretório aberto é decisão da dona do
+   * salão, não da plataforma — e a base de hoje tem contas reais que nunca
+   * pediram isso. O produto já tinha escolhido este lado uma vez:
+   * `plans.publicVisible` também nasce falso.
+   */
+  marketplaceListed: boolean("marketplace_listed").notNull().default(false),
+  marketplaceListedAt: timestamp("marketplace_listed_at", { withTimezone: true }),
+  /** Como o salão se apresenta no diretório. Texto curto, sem HTML. */
+  marketplaceBio: text("marketplace_bio"),
+  /** WhatsApp público, só dígitos. Separado do telefone da unidade: nem todo
+   *  salão atende no mesmo número que divulga. */
+  marketplaceWhatsapp: text("marketplace_whatsapp"),
+  marketplaceInstagram: text("marketplace_instagram"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Municípios brasileiros — a única tabela do banco que NÃO pertence a tenant
+ * nenhum.
+ *
+ * Existe porque "buscar manicure em Natal" precisa de uma chave canônica, e
+ * texto livre não é chave: "Natal", "natal", "NATAL/RN" e "Natal - RN" são a
+ * mesma cidade e quatro strings diferentes. O código do IBGE (7 dígitos) é a
+ * chave, e é ela que amarra a unidade à cidade.
+ *
+ * A coordenada aqui é o CENTRO do município. Serve para dois usos honestos:
+ * ordenar cidades por proximidade do GPS de quem busca, e dar uma posição
+ * aproximada para a unidade que só informou a cidade — sempre marcada como
+ * `geoPrecision: "cidade"`, nunca passando por endereço exato.
+ *
+ * Dado do IBGE, via github.com/kelvins/municipios-brasileiros (MIT). Semeado
+ * pela migration, não por script solto: sem a base o marketplace não busca, e
+ * uma tabela vazia esperando alguém lembrar de rodar um comando é uma bomba.
+ */
+export const municipios = pgTable(
+  "municipios",
+  {
+    /** Código do IBGE, 7 dígitos. É a chave — não é serial. */
+    ibgeCode: integer("ibge_code").primaryKey(),
+    name: text("name").notNull(),
+    /** Sigla de duas letras. */
+    uf: text("uf").notNull(),
+    lat: doublePrecision("lat").notNull(),
+    lng: doublePrecision("lng").notNull(),
+    capital: boolean("capital").notNull().default(false),
+    ddd: integer("ddd"),
+    /**
+     * Fuso do município. O produto guarda fuso por CONTA
+     * (`organizations.timezone`), o que basta enquanto cada conta é um salão —
+     * mas um diretório cruza o país e precisa saber o fuso do LUGAR.
+     */
+    timezone: text("timezone").notNull(),
+    /**
+     * Nome dobrado para busca: minúsculo e sem acento. Existe como coluna, e
+     * não como `unaccent(lower(name))` na consulta, porque função na cláusula
+     * WHERE descarta o índice — e esta é a consulta que roda a cada tecla
+     * digitada no campo de cidade.
+     */
+    searchKey: text("search_key").notNull(),
+  },
+  (t) => [
+    index("municipios_uf_name_idx").on(t.uf, t.name),
+    index("municipios_search_idx").on(t.searchKey),
+    /** Caixa delimitadora para "cidades perto de mim". */
+    index("municipios_geo_idx").on(t.lat, t.lng),
+  ],
+);
 
 export const branches = pgTable(
   "branches",
@@ -171,12 +271,52 @@ export const branches = pgTable(
       .notNull()
       .references(() => organizations.id),
     name: text("name").notNull(),
+    /**
+     * Endereço em UMA linha, como sempre foi. Continua sendo o que a clínica
+     * digita quando não quer preencher o resto, e o que aparece no bilhete de
+     * confirmação. Os campos estruturados abaixo NÃO o substituem — eles
+     * existem para a busca, que não consegue trabalhar com texto livre.
+     */
     address: text("address"),
     phone: text("phone"),
     active: boolean("active").notNull().default(true),
+
+    /**
+     * Endereço estruturado. Tudo nulo, sempre — a base existente tem unidade
+     * sem endereço nenhum e unidade com endereço em texto corrido ("Av. Afonso
+     * Pena, 744 — Tirol, Natal/RN"), e qualquer preenchimento futuro tem de
+     * tratar o nulo como o caso NORMAL, não como exceção.
+     */
+    postalCode: text("postal_code"),
+    street: text("street"),
+    number: text("number"),
+    complement: text("complement"),
+    district: text("district"),
+    city: text("city"),
+    uf: text("uf"),
+    /** Amarra a unidade ao município. Referência solta de propósito: a base de
+     *  municípios é semeada em separado e não deve travar a escrita da unidade. */
+    ibgeCode: integer("ibge_code"),
+
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    geoSource: geoSource("geo_source"),
+    geoPrecision: geoPrecision("geo_precision"),
+    geocodedAt: timestamp("geocoded_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("branches_org_idx").on(t.organizationId)],
+  (t) => [
+    index("branches_org_idx").on(t.organizationId),
+    /**
+     * Os dois índices que o DIRETÓRIO usa, e que nenhum índice existente
+     * atendia: todos os outros começam por `organization_id`, e a consulta do
+     * marketplace é o oposto — varre todas as contas filtrando por lugar.
+     */
+    index("branches_cidade_idx").on(t.uf, t.city),
+    index("branches_ibge_idx").on(t.ibgeCode),
+    index("branches_geo_idx").on(t.lat, t.lng),
+  ],
 );
 
 export const users = pgTable("users", {
