@@ -172,6 +172,61 @@
   --text-ask--font-weight: 600;
   --text-ask--letter-spacing: -0.02em;
 
+  /* -------------------------------------------------------------------------
+     O CARTÃO E O BALCÃO.
+
+     Diagnóstico do "está feia": #f8f6fb (surface) contra #ffffff
+     (surface-raised) mede 1,04:1 — fundo e conteúdo são literalmente a mesma
+     superfície, e nenhuma sombra conserta isso. Osso #fbf7f2 sobre balcão
+     #eee4d7 mede 1,13:1, mas com diferença de MATIZ (papel contra tampo), que
+     o olho lê como dois materiais.
+
+     REGRA QUE MANDA AQUI, a mesma da landing: só ADICIONA nomes. Nenhum
+     --color-surface / ink / accent / line é redefinido, em nenhum seletor. A
+     troca do chão é por classe e `body:has()`, nunca por redefinição.
+     ------------------------------------------------------------------------- */
+  --color-cartao: #fbf7f2;
+  --color-cartao-sunken: #f4ece1;
+  /* Fio de DESENHO — separador, guia pontilhada, picote. Mede 1,37:1 contra o
+     cartão: não serve para texto e não serve como única fronteira de controle. */
+  --color-cartao-linha: #e0d4c2;
+  /* Fio de CONTROLE — a borda de chip de dia, chip de horário, placa e campo.
+     A fronteira visual de um controle precisa de 3:1 (WCAG 1.4.11), e o fio de
+     desenho dava 1,37: quem enxerga pouco via retângulos flutuando sem borda.
+     Medido nas três superfícies: 3,53 no cartão, 3,22 na placa rebaixada,
+     3,00 no balcão. É o tom mais CLARO que passa nas três — mais escuro que
+     isso vira grade de planilha. */
+  --color-cartao-fio: #8e817a;
+  --color-balcao: #eee4d7;
+
+  /* A laca da CASA. Este valor é só o padrão (Ameixa Noturna): o tom real é
+     pintado por clínica em `style={{ "--color-laca": … }}`, a partir de
+     `lacaDe(organizationName)`. Sobrescrever um token NOVO sob escopo é
+     permitido; sobrescrever um do produto não é. */
+  --color-laca: #331a3f;
+
+  /* O nome da casa sobre a laca. Token NOVO e não um retoque em `--text-house`:
+     `house` também pinta a data do bilhete, e a 44px "Quinta-feira, 28 de
+     agosto" sai em três linhas e estoura o papel picotado — a única tela que
+     já funcionava. */
+  --text-fachada: clamp(23px, 5.6vw, 44px);
+  --text-fachada--line-height: 1.1;
+  --text-fachada--font-weight: 600;
+  --text-fachada--letter-spacing: -0.015em;
+
+  /* O preço. Único peso 800 da página, e existe para uma coisa só: preço de
+     lista e valor do bilhete. Em 16px/600 — o tamanho do NOME do serviço — os
+     dois empatam e a cliente lê a linha duas vezes para saber qual é qual.
+     Nome em ASCII de propósito: "--text-preço" passaria batido pelo regex do
+     design-tokens.test.ts e o twMerge o trataria como cor, em silêncio. */
+  --text-price: 20px;
+  --text-price--line-height: 24px;
+  --text-price--font-weight: 800;
+  --text-price--letter-spacing: -0.02em;
+
+  --animate-passo: passo-in 260ms var(--ease-out-quint) backwards;
+  --animate-postica-in: postica-in 300ms var(--ease-out-quint) backwards;
+
   --animate-rise-in: rise-in 700ms var(--ease-out-quint) backwards;
   --animate-fade-in: fade-in 600ms var(--ease-out-quint) backwards;
   --animate-mockup-in: mockup-in 1100ms var(--ease-out-quint) backwards;
@@ -207,6 +262,11 @@
 
   /* agenda: 15 minutos = 14px */
   --slot-height: 14px;
+
+  /* A flecha do sorriso. NÃO cresce com a largura: com `preserveAspectRatio`
+     em "none" e altura fixa, o arco ACHATA sozinho de 390 para 1440px — flecha
+     proporcional numa tela larga viraria caricatura. */
+  --sorriso: 14px;
   --rail-width: 300px;
 }
 
@@ -268,6 +328,39 @@
 
   [data-surface="night"] :focus-visible {
     outline-color: var(--color-accent-lift);
+  }
+
+  /* O chão da vitrine. Mesmo padrão da landing e pela mesma razão: pintar só o
+     wrapper deixa o lavanda do body aparecer no overscroll do iOS e em página
+     mais curta que a janela — que é exatamente o caso da clínica com um
+     serviço só. Isto define uma PROPRIEDADE; não redefine token nenhum. */
+  body:has([data-surface="cartao"]) {
+    background-color: var(--color-balcao);
+  }
+
+  /* Sem isto, toda borda dentro da vitrine herda o fio claro da regra universal
+     e corta o osso com risco cinza. */
+  [data-surface="cartao"] *,
+  [data-surface="cartao"] ::before,
+  [data-surface="cartao"] ::after {
+    border-color: var(--color-cartao-fio);
+  }
+
+  /*
+    O foco sobre a laca.
+
+    O anel padrão é a ameixa do produto, e sobre o esmalte escuro ela mede
+    2,19:1 — quem navega por teclado não enxerga onde está. Mesmo problema, e
+    mesma solução, da landing escura: um tom da própria marca relido para fundo
+    escuro, que aqui mede 7,69:1.
+
+    `outline-offset` negativo porque o cabeçalho é recortado pelo sorriso: com
+    o deslocamento positivo padrão, o anel ficava CORTADO em três lados e
+    aparecia como dois riscos soltos.
+  */
+  [data-surface="cartao"] header :focus-visible {
+    outline-color: var(--color-accent-lift);
+    outline-offset: -3px;
   }
 
   [data-surface="night"] ::selection {
@@ -370,6 +463,208 @@
   }
 }
 
+/**
+ * O GRÃO DA LIXA.
+ *
+ * `absolute` e sempre ATRÁS do conteúdo. Como `fixed` com `multiply` ele
+ * multiplicaria sobre a janela inteira — barra fixa e botão de confirmar
+ * incluídos, que são justo os dois alvos que não podem perder meio ponto de
+ * contraste. Aqui ele só encontra o fundo do próprio elemento.
+ *
+ * `stitchTiles='stitch'` não é enfeite: sem ele a emenda do ladrilho de 180px
+ * aparece como grade. Escurecimento efetivo de ~2,5%.
+ *
+ * Quem usa `grao` PRECISA ter `position: relative; isolation: isolate`, e o
+ * conteúdo precisa subir para `relative z-[1]`.
+ */
+@utility grao {
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+    background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.86' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23g)' opacity='0.10'/></svg>");
+    background-size: 180px 180px;
+  }
+}
+
+/**
+ * A LACA COMO MATERIAL, e não como cor chapada.
+ *
+ * Camada 1: a luz atravessando esmalte molhado — é a que a varredura anima.
+ * Camada 2: as PINCELADAS, passadas de 96° a 1,6% de branco. Ninguém as
+ *           enxerga conscientemente e elas respondem por quase toda a sensação
+ *           de "isto foi pintado". O período foi de 9px para 17px depois de
+ *           medir na tela: a 2,8% e 9px a laca lia como tecido canelado, não
+ *           como esmalte.
+ * Camada 3: a profundidade do fundo do vidro.
+ *
+ * Todas CLAREIAM o fundo, e é por isso que o texto secundário sobre a laca é
+ * branco a 80% e não a 74%: no pior empilhamento medido, o 74% cai para 4,30:1
+ * e reprova.
+ */
+@utility laca {
+  background-color: var(--color-laca);
+  background-image:
+    linear-gradient(104deg, transparent 18%, rgb(255 255 255 / 0.12) 34%,
+                    rgb(255 255 255 / 0.03) 46%, transparent 58%),
+    repeating-linear-gradient(96deg, rgb(255 255 255 / 0.016) 0 2px, transparent 2px 17px),
+    radial-gradient(130% 90% at 22% 0%, rgb(255 255 255 / 0.08) 0%, transparent 62%);
+  background-size: 148% 100%, auto, auto;
+  background-position-x: 0, 0, 0;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16);
+}
+
+
+/**
+ * A LINHA DO SORRISO — o arco raso onde a laca acaba e o cartão começa.
+ *
+ * Numa francesinha, a fronteira entre o esmalte e a ponta livre não é reta: é
+ * um arco raso, e no ofício ele se chama linha do sorriso. Aqui esse arco é a
+ * divisa ESTRUTURAL da página — o plano esmaltado não termina numa borda reta,
+ * como todo cabeçalho colorido do mundo: termina num sorriso.
+ *
+ * É `border-radius` no PRÓPRIO cabeçalho, e não um SVG encostado embaixo. A
+ * primeira versão era um `<svg>` com `fill: var(--color-laca)`: a laca do SVG
+ * saía chapada enquanto a do cabeçalho tem três camadas de brilho por cima, e
+ * a emenda apareceu na tela como uma faixa escura atravessando a página.
+ * Recortando o elemento, TODAS as camadas são cortadas juntas e não há emenda
+ * possível.
+ *
+ * O raio é elíptico e assimétrico — 50% na horizontal contra `--sorriso` na
+ * vertical — e é isso que dá o ombro comprido e o fundo curto do sorriso real.
+ * Raio circular desenharia duas quinas arredondadas, que é outra coisa.
+ *
+ * O arco aparece DUAS vezes na página inteira, e a escassez é o que o mantém
+ * sendo assinatura: aqui e no pé da faixa do bilhete.
+ */
+@utility sorriso {
+  border-bottom-left-radius: 50% var(--sorriso);
+  border-bottom-right-radius: 50% var(--sorriso);
+}
+
+/**
+ * A ENTRADA DA LACA — o esmalte sendo aplicado.
+ *
+ * Dois movimentos num só, e é por isso que existe um utilitário em vez de duas
+ * classes: cada `animate-*` do Tailwind escreve a propriedade `animation`
+ * inteira, então a segunda apagaria a primeira.
+ *
+ * 1. A PINCELADA: o plano é revelado da esquerda para a direita, que é o gesto
+ *    real de quem passa esmalte. 560ms, com um respiro de 140ms para a página
+ *    assentar antes.
+ * 2. A VARREDURA: a luz correndo pelo esmalte molhado logo depois.
+ *
+ * Roda UMA vez, na abertura. Não é presa à rolagem e não repete na troca de
+ * passo: gesto repetido vira tique.
+ */
+@utility laca-entrada {
+  animation:
+    pincelada 560ms cubic-bezier(0.22, 0.61, 0.36, 1) 140ms backwards,
+    varredura 900ms var(--ease-out-quint) 220ms backwards;
+}
+
+/**
+ * A UNHA POSTIÇA — o átomo que aposentou a gota de 12px.
+ *
+ * `border-radius` elíptico assimétrico (topo redondo, base quase reta), a poça
+ * de esmalte na base por sombra interna e a sombra de contato de 1px que a cola
+ * no cartão. É uma FORMA que lê como objeto sem representar um: nada de lúnula
+ * desenhada, nada de ilustração. Material e geometria envelhecem bem.
+ *
+ * Espera `--esmalte` e `--aro` pintados no style. Três escalas e só três:
+ * 28×38 na placa de serviço, 22×30 no recibo, 14×19 no rótulo de categoria.
+ */
+@utility postica {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 13px 13px 6px 6px / 17px 17px 5px 5px;
+  background-color: var(--esmalte);
+  box-shadow:
+    inset 0 0 0 1px var(--aro),
+    inset 0 -6px 10px -6px rgb(0 0 0 / 0.30),
+    0 1px 2px rgb(51 26 63 / 0.14);
+}
+
+/* O brilho do esmalte. Só acima de 22px de largura: um brilho de 3px não lê
+   como vidro, lê como sujeira. */
+@utility postica-brilho {
+  &::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 5px;
+    width: 7px;
+    height: 15px;
+    border-radius: 999px;
+    transform: rotate(14deg);
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.62), rgb(255 255 255 / 0));
+  }
+}
+
+/** Guia de carta de preços: liga a duração ao preço, como no cardápio. */
+@utility guia {
+  flex: 1 1 0%;
+  height: 0;
+  margin-inline: 8px;
+  border-bottom: 2px dotted var(--color-cartao-linha);
+}
+
+/**
+ * A pilha do balcão.
+ *
+ * `safe` é obrigatório: com 40 serviços em 6 categorias o cartão fica mais alto
+ * que a janela, e `center` puro corta o TOPO — levando junto a laca e o nome da
+ * casa. Onde `safe` não for suportado, o respiro e a rolagem do documento
+ * seguram o pior caso.
+ */
+@utility pilha-balcao {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100dvh;
+  @media (width >= 48rem) {
+    justify-content: safe center;
+    padding-block: 48px;
+  }
+}
+
+/** A sombra de contato. Sem ela o cartão flutua num nada; com ela ele está
+    APOIADO — e objeto pequeno apoiado em tampo grande é composição. */
+@utility sombra-contato {
+  width: 62%;
+  height: 26px;
+  margin: -12px auto 0;
+  border-radius: 999px;
+  background: rgb(51 26 63 / 0.16);
+  filter: blur(18px);
+}
+
+@keyframes passo-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* O esmalte é APLICADO da esquerda para a direita, que é o gesto real. */
+@keyframes pincelada {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+
+/* A luz correndo pelo esmalte quando a página abre. Uma vez, e só uma. */
+@keyframes varredura {
+  from { background-position-x: -24%, 0, 0; }
+  to   { background-position-x: 0, 0, 0; }
+}
+
+@keyframes postica-in {
+  from { transform: scale(1.34); }
+  to   { transform: scale(1); }
+}
+
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(18px); }
   to { opacity: 1; transform: translateY(0); }
@@ -401,6 +696,10 @@
 @media (prefers-reduced-motion: reduce) {
   /* Quem pede menos movimento também não precisa do print torto. */
   .mockup-tilt { transform: none; }
+
+  /* A duração já vai a zero pela regra global, mas o estado inicial `backwards`
+     ainda deixa a faixa piscar antes de assentar. */
+  .laca-entrada { clip-path: none !important; }
 
   [data-reveal] {
     opacity: 1 !important;

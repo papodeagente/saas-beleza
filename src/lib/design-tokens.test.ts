@@ -104,17 +104,21 @@ describe("escala tipográfica", () => {
     ).toEqual([]);
   });
 
-  it("a landing não redefine nenhum token do produto", () => {
+  it("nenhuma superfície de escopo redefine token do produto", () => {
     // Redefinir --color-surface/ink/accent sob escopo recoloriria todo
-    // componente compartilhado renderizado dentro da landing, em silêncio.
-    const redefinicoes = [...CSS.matchAll(/\[data-surface="night"\][^{]*\{([^}]*)\}/g)]
+    // componente compartilhado renderizado dentro dela, em silêncio.
+    //
+    // O regex olha QUALQUER `[data-surface="…"]`, e não só a landing: a
+    // vitrine do agendamento tomou a mesma licença com o mesmo contrato, e um
+    // porteiro que só conhece o primeiro inquilino não é porteiro.
+    const redefinicoes = [...CSS.matchAll(/\[data-surface="[a-z-]+"\][^{]*\{([^}]*)\}/g)]
       .flatMap((m) => [...m[1].matchAll(/(--color-(?:surface|ink|accent|line)[a-z-]*)\s*:/g)])
       .map((m) => m[1]);
 
     expect(
       redefinicoes,
-      `A landing redefiniu tokens do produto sob escopo: ${redefinicoes.join(", ")}. ` +
-        `Ela só pode ADICIONAR nomes (night-*, accent-lift), nunca sobrescrever os existentes.`,
+      `Uma superfície de escopo redefiniu tokens do produto: ${redefinicoes.join(", ")}. ` +
+        `Ela só pode ADICIONAR nomes (night-*, cartao-*, laca), nunca sobrescrever os existentes.`,
     ).toEqual([]);
   });
 });

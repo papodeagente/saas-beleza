@@ -38,6 +38,12 @@ const twMerge = extendTailwindMerge({
             // `text-white` do chip de dia selecionado.
             "house",
             "ask",
+            // O nome da casa sobre a laca e o preço da carta. Esquecidos aqui,
+            // `text-fachada text-white` perde o branco e o nome da clínica sai
+            // em tinta escura sobre o esmalte escuro — ilegível, sem erro de
+            // build, de tipo nem de lint.
+            "fachada",
+            "price",
           ],
         },
       ],

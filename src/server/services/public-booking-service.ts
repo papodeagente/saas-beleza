@@ -14,6 +14,8 @@ import { normalizePhone } from "@/lib/phone";
 import type { TenantContext } from "@/server/auth";
 import { createAppointment } from "./appointment-service";
 import { getAvailableSlots } from "./availability-service";
+import { quantosHorariosVisiveis } from "@/app/agendar/[slug]/horarios";
+import { formatTz } from "@/lib/tz";
 
 /**
  * Agendamento público — o cliente final não tem sessão, então o contexto de
@@ -131,8 +133,20 @@ export async function getPublicAvailableDays(
         dateISO,
         branchId: input.branchId,
       });
-      const uniqueTimes = new Set(slots.map((slot) => slot.start.toISOString()));
-      return { dateISO, slotCount: uniqueTimes.size };
+      /**
+       * A contagem é a dos horários que a tela VAI MOSTRAR, não a dos instantes
+       * que a agenda tem.
+       *
+       * A cliente escolhe por etiqueta ("09:30"), não por instante: dois
+       * profissionais livres às 09:30 são uma escolha só. E acima de 20 opções
+       * a grade dobra o passo para 30 minutos. Contando cru, a fita anunciava
+       * "31 horários livres" e a grade logo abaixo desenhava 16 — a mesma tela
+       * dizendo dois números, e o leitor de tela lendo os dois.
+       */
+      const etiquetas = [
+        ...new Set(slots.map((slot) => formatTz(slot.start, org.ctx.timezone, "HH:mm"))),
+      ];
+      return { dateISO, slotCount: quantosHorariosVisiveis(etiquetas) };
     }),
   );
   return rows.filter((row) => row.slotCount > 0);
@@ -154,7 +168,6 @@ export async function getPublicSlots(
     getPublicProfessionals(org.ctx, input.serviceId),
   ]);
   const nameById = new Map(pros.map((p) => [p.id, p.name]));
-  const { formatTz } = await import("@/lib/tz");
 
   return slots.map((slot) => ({
     startsAt: slot.start.toISOString(),

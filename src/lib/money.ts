@@ -26,3 +26,22 @@ export function parseBRL(input: string): number | null {
   if (!Number.isFinite(value) || value < 0) return null;
   return Math.round(value * 100);
 }
+
+/**
+ * ["R$", "180"] — símbolo e número separados, e centavos zerados de fora.
+ *
+ * O símbolo sai em `ink-secondary` e o número em `ink`: a diferença de cor já
+ * rebaixa o "R$" sem exigir um tamanho fora da escala. E salão anuncia
+ * "R$ 180", não "R$ 180,00" — o par de zeros só existe em nota fiscal.
+ * Preço quebrado continua mostrando os centavos, porque aí eles informam.
+ */
+export function precoPartido(cents: number): [string, string] {
+  const redondo = cents % 100 === 0;
+  return [
+    "R$",
+    new Intl.NumberFormat("pt-BR", {
+      minimumFractionDigits: redondo ? 0 : 2,
+      maximumFractionDigits: redondo ? 0 : 2,
+    }).format(cents / 100),
+  ];
+}

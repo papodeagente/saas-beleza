@@ -2,16 +2,15 @@
 
 import { addDays, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CalendarPlus, Check, ChevronRight, Clock, MapPin, Phone, Plus } from "lucide-react";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { CalendarPlus, Check, MapPin, Phone, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { formatBRL } from "@/lib/money";
+import { precoPartido } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand";
-import { type Esmalte, esmalteDe } from "./esmaltes";
+import { type Esmalte, type Laca, esmalteDe, lacaDe } from "./esmaltes";
+import { afinarHorarios } from "./horarios";
 import { baixarICS, montarICS } from "./ics";
 import {
   type BookingConfirmation,
@@ -55,8 +54,13 @@ const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
  *
  * `font-normal` desfaz o peso 600 que vem junto do `text-card`: o que se quer
  * dele é só o corpo de 16px, não a ênfase.
+ *
+ * `h-14` e não `h-12`: 56px de alvo pelo preço de 8px de tela, com o mesmo
+ * corpo de 16px. E `border-cartao-linha` porque o fio lavanda do produto,
+ * correto sobre o canvas do painel, corta o osso com um risco cinza.
  */
-const CAMPO = "h-12 text-card font-normal";
+const CAMPO =
+  "h-14 border-cartao-fio text-card font-normal";
 
 export function BookingFlow({
   slug,
@@ -69,9 +73,23 @@ export function BookingFlow({
   branches: Branch[];
   services: Service[];
 }) {
-  const [step, setStep] = useState<Step>("service");
-  const [service, setService] = useState<Service | null>(null);
+  /**
+   * Clínica com UM serviço não tem passo 1.
+   *
+   * Foi nessa conta que o dono olhou a página e a chamou de feia, e com razão:
+   * "O que você quer fazer?" seguido de uma única opção é uma pergunta que já
+   * tem resposta. A regra é a mesma que a unidade única já seguia — escolher
+   * por alguém o que não tem escolha.
+   *
+   * Derivado no `useState`, e não num efeito: em efeito a cliente veria um
+   * quadro do passo 1 antes de ele sumir.
+   */
+  const servicoUnico = services.length === 1 ? services[0] : null;
+  const [service, setService] = useState<Service | null>(servicoUnico);
   const [branch, setBranch] = useState<Branch | null>(branches.length === 1 ? branches[0] : null);
+  const [step, setStep] = useState<Step>(
+    servicoUnico ? (branches.length > 1 ? "branch" : "when") : "service",
+  );
   const [day, setDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<PublicSlot[] | null>(null);
   const [availableDays, setAvailableDays] = useState<Array<{ dateISO: string; slotCount: number }> | null>(null);
@@ -100,6 +118,7 @@ export function BookingFlow({
 
   const days = useMemo(() => Array.from({ length: 21 }, (_, i) => addDays(new Date(), i)), []);
 
+
   /**
    * Ao carregar os dias, o primeiro dia livre já é escolhido e seus horários
    * já são buscados. É um toque a menos, e resolve o caso mais comum de todos:
@@ -109,6 +128,18 @@ export function BookingFlow({
     setAvailableDays(null);
     setSlot(null);
     setSlots(null);
+    buscarDias(next);
+  }
+
+  /**
+   * Só a ida ao servidor, sem os três `set` de limpeza.
+   *
+   * A separação existe para o caminho da montagem: numa página que já abre em
+   * "quando", limpar estado que ainda é nulo é escrita síncrona dentro de
+   * efeito — o que o lint proíbe, com razão, porque é o mesmo gesto que produz
+   * render em cascata quando o alvo NÃO está limpo.
+   */
+  function buscarDias(next: { service: Service | null; branch: Branch | null }) {
     if (!next.service) return;
     startDaysTransition(async () => {
       const rows = await publicAvailableDaysAction({
@@ -125,6 +156,39 @@ export function BookingFlow({
       }
     });
   }
+
+  /**
+   * A página que abre direto em "quando" precisa que a busca dos dias comece
+   * sozinha.
+   *
+   * `loadDays` só era chamado dentro de `chooseService`; abrindo em "when" com
+   * `availableDays` nulo e `loadingDays` falso, a tela caía no ramo final e
+   * anunciava "nenhum dia livre nas próximas três semanas" para sempre — numa
+   * agenda cheia.
+   */
+  const perguntaRef = useRef<HTMLHeadingElement>(null);
+  /**
+   * Na PRIMEIRA pintura ninguém roubou o foco de ninguém — mover para a
+   * pergunta ali seria rolar a página de quem acabou de chegar. Só a partir da
+   * segunda troca.
+   */
+  const jaTrocou = useRef(false);
+  useEffect(() => {
+    if (!jaTrocou.current) {
+      jaTrocou.current = true;
+      return;
+    }
+    perguntaRef.current?.focus({ preventScroll: true });
+  }, [step]);
+
+  const montado = useRef(false);
+  useEffect(() => {
+    if (montado.current) return;
+    montado.current = true;
+    if (servicoUnico && branches.length <= 1) buscarDias({ service: servicoUnico, branch });
+    // Uma vez na montagem: as dependências reais são as props iniciais.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Carregar horários é sempre consequência de uma escolha do cliente
@@ -207,8 +271,11 @@ export function BookingFlow({
   }
 
   // Horários únicos por etiqueta (o cliente escolhe hora, não profissional)
-  const times = thinOut(
+  // A MESMA regra que o servidor usou para contar os horários do dia na fita.
+  // Enquanto eram duas, a tela anunciava 31 e desenhava 16.
+  const times = afinarHorarios(
     slots ? [...new Map(slots.map((s) => [s.label, s])).entries()].map(([, value]) => value) : [],
+    (s) => s.label,
   );
   const manha = times.filter((s) => Number(s.label.slice(0, 2)) < 12);
   const tarde = times.filter((s) => {
@@ -217,12 +284,57 @@ export function BookingFlow({
   });
   const noite = times.filter((s) => Number(s.label.slice(0, 2)) >= 18);
   const dayDate = days.find((d) => format(d, "yyyy-MM-dd") === day) ?? days[0];
+  /**
+   * A régua da barrinha de vagas: o dia mais cheio da faixa.
+   *
+   * E a barrinha só existe quando os dias DIFEREM entre si. Numa agenda que
+   * ainda não tem nada marcado, catorze dias com a mesma lotação desenhavam
+   * catorze barras idênticas — gráfico sem variância é enfeite, e enfeite que
+   * finge ser informação é pior do que nada.
+   */
+  const lotacoes = (availableDays ?? []).map((d) => d.slotCount);
+  const maiorDia = Math.max(1, ...lotacoes);
+  const mostrarLotacao = new Set(lotacoes).size > 1;
   const esmalte = esmalteDe(service?.categoryName);
   const unidade = branch ?? (branches.length === 1 ? branches[0] : null);
+  const laca = lacaDe(organizationName);
+
+  /**
+   * A fachada encolhe do passo "quando" em diante — mas só quando existiu um
+   * passo 1. Com serviço único, "quando" é a PRIMEIRA tela que a cliente vê:
+   * abri-la com o nome da casa reduzido seria repetir a queixa que originou
+   * este redesenho, a de não haver prova nenhuma de que aquele lugar existe.
+   */
+  const fachadaCompacta = (step === "when" || step === "identify") && services.length > 1;
+
+  /**
+   * Quantos passos esta clínica realmente tem.
+   *
+   * A trilha antiga dizia "3" sempre, e mentia nas duas pontas: com serviço
+   * único são 2, com mais de uma unidade são 4.
+   */
+  const passos = passosDaClinica(services.length, branches.length);
+  const rotuloDoPasso =
+    step === "service"
+      ? "Serviço"
+      : step === "branch"
+        ? "Unidade"
+        : step === "when"
+          ? "Dia e hora"
+          : "Seus dados";
+  /** Zero quando o passo aberto não é um dos que esta clínica anuncia. */
+  const posicaoDoPasso = passos.indexOf(rotuloDoPasso) + 1;
 
   if (step === "done" && confirmation && service && slot) {
     return (
-      <Vitrine organizationName={organizationName} unidade={unidade}>
+      <Vitrine
+        organizationName={organizationName}
+        unidade={unidade}
+        laca={laca}
+        compacta={false}
+        barraFixa={false}
+        contato={false}
+      >
         <Bilhete
           confirmation={confirmation}
           esmalte={esmalte}
@@ -234,16 +346,30 @@ export function BookingFlow({
     );
   }
 
-  const passo = step === "identify" ? 2 : step === "when" ? 1 : 0;
-
   return (
-    <Vitrine organizationName={organizationName} unidade={unidade}>
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-12">
+    <Vitrine
+      organizationName={organizationName}
+      unidade={unidade}
+      laca={laca}
+      compacta={fachadaCompacta}
+      barraFixa={step === "when" && slot !== null}
+    >
+      <div key={step} className="animate-passo min-w-0">
         <div className="min-w-0">
-          {/* A trilha mora DENTRO da coluna do conteúdo. Atravessando a página
-              inteira, o terceiro traço ficava por cima do resumo lateral e
-              parecia medir o progresso de outra coisa. */}
-          <Trilha atual={passo} />
+          {/* Uma linha no lugar de três traços: diz em que passo a cliente está
+              e quantos existem NESTA clínica, sem prometer etapa que não há. */}
+          {/*
+            A contagem só sai quando o passo aberto ESTÁ na lista.
+
+            Clínica sem serviço publicado abre em "service", e "Serviço" não
+            entra em `passos` (a lista só o inclui quando há mais de um): o
+            `indexOf` devolvia -1 e a primeira tela da cliente dizia
+            "0 DE 2 · SERVIÇO" acima de "Nada disponível para agendar online".
+          */}
+          <p role="status" aria-live="polite" className="text-eyebrow text-ink-secondary">
+            {posicaoDoPasso > 0 ? `${posicaoDoPasso} de ${passos.length} · ` : ""}
+            {rotuloDoPasso}
+          </p>
           {/* O recibo.
               Cada escolha feita encolhe para uma linha e continua na tela, com
               o botão que a desfaz. É o que substituiu o "Voltar": trocar o
@@ -254,15 +380,15 @@ export function BookingFlow({
             <LinhaRecibo
               esmalte={esmalte}
               principal={service.name}
-              secundario={`${service.durationMin} min · ${formatBRL(service.priceCents)}`}
-              onTrocar={() => setStep("service")}
+              secundario={`${duracao(service.durationMin)} · ${precoPartido(service.priceCents).join(" ")}`}
+              onTrocar={services.length > 1 ? () => setStep("service") : undefined}
             />
           ) : null}
           {branch && branches.length > 1 && step !== "service" && step !== "branch" ? (
             <LinhaRecibo
               principal={branch.name}
               secundario={branch.address ?? undefined}
-              onTrocar={() => setStep("branch")}
+              onTrocar={branches.length > 1 ? () => setStep("branch") : undefined}
             />
           ) : null}
           {slot && step === "identify" ? (
@@ -273,7 +399,16 @@ export function BookingFlow({
             />
           ) : null}
 
-          <h2 className="mt-4 text-ask text-ink">
+          {/*
+            A pergunta do passo recebe o foco a cada troca.
+
+            Como a árvore é remontada por `key={step}`, o foco caía no BODY: a
+            cliente que navega por teclado ou por leitor de tela perdia o lugar
+            e não ouvia nada — a tela inteira mudava em silêncio. Com
+            `tabIndex={-1}` ela é focável por código sem entrar na ordem de
+            tabulação, e o `aria-live` do rótulo do passo anuncia onde parou.
+          */}
+          <h2 ref={perguntaRef} tabIndex={-1} className="mt-4 text-ask text-ink outline-none">
             {step === "service"
               ? "O que você quer fazer?"
               : step === "branch"
@@ -290,73 +425,101 @@ export function BookingFlow({
                 const tom = esmalteDe(category);
                 return (
                   <section key={category ?? "sem-categoria"}>
-                    <h3 className="mb-2 flex items-center gap-2 text-section">
-                      <Gota esmalte={tom} />
-                      {category ?? "Serviços"}
+                    <h3 className="mb-2.5 flex items-center gap-2">
+                      <Postica esmalte={tom} className="h-[19px] w-[14px]" brilho={false} />
+                      <span className="text-card text-ink">{category ?? "Serviços"}</span>
                     </h3>
-                    <ul className="overflow-hidden rounded-card border border-line bg-surface-raised shadow-card">
-                      {list.map((item, i) => (
-                        <li key={item.id} className={i > 0 ? "border-t border-line" : undefined}>
-                          <button
-                            type="button"
-                            onClick={() => chooseService(item)}
-                            className="group flex w-full items-start gap-4 px-4 py-4 text-left transition-colors hover:bg-accent-soft/45"
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-card text-ink">{item.name}</span>
-                              {item.description ? (
-                                <span className="mt-0.5 line-clamp-2 block text-caption text-ink-secondary">
-                                  {item.description}
+                    {/*
+                      Placas separadas, e não uma lista com filetes: numa carta
+                      de salão cada serviço é um item, não uma linha de tabela
+                      de configurações. O fundo de cada placa é o cartão tingido
+                      no esmalte da própria categoria — 8% é o bastante para o
+                      olho agrupar sem que a cor vire fundo colorido.
+
+                      Sem seta no fim da linha: a afordância é a placa inteira,
+                      com a postiça, o preço em peso 800 e o estado pressionado.
+                      Seta cinza à direita é vocabulário de tela de ajustes.
+                    */}
+                    <ul className="space-y-3">
+                      {list.map((item) => {
+                        const [simbolo, numero] = precoPartido(item.priceCents);
+                        return (
+                          <li key={item.id}>
+                            <button
+                              type="button"
+                              onClick={() => chooseService(item)}
+                              style={
+                                {
+                                  "--esmalte": tom.fill,
+                                  "--aro": tom.aro,
+                                  // A tintura vai no `style`, e não numa classe
+                                  // de propriedade arbitrária: como classe ela
+                                  // empatava com `bg-cartao` na cascata e
+                                  // PERDIA — medido, as seis placas saíam com o
+                                  // mesmo osso #fbf7f2 e a cor da categoria
+                                  // nunca chegava à tela. No style ela sempre
+                                  // vence, e navegador sem `color-mix` ignora a
+                                  // linha e cai no osso, que é o desejado.
+                                  backgroundColor: `color-mix(in oklab, ${tom.fill} 9%, var(--color-cartao))`,
+                                } as React.CSSProperties
+                              }
+                              className="flex w-full items-start gap-3.5 rounded-[14px] bg-cartao px-4 py-3.5 text-left ring-1 ring-cartao-fio transition-transform duration-100 hover:ring-[color-mix(in_oklab,var(--aro)_45%,transparent)] active:translate-y-px active:scale-[.985]"
+                            >
+                              <Postica esmalte={tom} className="mt-0.5 h-[38px] w-[28px]" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-card text-ink">{item.name}</span>
+                                {item.description ? (
+                                  <span className="mt-0.5 line-clamp-2 block text-body text-ink-secondary">
+                                    {item.description}
+                                  </span>
+                                ) : null}
+                                {/* A guia pontilhada liga a duração ao preço, como
+                                    no cardápio: sem ela os dois flutuam soltos nas
+                                    pontas e o olho não sabe que são o mesmo par. */}
+                                <span className="mt-2 flex items-baseline">
+                                  <span className="shrink-0 text-body text-ink-secondary">
+                                    {duracao(item.durationMin)}
+                                  </span>
+                                  <span aria-hidden className="guia" />
+                                  <span className="shrink-0 text-price tabular text-ink">
+                                    <span className="text-ink-secondary">{simbolo}&nbsp;</span>
+                                    {numero}
+                                  </span>
                                 </span>
-                              ) : null}
-                              <span className="mt-1.5 inline-flex items-center gap-1 text-caption text-ink-secondary">
-                                <Clock className="size-3.5 text-ink-tertiary" aria-hidden />
-                                {item.durationMin} min
                               </span>
-                            </span>
-                            <span className="flex shrink-0 items-center gap-2 pt-0.5">
-                              <span className="text-card tabular text-ink">{formatBRL(item.priceCents)}</span>
-                              <ChevronRight
-                                className="size-4 text-ink-tertiary transition-colors group-hover:text-accent"
-                                aria-hidden
-                              />
-                            </span>
-                          </button>
-                        </li>
-                      ))}
+                            </button>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </section>
                 );
               })}
               {services.length === 0 ? (
-                <Card className="px-4 py-6 text-center">
-                  <p className="text-body text-ink">Nada disponível para agendar online</p>
-                  <p className="mt-1 text-caption text-ink-secondary">
-                    {organizationName} ainda não publicou serviços para agendamento pelo site.
-                  </p>
-                </Card>
+                <Vazio
+                  titulo="Nada disponível para agendar online"
+                  detalhe={`${organizationName} ainda não publicou serviços para agendamento pelo site.`}
+                />
               ) : null}
             </div>
           ) : null}
 
           {/* 2. Unidade */}
           {step === "branch" ? (
-            <ul className="mt-5 grid gap-3">
+            // Mesma placa da carta de serviços, sem postiça (unidade não tem
+            // esmalte) e sem seta: a afordância é a placa, não um chevron.
+            <ul className="mt-5 space-y-3">
               {branches.map((item) => (
                 <li key={item.id}>
                   <button
                     type="button"
                     onClick={() => chooseBranch(item)}
-                    className="flex w-full items-center gap-4 rounded-card border border-line bg-surface-raised px-4 py-4 text-left shadow-card transition-[border-color,box-shadow] hover:border-accent/35 hover:shadow-[var(--shadow-card-hover)]"
+                    className="w-full rounded-[14px] bg-cartao px-4 py-4 text-left ring-1 ring-cartao-fio transition-transform duration-100 hover:bg-cartao-sunken active:translate-y-px active:scale-[.985]"
                   >
-                    <MapPin className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-label text-ink">{item.name}</span>
-                      {item.address ? (
-                        <span className="mt-1 block text-caption text-ink-secondary">{item.address}</span>
-                      ) : null}
-                    </span>
-                    <ChevronRight className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
+                    <span className="block text-card text-ink">{item.name}</span>
+                    {item.address ? (
+                      <span className="mt-1 block text-body text-ink-secondary">{item.address}</span>
+                    ) : null}
                   </button>
                 </li>
               ))}
@@ -369,7 +532,7 @@ export function BookingFlow({
               {loadingDays ? (
                 <div className="trilha -mx-5 flex gap-2 overflow-hidden px-5 sm:mx-0 sm:px-0">
                   {Array.from({ length: 8 }).map((_, i) => (
-                    <Skeleton key={i} className="h-[66px] w-[58px] shrink-0" />
+                    <Fantasma key={i} className="h-[78px] w-[58px] shrink-0 rounded-[14px]" />
                   ))}
                 </div>
               ) : availableDays?.length ? (
@@ -410,11 +573,12 @@ export function BookingFlow({
                           // O chip mostra "qui 28"; quem ouve a página precisa
                           // da data por extenso e de quantas vagas restam.
                           aria-label={`${format(date, "EEEE, d 'de' MMMM", { locale: ptBR })} — ${available.slotCount} ${available.slotCount === 1 ? "horário livre" : "horários livres"}`}
+                          style={{ "--aro": esmalte.aro } as React.CSSProperties}
                           className={cn(
-                            "flex h-[74px] w-[58px] shrink-0 snap-start flex-col items-center justify-center rounded-card border transition-colors",
+                            "relative flex h-[78px] w-[58px] shrink-0 snap-start flex-col items-center justify-center rounded-[14px] transition-colors",
                             ativo
-                              ? "border-accent bg-accent text-white"
-                              : "border-line bg-surface-raised text-ink hover:border-line-strong",
+                              ? "bg-accent text-white"
+                              : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",
                           )}
                         >
                           <span
@@ -426,6 +590,31 @@ export function BookingFlow({
                             {WEEKDAY_SHORT[date.getDay()]}
                           </span>
                           <span className="text-title tabular">{format(date, "d")}</span>
+{/*
+                            Quanto o dia tem de vaga, sem número: uma barrinha
+                            que cresce. Dia lotado e dia com uma sobra eram
+                            idênticos na fita, e a cliente só descobria isso
+                            depois de tocar.
+
+                            A largura é RELATIVA ao dia mais cheio da faixa, e
+                            não uma escala absoluta: com "3px por vaga" toda
+                            barra saturava no teto e as catorze ficavam
+                            exatamente iguais — enfeite no lugar de informação.
+
+                            É o `aro` do esmalte e não o `fill`: medido, o fill
+                            a 45% dá de 1,11:1 a 2,39:1 contra o cartão e
+                            reprova o limiar de 3:1 de elemento gráfico.
+                          */}
+                          {mostrarLotacao ? (
+                            <span
+                              aria-hidden
+                              className="mt-1 h-[3px] rounded-pill"
+                              style={{
+                                width: `${Math.round(18 + 42 * (available.slotCount / maiorDia))}%`,
+                                backgroundColor: ativo ? "rgb(255 255 255 / 0.72)" : "var(--aro)",
+                              }}
+                            />
+                          ) : null}
                           {/* A linha do mês existe em TODOS os cartões, vazia na
                               maioria. Renderizá-la só na virada empurrava o
                               número para cima naquele cartão e desalinhava a
@@ -437,7 +626,7 @@ export function BookingFlow({
                           >
                             {viraMes ? format(date, "MMM", { locale: ptBR }) : " "}
                           </span>
-                        </button>
+                                                  </button>
                       );
                     })}
                   </div>
@@ -452,18 +641,16 @@ export function BookingFlow({
 
                   <div className="mt-6 space-y-5">
                     {loadingSlots ? (
-                      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-5 xl:grid-cols-6">
+                      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                         {Array.from({ length: 12 }).map((_, i) => (
-                          <Skeleton key={i} className="h-11" />
+                          <Fantasma key={i} className="h-[52px] rounded-[10px]" />
                         ))}
                       </div>
                     ) : times.length === 0 ? (
-                      <Card className="px-4 py-6 text-center">
-                        <p className="text-body text-ink">Nenhum horário livre neste dia</p>
-                        <p className="mt-1 text-caption text-ink-secondary">
-                          Escolha outra data na faixa acima.
-                        </p>
-                      </Card>
+                      <Vazio
+                        titulo="Nenhum horário livre neste dia"
+                        detalhe="Escolha outra data na faixa acima."
+                      />
                     ) : (
                       <>
                         {manha.length > 0 ? (
@@ -480,19 +667,19 @@ export function BookingFlow({
                   </div>
                 </>
               ) : (
-                <Card className="px-4 py-6 text-center">
-                  <p className="text-body text-ink">Nenhum dia livre nas próximas três semanas</p>
-                  <p className="mt-1 text-caption text-ink-secondary">
-                    Fale com {organizationName} para consultar encaixes ou uma data mais distante.
-                  </p>
-                </Card>
+                <Vazio
+                  titulo="Nenhum dia livre nas próximas três semanas"
+                  detalhe={`Fale com ${organizationName} para consultar encaixes ou uma data mais distante.`}
+                />
               )}
             </div>
           ) : null}
 
           {/* 4. Identificação */}
           {step === "identify" && slot ? (
-            <div className="mt-5 space-y-4">
+            // A medida do formulário é limitada: campo de nome com 940px de
+            // largura numa tela grande não é generosidade, é desorientação.
+            <div className="mt-5 max-w-[440px] space-y-4">
               <Field label="Seu nome" htmlFor="nome">
                 <Input
                   id="nome"
@@ -586,20 +773,27 @@ export function BookingFlow({
           ) : null}
         </div>
 
-        <Resumo
-          esmalte={esmalte}
-          service={service}
-          branch={branch}
-          slot={slot}
-          organizationName={organizationName}
-          onContinuar={step === "when" && slot ? () => setStep("identify") : undefined}
-        />
+        {/* O "Continuar" do desktop.
+            A barra fixa abaixo é `md:hidden`; sem este bloco, o desktop chegava
+            a um beco — horário escolhido e nenhuma forma de seguir. */}
+        {step === "when" && slot ? (
+          <div className="mt-6 hidden items-center justify-between gap-4 border-t border-cartao-linha pt-5 md:flex">
+            <span className="min-w-0 text-body text-ink-secondary">
+              {maiuscula(format(new Date(slot.startsAt), "EEEE, d 'de' MMMM", { locale: ptBR }))} às{" "}
+              <span className="text-card tabular text-ink">{slot.label}</span>
+            </span>
+            <Button variant="primary" size="lg" onClick={() => setStep("identify")}>
+              Continuar
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {/* Barra de ação do celular: só existe quando há uma escolha para levar
-          adiante, e some no desktop, onde o resumo lateral já faz esse papel. */}
+          adiante. Fundo SÓLIDO e não desfocado — desfoque sobre o grão do
+          balcão vira lama, e este é o alvo que não pode perder contraste. */}
       {step === "when" && slot ? (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface-raised/95 px-5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-sticky backdrop-blur lg:hidden">
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-cartao-fio bg-cartao px-5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-sticky md:hidden">
           <div className="mx-auto flex max-w-[620px] items-center justify-between gap-3">
             <span className="min-w-0 text-caption text-ink-secondary">
               {format(new Date(slot.startsAt), "EEE, d 'de' MMM", { locale: ptBR })} às{" "}
@@ -631,104 +825,199 @@ export function BookingFlow({
 function Vitrine({
   organizationName,
   unidade,
+  laca,
+  compacta,
+  barraFixa,
+  contato,
   children,
 }: {
   organizationName: string;
   unidade: Branch | null;
+  laca: Laca;
+  /** Do passo "quando" em diante a fachada encolhe e devolve tela ao conteúdo. */
+  compacta: boolean;
+  /** A barra de ação do celular está no ar e precisa de chão reservado. */
+  barraFixa: boolean;
+  /**
+   * Endereço e telefone no cabeçalho.
+   *
+   * Ficam de fora no bilhete: lá eles já estão escritos na linha "Onde", com o
+   * link do mapa junto, e repeti-los no alto custava 92px de tela — 11% do
+   * celular — para dizer duas vezes a mesma coisa.
+   */
+  contato?: boolean;
   children: React.ReactNode;
 }) {
   const digitos = unidade?.phone?.replace(/\D/g, "") ?? "";
+  const mostrarContato = contato !== false && Boolean(unidade?.address || digitos);
   return (
-    <main className="flex min-h-dvh flex-col bg-[radial-gradient(120%_60%_at_100%_0,#f2e8fc_0,transparent_58%),var(--color-surface)]">
-      <div aria-hidden className="h-1 shrink-0 bg-brand" />
-      <div className="mx-auto flex w-full max-w-[1040px] flex-1 flex-col px-5 pb-28 sm:px-8 lg:pb-16">
-        <header className="pt-7 sm:pt-9">
-          <h1 className="font-brand text-house text-ink">{organizationName}</h1>
-          {unidade?.address || digitos ? (
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-              {unidade?.address ? (
-                <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(unidade.address)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex min-h-11 items-center gap-1.5 text-caption text-ink-secondary underline-offset-4 transition-colors hover:text-accent hover:underline"
-                >
-                  <MapPin className="size-3.5 shrink-0 text-ink-tertiary" aria-hidden />
-                  {unidade.address}
-                </a>
-              ) : null}
-              {digitos ? (
-                <a
-                  href={`tel:+${digitos.length > 11 ? digitos : `55${digitos}`}`}
-                  className="inline-flex min-h-11 items-center gap-1.5 text-caption text-ink-secondary underline-offset-4 transition-colors hover:text-accent hover:underline"
-                >
-                  <Phone className="size-3.5 shrink-0 text-ink-tertiary" aria-hidden />
-                  {unidade!.phone}
-                </a>
+    <main
+      data-surface="cartao"
+      className="pilha-balcao grao relative isolate bg-balcao"
+      style={
+        {
+          "--color-laca": laca.tinta,
+          // O alvéolo: a luz que cai sobre o tampo bem onde o cartão está
+          // apoiado. Sem ele o balcão é um bege chapado de parede.
+          backgroundImage:
+            "radial-gradient(70% 46% at 50% 0%, rgb(255 253 250 / 0.85) 0%, transparent 72%)," +
+            "radial-gradient(88% 58% at 50% -6%, color-mix(in oklab, var(--color-laca) 9%, transparent) 0%, transparent 76%)",
+        } as React.CSSProperties
+      }
+    >
+      <div className="relative z-[1] flex w-full flex-1 flex-col items-center">
+        {/*
+          A página inteira é UM objeto pousado no balcão: a laca, o sorriso e o
+          cartão são a mesma peça, com um recorte só. No celular ela vai de
+          borda a borda — margem lateral ali é tela desperdiçada, e o aparelho
+          já é a moldura. A partir de 768px ela descola do fundo e vira o que
+          sempre foi: um cartão de mostruário deitado numa bancada.
+        */}
+        <article className="grao relative isolate flex w-full flex-1 flex-col overflow-hidden rounded-b-[24px] bg-cartao md:max-w-[760px] md:flex-none md:rounded-[24px] md:shadow-[inset_0_1px_0_rgb(255_255_255/.7),0_26px_60px_-24px_rgb(51_26_63/.28),0_2px_6px_rgb(51_26_63/.08)]">
+          <header
+            data-compacta={compacta || undefined}
+            className="laca sorriso laca-entrada group relative isolate transition-[padding] duration-200 ease-[var(--ease-out-quint)]"
+          >
+            <div
+              className={cn(
+                "relative z-[1] px-5 pb-[calc(var(--sorriso)+10px)] group-data-[compacta]:pb-[calc(var(--sorriso)+4px)] md:px-10",
+                // Sem endereço nem telefone o plano é só o nome: a mesma altura
+                // de antes viraria uma faixa de cor com uma linha no meio.
+                mostrarContato ? "pt-7 group-data-[compacta]:pt-5 md:pt-8" : "pt-6 md:pt-7",
+              )}
+            >
+              {/*
+                A compressão é `transform: scale()` com origem no canto, NUNCA
+                transição de `font-size`: são dois refluxos por quadro e o
+                traçado da Playfair fica instável no meio do caminho.
+              */}
+              <h1 className="origin-top-left font-brand text-fachada text-white transition-transform duration-200 ease-[var(--ease-out-quint)] group-data-[compacta]:scale-[0.74] md:group-data-[compacta]:scale-100">
+                {organizationName}
+              </h1>
+              {mostrarContato ? (
+                // `grid-template-rows: 1fr → 0fr` é a única forma de animar
+                // altura desconhecida sem tirar o bloco do fluxo.
+                // `invisible` junto do `opacity-0`: só a opacidade escondia dos
+                // olhos e mantinha os dois links na ordem de tabulação — quem
+                // navega por teclado parava num endereço que não está na tela.
+                <div className="grid grid-rows-[1fr] opacity-100 transition-[grid-template-rows,opacity,visibility] duration-200 ease-[var(--ease-out-quint)] group-data-[compacta]:invisible group-data-[compacta]:grid-rows-[0fr] group-data-[compacta]:opacity-0 md:group-data-[compacta]:visible md:group-data-[compacta]:grid-rows-[1fr] md:group-data-[compacta]:opacity-100">
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-0.5 overflow-hidden">
+                    {unidade?.address ? (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(unidade.address)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-11 items-center gap-1.5 text-caption text-white/80 underline-offset-4 transition-colors hover:text-white hover:underline"
+                      >
+                        <MapPin className="size-3.5 shrink-0 text-white/65" aria-hidden />
+                        {unidade.address}
+                      </a>
+                    ) : null}
+                    {digitos ? (
+                      <a
+                        href={`tel:+${digitos.length > 11 ? digitos : `55${digitos}`}`}
+                        className="inline-flex min-h-11 items-center gap-1.5 text-caption text-white/80 underline-offset-4 transition-colors hover:text-white hover:underline"
+                      >
+                        <Phone className="size-3.5 shrink-0 text-white/65" aria-hidden />
+                        {unidade!.phone}
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
               ) : null}
             </div>
-          ) : null}
-        </header>
+          </header>
 
-        {/* `mb-12` e não só o `mt-auto` do rodapé: quando o conteúdo já enche a
-            tela o `auto` colapsa para zero e o fio do rodapé encostava na
-            última linha do texto legal. */}
-        <div className="mt-7 mb-12">{children}</div>
+          <div className="relative z-[1] flex-1 px-5 pt-6 pb-8 md:px-10 md:pb-10">{children}</div>
+        </article>
 
-        {/* `mt-auto` e não `mt-12`: com um único serviço publicado o conteúdo
-            ocupa um terço da tela, e o rodapé colado nele deixava 500px de nada
-            embaixo — como se a página tivesse sido cortada. */}
-        <footer className="mt-auto flex items-center gap-2 border-t border-line pb-2 pt-5">
+        <div aria-hidden className="sombra-contato hidden md:block" />
+
+        {/*
+          Respiro do balcão.
+          No celular o cartão é que cresce (`flex-1` acima): passo curto deixava
+          um toco de osso no alto e setecentos pixels de tampo embaixo, que é a
+          mesma queixa que originou o redesenho, só que em bege. No desktop o
+          cartão volta a ter a altura do conteúdo e é o tampo que emoldura.
+        */}
+        <div aria-hidden className="hidden md:block md:min-h-10" />
+
+        <footer className="flex w-full items-center gap-2 px-5 pt-5 pb-2 md:max-w-[760px] md:px-0">
           <BrandLogo compact className="opacity-55 [&_img]:h-6" />
           <span className="text-meta text-ink-secondary">agendamento online</span>
         </footer>
+
+        {/* O chão da barra de ação.
+            Ela é `fixed` e come os últimos 73px da janela: sem esta folga, o
+            rodapé fica embaixo dela — medido, 48px de sobreposição em
+            390x844. Só existe quando a barra existe. */}
+        {barraFixa ? <div aria-hidden className="h-[84px] shrink-0 md:hidden" /> : null}
       </div>
     </main>
   );
 }
 
 /**
- * Três traços rotulados no lugar de três círculos numerados.
+ * O vazio, na superfície da própria página.
  *
- * O número dentro do círculo não dizia nada que a posição já não dissesse, e o
- * rótulo — que é a informação de verdade — só aparecia no desktop. Aqui a
- * palavra vem sempre, e o preenchimento mostra o quanto já foi andado.
+ * Era um `Card` do produto: branco, com sombra, dentro de um cartão de osso —
+ * objeto dentro de objeto, e a sombra dizendo "sou importante" para anunciar
+ * que não há nada. Aqui o vazio é uma depressão no mesmo material.
  */
-function Trilha({ atual }: { atual: number }) {
-  const passos = ["Serviço", "Data e hora", "Seus dados"];
+function Vazio({ titulo, detalhe }: { titulo: string; detalhe: string }) {
   return (
-    <nav aria-label="Etapas do agendamento" className="mb-7 flex gap-2">
-      {passos.map((rotulo, i) => (
-        <div key={rotulo} className="min-w-0 flex-1" aria-current={i === atual ? "step" : undefined}>
-          <div
-            className={cn(
-              "h-1 rounded-pill transition-colors",
-              i <= atual ? "bg-accent" : "bg-line-strong",
-            )}
-          />
-          <p
-            className={cn(
-              "mt-2 truncate text-meta",
-              i === atual ? "font-semibold text-ink" : "text-ink-secondary",
-            )}
-          >
-            {rotulo}
-          </p>
-        </div>
-      ))}
-    </nav>
+    <div className="rounded-[14px] bg-cartao-sunken px-4 py-7 text-center">
+      <p className="text-card text-ink">{titulo}</p>
+      <p className="mx-auto mt-1 max-w-[36ch] text-body text-ink-secondary">{detalhe}</p>
+    </div>
   );
 }
 
 /**
- * Uma escolha já feita, encolhida numa linha — com o botão que a desfaz.
+ * A espera, também no osso.
  *
- * Vale por dois: substitui o "Voltar" por uma ação que a cliente pensa
- * ("trocar o serviço", não "voltar uma tela") e mantém à vista, do meio do
- * fluxo em diante, o que ela escolheu e quanto vai custar. No celular, onde não
- * há resumo lateral, esta linha é a única resposta para "o que eu marquei
- * mesmo?".
+ * O `Skeleton` do produto pulsa em lavanda; sobre o cartão de osso ele lia como
+ * um retângulo azulado colado na página. Mesmo gesto, tinta certa.
  */
+function Fantasma({ className }: { className?: string }) {
+  return (
+    <div
+      aria-hidden
+      className={cn("animate-pulse rounded-[10px] bg-cartao-sunken", className)}
+    />
+  );
+}
+
+/**
+ * A unha postiça — o átomo que aposentou a gota de 12px.
+ *
+ * O arquivo `esmaltes.ts` já argumentava melhor do que a tela entregava: "o
+ * ofício que ela está contratando é literalmente sobre cor". A gota gastava
+ * esse argumento num círculo que ninguém via. A postiça é a mesma informação
+ * na forma do próprio objeto — e continua sendo REFORÇO: o nome escrito da
+ * categoria vem sempre ao lado, e quem não distingue os tons não perde nada.
+ *
+ * Três escalas e só três. O brilho é omitido abaixo de 22px de largura: um
+ * reflexo de 3px não lê como vidro, lê como sujeira.
+ */
+function Postica({
+  esmalte,
+  className,
+  brilho = true,
+}: {
+  esmalte: Esmalte;
+  className?: string;
+  brilho?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn("postica block", brilho && "postica-brilho", className)}
+      style={{ "--esmalte": esmalte.fill, "--aro": esmalte.aro } as React.CSSProperties}
+    />
+  );
+}
+
 function LinhaRecibo({
   esmalte,
   principal,
@@ -738,125 +1027,38 @@ function LinhaRecibo({
   esmalte?: Esmalte;
   principal: string;
   secundario?: string;
-  onTrocar: () => void;
-}) {
-  return (
-    <div className="mt-3 flex items-center gap-3 rounded-card bg-accent-soft/70 py-2 pl-4 pr-2">
-      {esmalte ? <Gota esmalte={esmalte} /> : null}
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-label text-ink">{principal}</p>
-        {secundario ? <p className="truncate text-caption text-ink-secondary">{secundario}</p> : null}
-      </div>
-      <button
-        type="button"
-        onClick={onTrocar}
-        className="min-h-11 shrink-0 rounded-control px-2.5 text-label font-semibold text-accent underline-offset-4 transition-colors hover:underline"
-      >
-        Trocar
-        <span className="sr-only"> {principal}</span>
-      </button>
-    </div>
-  );
-}
-
-/**
- * A gota de esmalte da categoria.
- *
- * O brilho não é enfeite gratuito: é o que faz o círculo ler como esmalte e não
- * como um marcador de lista qualquer. O aro cobre o caso do tom claro demais —
- * um nude puro tem 1,36:1 sobre o branco e simplesmente não aparece.
- */
-function Gota({ esmalte, className }: { esmalte: Esmalte; className?: string }) {
-  return (
-    <span
-      aria-hidden
-      className={cn("block size-3 shrink-0 rounded-pill", className)}
-      style={{
-        backgroundColor: esmalte.fill,
-        backgroundImage: "linear-gradient(145deg, rgb(255 255 255 / 0.55), transparent 58%)",
-        boxShadow: `inset 0 0 0 1.5px ${esmalte.aro}`,
-      }}
-    />
-  );
-}
-
-/**
- * Resumo lateral do desktop.
- *
- * Resolve o vazio que sobrava: o conteúdo ocupava um quinto da largura e o
- * resto era branco. E resolve uma dúvida real — do meio do fluxo em diante a
- * cliente não via mais o que tinha escolhido nem quanto ia custar.
- */
-function Resumo({
-  esmalte,
-  service,
-  branch,
-  slot,
-  organizationName,
-  onContinuar,
-}: {
-  esmalte: Esmalte;
-  service: Service | null;
-  branch: Branch | null;
-  slot: PublicSlot | null;
-  organizationName: string;
   /**
-   * O "Continuar" do desktop mora AQUI, e não é enfeite de simetria: a barra
-   * fixa que leva adiante é `lg:hidden`, então sem este botão o desktop chegava
-   * a um beco — horário escolhido, resumo preenchido e nenhuma forma de seguir.
+   * Ausente significa "não há o que trocar", e o botão simplesmente não existe.
+   *
+   * Com um serviço publicado, o "Trocar" levava a uma tela de escolha com uma
+   * opção só — e a linha de passo saía "0 de 2 · Serviço", contando um passo
+   * que a própria clínica não tem. Reproduzido na conta ENTUR.
    */
-  onContinuar?: () => void;
+  onTrocar?: () => void;
 }) {
   return (
-    <aside className="hidden lg:block">
-      <div className="sticky top-8 rounded-card border border-line bg-surface-raised p-5 shadow-card">
-        <p className="flex items-center gap-2 text-section">
-          <Gota esmalte={esmalte} />
-          Sua marcação
-        </p>
-        <dl className="mt-4 space-y-3.5">
-          <LinhaResumo
-            rotulo="Serviço"
-            valor={service ? `${service.name} · ${service.durationMin} min` : undefined}
-          />
-          <LinhaResumo
-            rotulo="Quando"
-            valor={
-              slot
-                ? maiuscula(format(new Date(slot.startsAt), "EEE, d 'de' MMM", { locale: ptBR })) +
-                  ` · ${slot.label}`
-                : undefined
-            }
-          />
-          {/* "Com" só aparece depois que há horário: a cliente não escolhe a
-              profissional em nenhum passo, então "a escolher" prometeria uma
-              tela que não existe. */}
-          {slot ? <LinhaResumo rotulo="Com" valor={slot.professionalName} /> : null}
-          <LinhaResumo rotulo="Onde" valor={branch?.name ?? organizationName} />
-        </dl>
-        {service ? (
-          <div className="mt-5 flex items-baseline justify-between border-t border-line pt-4">
-            <span className="text-label text-ink-secondary">Total</span>
-            <span className="text-title tabular text-ink">{formatBRL(service.priceCents)}</span>
-          </div>
-        ) : null}
-        {onContinuar ? (
-          <Button variant="primary" size="lg" className="mt-4 w-full" onClick={onContinuar}>
-            Continuar
-          </Button>
-        ) : null}
+    <div className="mt-3 flex items-center gap-3 rounded-[14px] bg-cartao-sunken py-2.5 pl-3.5 pr-2">
+      {esmalte ? <Postica esmalte={esmalte} className="animate-postica-in h-[30px] w-[22px]" /> : null}
+      <div className="min-w-0 flex-1">
+        {/*
+          Duas linhas, e não `truncate`.
+          Medido em 390px: "Quarta-feira, 26 de agosto às 09:30" precisa de
+          278px e tinha 257 — o corte comia justamente o HORÁRIO, o único dado
+          que a cliente abre esta tela para conferir.
+        */}
+        <p className="line-clamp-2 text-card text-ink">{principal}</p>
+        {secundario ? <p className="truncate text-body text-ink-secondary">{secundario}</p> : null}
       </div>
-    </aside>
-  );
-}
-
-function LinhaResumo({ rotulo, valor }: { rotulo: string; valor?: string }) {
-  return (
-    <div>
-      <dt className="text-meta uppercase tracking-[0.06em] text-ink-tertiary">{rotulo}</dt>
-      <dd className={cn("mt-0.5 text-label", valor ? "text-ink" : "text-ink-tertiary")}>
-        {valor ?? "a escolher"}
-      </dd>
+      {onTrocar ? (
+        <button
+          type="button"
+          onClick={onTrocar}
+          className="min-h-11 shrink-0 rounded-control px-2.5 text-label font-semibold text-accent underline-offset-4 transition-colors hover:underline"
+        >
+          Trocar
+          <span className="sr-only"> {principal}</span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -929,8 +1131,8 @@ function Bilhete({
 
         {/* O picote horizontal: a linha por onde o bilhete se destacaria. */}
         <div className="mt-6 flex items-center gap-3 px-6 sm:px-8">
-          <Gota esmalte={esmalte} className="size-3.5" />
-          <span className="h-px flex-1 bg-[repeating-linear-gradient(to_right,var(--color-line-strong)_0_6px,transparent_6px_12px)]" />
+          <Postica esmalte={esmalte} className="h-[19px] w-[14px]" brilho={false} />
+          <span className="h-px flex-1 bg-[repeating-linear-gradient(to_right,var(--color-cartao-linha)_0_6px,transparent_6px_12px)]" />
         </div>
 
         <dl className="mt-5 space-y-3.5 px-6 sm:px-8">
@@ -941,7 +1143,7 @@ function Bilhete({
             valor={confirmation.branchName}
             complemento={confirmation.branchAddress ?? undefined}
           />
-          <LinhaBilhete rotulo="Valor" valor={formatBRL(service.priceCents)} />
+          <LinhaBilhete rotulo="Valor" valor={precoPartido(service.priceCents).join(" ")} />
         </dl>
 
         <div className="mt-6 grid gap-2 px-6 sm:px-8">
@@ -1005,8 +1207,22 @@ function TimeGroup({
 }) {
   return (
     <section>
-      <h3 className="mb-2 text-section">{label}</h3>
-      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-5 xl:grid-cols-6">
+      {/* O rótulo estica até a margem com uma guia pontilhada, como o cabeçalho
+          de seção de um cardápio: sem ela a palavra fica solta à esquerda e a
+          grade abaixo parece começar sozinha. */}
+      <h3 className="mb-2.5 flex items-center">
+        <span className="shrink-0 text-eyebrow text-ink-secondary">{label}</span>
+        <span aria-hidden className="guia" />
+      </h3>
+      {/*
+        Chips soltos, e não uma grade emoldurada.
+        A grade de fio único ficou mais bonita e MENTIU: a última fila quase
+        nunca fecha, e as três células vazias que sobravam depois do último
+        horário liam como vagas que não cabiam na tela. Numa página cujo
+        trabalho inteiro é dizer o que está livre, isso é o pior defeito
+        possível.
+      */}
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
         {slots.map((item) => {
           const active = selected?.startsAt === item.startsAt;
           return (
@@ -1016,10 +1232,14 @@ function TimeGroup({
               onClick={() => onSelect(item)}
               aria-pressed={active}
               className={cn(
-                "h-11 rounded-control border text-body tabular transition-colors duration-[120ms]",
+                // 52px de alvo: é um dedo, à noite, deitada, numa grade
+                // encostada em outra grade.
+                // 52px de alvo: é um dedo, à noite, deitada, numa grade
+                // encostada em outra grade.
+                "h-[52px] rounded-[10px] text-body tabular transition-colors duration-[120ms]",
                 active
-                  ? "border-accent bg-accent font-semibold text-white"
-                  : "border-line bg-surface-raised text-ink hover:border-line-strong",
+                  ? "bg-accent font-bold text-white"
+                  : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",
               )}
             >
               {item.label}
@@ -1031,18 +1251,40 @@ function TimeGroup({
   );
 }
 
-function maiuscula(texto: string): string {
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+/**
+ * Os passos que ESTA clínica realmente tem.
+ *
+ * A trilha antiga dizia "3" sempre, e mentia nas duas pontas: com um serviço
+ * publicado são 2 passos, com mais de uma unidade são 4. Vive fora do
+ * componente para poder ser provada sem navegador — contador de passo que mente
+ * é o tipo de defeito que ninguém nota até a cliente perguntar quantas telas
+ * ainda faltam.
+ */
+export function passosDaClinica(quantosServicos: number, quantasUnidades: number): string[] {
+  return [
+    ...(quantosServicos > 1 ? ["Serviço"] : []),
+    ...(quantasUnidades > 1 ? ["Unidade"] : []),
+    "Dia e hora",
+    "Seus dados",
+  ];
 }
 
 /**
- * Um muro de 32 chips de 15 em 15 minutos não é escolha, é ruído: acima de 20
- * opções o passo dobra para 30 minutos, contanto que ainda sobrem alternativas.
+ * "2h30" no lugar de "150 min".
+ *
+ * Ninguém marca a tarde pensando em cento e cinquenta minutos. Acima de uma
+ * hora a cliente precisa saber quanto do dia dela aquilo ocupa, e é em horas
+ * que ela pensa isso.
  */
-function thinOut(list: PublicSlot[]): PublicSlot[] {
-  if (list.length <= 20) return list;
-  const coarse = list.filter((s) => Number(s.label.slice(3, 5)) % 30 === 0);
-  return coarse.length >= 8 ? coarse : list;
+export function duracao(minutos: number): string {
+  if (minutos < 60) return `${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  const resto = minutos % 60;
+  return resto === 0 ? `${horas}h` : `${horas}h${String(resto).padStart(2, "0")}`;
+}
+
+function maiuscula(texto: string): string {
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
 }
 
 function groupByCategory(services: Service[]): Array<[string | null, Service[]]> {
