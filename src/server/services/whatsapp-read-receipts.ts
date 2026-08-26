@@ -1,7 +1,8 @@
 import "server-only";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
+import { aconteceuEm } from "@/server/services/inbox-service";
 import { markMessagesRead } from "@/server/whatsapp/uazapi-client";
 
 /**
@@ -84,7 +85,11 @@ export async function markConversationReadOnWhatsapp(
           sql`${messages.status} is distinct from 'read'`,
         ),
       )
-      .orderBy(sql`${messages.createdAt} desc`)
+      // As mais recentes pelo que ACONTECEU. Por `created_at`, numa conversa
+      // recém-importada as "mais recentes" são as linhas gravadas na
+      // importação — e o tique azul ia parar em mensagens de julho enquanto a
+      // que a cliente acabou de mandar seguia sem ler no aparelho.
+      .orderBy(desc(aconteceuEm), desc(messages.id))
       .limit(LIMITE_IDS);
 
     const ids = pendentes.map((m) => m.externalId).filter((id): id is string => Boolean(id));

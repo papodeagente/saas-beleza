@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
+import { aconteceuEm } from "@/server/services/inbox-service";
 import {
   normalizeUazapiWebhook,
   type NormalizedMessage,
@@ -298,7 +299,11 @@ async function maybeRequestOlderHistory(
         isNotNull(messages.externalId),
       ),
     )
-    .orderBy(asc(messages.createdAt), asc(messages.id))
+    // A mais antiga pelo que ACONTECEU. Por `created_at`, a primeira linha
+    // gravada de uma conversa já importada é justamente uma mensagem recente
+    // trazida na importação — e a âncora sairia do ponto errado, pedindo ao
+    // provedor um histórico que já temos.
+    .orderBy(asc(aconteceuEm), asc(messages.id))
     .limit(1);
 
   await requestMessageHistory(credentialsOf(connection), remoteJid, 100, maisAntiga?.externalId).catch((error) => {

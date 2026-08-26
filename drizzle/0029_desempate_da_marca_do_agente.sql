@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "ai_last_processed_inbound_id" bigint;

@@ -13,6 +13,7 @@ import {
   organizations,
 } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
+import { aconteceuEm } from "@/server/services/inbox-service";
 import { complete, DEFAULT_MODEL, normalizeModel, type LlmItem } from "@/server/ai/llm";
 import { formatForWhatsApp } from "@/server/ai/text-style";
 import { findTool, toolsFor, type ToolOutcome, type ToolPermissions, type ToolRuntime } from "@/server/ai/tools";
@@ -128,11 +129,15 @@ export async function buildHistory(organizationId: number, conversationId: numbe
       sender: messages.sender,
       body: messages.body,
       transcription: messages.audioTranscription,
-      createdAt: messages.createdAt,
+      createdAt: aconteceuEm,
     })
     .from(messages)
     .where(and(eq(messages.organizationId, organizationId), eq(messages.conversationId, conversationId)))
-    .orderBy(desc(messages.createdAt))
+    // Pelo instante em que ACONTECEU, não pelo que gravamos por último: numa
+    // conversa com histórico importado, as "últimas N mensagens" por
+    // `created_at` são as últimas ESCRITAS — o agente lia uma mensagem de julho
+    // como se fosse a mais recente e respondia a ela.
+    .orderBy(desc(aconteceuEm), desc(messages.id))
     .limit(HISTORY_LIMIT);
 
   return rows

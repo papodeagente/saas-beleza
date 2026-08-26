@@ -1,8 +1,9 @@
 import "server-only";
-import { and, asc, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { aiAgents, conversations, messages } from "@/db/schema";
 import { executeAgentTurn } from "@/server/ai/orchestrator";
+import { aconteceuEm } from "@/server/services/inbox-service";
 import { sendMessageToConversation } from "@/server/services/whatsapp-message-service";
 import { acquireConversationLock, incrementWindow, releaseConversationLock } from "@/server/queues/redis";
 import type { AgentTurnJob } from "@/server/queues/agent-turn-queue";
@@ -90,6 +91,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       isGroup: conversations.isGroup,
       aiPausedAt: conversations.aiPausedAt,
       watermark: conversations.aiLastProcessedInboundAt,
+      watermarkId: conversations.aiLastProcessedInboundId,
       remoteJid: conversations.remoteJid,
     })
     .from(conversations)
@@ -103,7 +105,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
   // recente do que a última fala do agente.
   if (agent.pauseOnHumanReply) {
     const [lastOutbound] = await db
-      .select({ sender: messages.sender, createdAt: messages.createdAt })
+      .select({ sender: messages.sender, createdAt: aconteceuEm })
       .from(messages)
       .where(
         and(
@@ -112,7 +114,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
           eq(messages.direction, "outbound"),
         ),
       )
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(aconteceuEm), desc(messages.id))
       .limit(1);
     if (lastOutbound && lastOutbound.sender === "user") {
       return { status: "skipped", reason: "humano_assumiu" };
@@ -136,7 +138,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
     // fala do agente. Usar só a segunda deixa uma janela: o eco do envio chega
     // pelo webhook depois, e nesse intervalo um retry responderia de novo.
     const [lastAgentMessage] = await db
-      .select({ createdAt: messages.createdAt })
+      .select({ createdAt: aconteceuEm, id: messages.id })
       .from(messages)
       .where(
         and(
@@ -145,14 +147,39 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
           eq(messages.direction, "outbound"),
         ),
       )
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(aconteceuEm), desc(messages.id))
       .limit(1);
 
-    const candidates = [conversation.watermark, lastAgentMessage?.createdAt].filter(
-      (d): d is Date => d instanceof Date,
-    );
-    const threshold = candidates.length
-      ? candidates.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
+    /**
+     * A marca é um PAR: (hora do evento, id).
+     *
+     * Só a hora não serve porque o provedor carimba em SEGUNDOS cheios — 3.196
+     * de 3.196 entradas da base têm milissegundo zerado — enquanto as saídas
+     * que nós gravamos têm fração. Com `>` estrito sobre a hora sozinha, a
+     * mensagem da cliente que cai no mesmo segundo da resposta anterior nunca
+     * passa, e não passa NUNCA MAIS: a marca não desce. Reproduzido: existem 96
+     * pares de entradas no mesmo segundo em 25 conversas, e um par real
+     * saída→entrada na conversa 2423.
+     *
+     * O par é a mesma régua de todo `ORDER BY` desta correção.
+     */
+    const marcas: Array<{ quando: Date; id: number }> = [];
+    if (conversation.watermark instanceof Date) {
+      marcas.push({ quando: conversation.watermark, id: conversation.watermarkId ?? 0 });
+    }
+    if (lastAgentMessage?.createdAt instanceof Date) {
+      marcas.push({ quando: lastAgentMessage.createdAt, id: lastAgentMessage.id });
+    }
+    const threshold = marcas.length
+      ? marcas.reduce((a, b) =>
+          a.quando.getTime() !== b.quando.getTime()
+            ? a.quando.getTime() >= b.quando.getTime()
+              ? a
+              : b
+            : a.id >= b.id
+              ? a
+              : b,
+        )
       : null;
 
     const pending = await db
@@ -161,7 +188,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
         body: messages.body,
         messageType: messages.messageType,
         transcription: messages.audioTranscription,
-        createdAt: messages.createdAt,
+        createdAt: aconteceuEm,
       })
       .from(messages)
       .where(
@@ -169,10 +196,44 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
           eq(messages.organizationId, organizationId),
           eq(messages.conversationId, conversationId),
           eq(messages.direction, "inbound"),
-          threshold ? gt(messages.createdAt, threshold) : undefined,
+          /*
+            OS DOIS LADOS NA MESMA ESCALA, sempre.
+
+            A marca-d'água é gravada a partir do `createdAt` que sai DESTA
+            consulta. Mudar só um dos lados é o pior cenário possível: marca em
+            hora de evento comparada com hora de gravação libera a conversa
+            inteira a cada turno, ou a tranca para sempre.
+
+            Mudar agora é o momento mais barato — `ai_last_processed_inbound_at`
+            está nulo em 158 de 158 conversas, então não existe marca antiga na
+            escala velha para ficar inconsistente.
+
+            E o motivo de mudar: a importação de histórico grava 200 mensagens
+            com `created_at` de AGORA. Todas passariam da marca-d'água de uma
+            vez, e o agente responderia a uma pergunta de julho como se ela
+            tivesse acabado de chegar.
+          */
+          /*
+            OS DOIS LADOS NO MESMO SEGUNDO, e só então o desempate por id.
+
+            O par sozinho não resolvia: o provedor carimba a ENTRADA em segundo
+            cheio (3.196 de 3.196 da base com milissegundo zerado) e a SAÍDA que
+            nós gravamos tem fração. A resposta da IA às 15:31:00.900 e a
+            mensagem da cliente logo depois, carimbada 15:31:00.000, comparadas
+            direto, dizem que a cliente falou ANTES — e ela some como gatilho
+            para sempre, porque a marca nunca desce.
+
+            Truncar os dois lados ao segundo devolve a comparação ao terreno
+            comum; o id decide dentro do segundo, e id é monotônico com a
+            inserção. A entrada importada de julho continua barrada, porque aí a
+            diferença é de meses, não de fração.
+          */
+          threshold
+            ? sql`(date_trunc('second', ${aconteceuEm}), ${messages.id}) > (date_trunc('second', ${threshold.quando}::timestamptz), ${threshold.id})`
+            : undefined,
         ),
       )
-      .orderBy(asc(messages.createdAt));
+      .orderBy(asc(aconteceuEm), asc(messages.id));
 
     const usable = pending.filter((m) => {
       if (m.messageType === "audio") return Boolean(m.transcription?.trim());
@@ -192,7 +253,10 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       .map((t) => t.trim())
       .filter(Boolean)
       .join("\n");
-    const lastInboundAt = usable[usable.length - 1].createdAt;
+    // A marca grava o PAR da última entrada respondida: a hora e o id.
+    const ultima = usable[usable.length - 1];
+    const lastInboundAt = ultima.createdAt;
+    const lastInboundId = ultima.id;
 
     const result = await executeAgentTurn({
       organizationId,
@@ -207,7 +271,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       // assim a marca-d'água avança, senão o turno se repete em laço.
       await db
         .update(conversations)
-        .set({ aiLastProcessedInboundAt: lastInboundAt })
+        .set({ aiLastProcessedInboundAt: lastInboundAt, aiLastProcessedInboundId: lastInboundId })
         .where(eq(conversations.id, conversationId));
       if (result.effect?.type === "transfer_to_human") {
         await applyTransfer(organizationId, conversationId, result.effect.reason, result.effect.summary);
@@ -231,7 +295,11 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
     // sem resposta e alguém ver o erro — melhor do que receber duas.
     await db
       .update(conversations)
-      .set({ aiLastProcessedInboundAt: lastInboundAt, controlledBy: "ai" })
+      .set({
+        aiLastProcessedInboundAt: lastInboundAt,
+        aiLastProcessedInboundId: lastInboundId,
+        controlledBy: "ai",
+      })
       .where(eq(conversations.id, conversationId));
 
     // Só os últimos segundos vão para o provedor: o suficiente para o cliente

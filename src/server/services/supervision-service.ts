@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, customers, messages, organizationMembers, users } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
+import { aconteceuEm } from "@/server/services/inbox-service";
 
 /**
  * Painel de supervisão.
@@ -152,7 +153,13 @@ export async function getSupervisionSnapshot(ctx: TenantContext): Promise<Superv
       .select({
         conversationId: messages.conversationId,
         body: messages.body,
-        rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${messages.createdAt} desc)`.as(
+        // Mesma régua do inbox: a prévia da fila é a ÚLTIMA mensagem da
+        // conversa, e última é pelo que aconteceu, não pelo que foi gravado
+        // por último.
+        // O desempate por id vem junto: sem ele, duas mensagens do mesmo
+        // segundo (183 linhas na base) fazem esta tela escolher uma e o Inbox
+        // escolher a outra — a mesma conversa com duas prévias diferentes.
+        rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${aconteceuEm} desc, ${messages.id} desc)`.as(
           "rank",
         ),
       })

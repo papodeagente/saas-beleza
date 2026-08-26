@@ -1,0 +1,1 @@
+CREATE INDEX "messages_conversation_evento_idx" ON "messages" USING btree ("conversation_id",coalesce(sent_at, created_at),"id");

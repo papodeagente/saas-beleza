@@ -15,6 +15,7 @@ import { resolveConversation } from "@/server/services/conversation-resolver";
 import { brPhoneVariants } from "@/server/services/outbound-conversation-service";
 import { syncConversationHistory } from "@/server/services/whatsapp-message-service";
 import { syncProviderChats } from "@/server/services/provider-chat-sync";
+import { aconteceuEm } from "@/server/services/inbox-service";
 import { getRedis } from "@/server/queues/redis";
 import { canonicalBrPhone, digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
 import { findChats, listAddressBook, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
@@ -840,11 +841,18 @@ export async function getGroupThread(
       mediaFileName: messages.mediaFileName,
       audioTranscription: messages.audioTranscription,
       sentAt: messages.sentAt,
-      createdAt: messages.createdAt,
+      // O carimbo que a tela imprime é o mesmo pelo qual ela ordena. A ordem
+      // aqui já usava `coalesce`, mas a hora impressa vinha do `created_at`: o
+      // fio ficava certo e a data, mentindo — mensagem de julho importada em
+      // agosto aparecia na posição certa, datada de agosto.
+      createdAt: aconteceuEm,
     })
     .from(messages)
     .where(and(eq(messages.organizationId, ctx.organizationId), eq(messages.conversationId, conversationId)))
-    .orderBy(desc(sql`coalesce(${messages.sentAt}, ${messages.createdAt})`))
+    // O desempate por id não é preciosismo: o provedor manda o carimbo em
+    // SEGUNDOS, e há 183 linhas empatadas no mesmo segundo — sem ele, duas
+    // mensagens do mesmo segundo trocam de lugar entre dois carregamentos.
+    .orderBy(desc(aconteceuEm), desc(messages.id))
     .limit(120);
 
   /**

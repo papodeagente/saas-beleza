@@ -983,6 +983,18 @@ export const conversations = pgTable(
     // Marca-d'água do último inbound já respondido pelo agente. Avança de forma
     // síncrona no envio para que um retry não gere resposta duplicada.
     aiLastProcessedInboundAt: timestamp("ai_last_processed_inbound_at", { withTimezone: true }),
+    /**
+     * O id da última entrada já respondida — o desempate da marca-d'água.
+     *
+     * O carimbo sozinho não basta porque o provedor manda a hora em SEGUNDOS
+     * cheios: 3.196 de 3.196 entradas da base têm milissegundo zerado, enquanto
+     * as saídas que nós gravamos têm fração. Com o filtro `>` estrito, uma
+     * mensagem da cliente que caia no MESMO segundo da resposta anterior nunca
+     * passa da marca — e some como gatilho para sempre, porque a marca não
+     * desce. A comparação passa a ser pelo par (hora, id), a mesma régua de
+     * todo `ORDER BY` desta correção.
+     */
+    aiLastProcessedInboundId: bigint("ai_last_processed_inbound_id", { mode: "number" }),
     unreadCount: integer("unread_count").notNull().default(0),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
@@ -1051,6 +1063,23 @@ export const messages = pgTable(
   },
   (t) => [
     index("messages_conversation_idx").on(t.conversationId, t.createdAt),
+    /**
+     * A ordem do fio e da prévia é `coalesce(sent_at, created_at), id` — a hora
+     * em que a mensagem ACONTECEU, e não a em que a gravamos.
+     *
+     * Um btree em `created_at` não serve essa expressão. Sem este índice, a
+     * subconsulta lateral que monta a prévia da lista volta a ler todas as
+     * mensagens de cada conversa e ordenar em memória: medido no banco real,
+     * 304 buffers viram 918.
+     *
+     * Colunas sem qualificar de propósito: `CREATE INDEX` não aceita
+     * `messages.sent_at`.
+     */
+    index("messages_conversation_evento_idx").on(
+      t.conversationId,
+      sql`coalesce(sent_at, created_at)`,
+      t.id,
+    ),
     // Índice completo (ver comentário em whatsapp_webhook_events): mensagem
     // interna sem id de provedor continua permitida, e a deduplicação do
     // webhook passa a funcionar.

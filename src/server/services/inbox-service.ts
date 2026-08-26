@@ -173,7 +173,9 @@ export async function listConversations(
     })
     .from(messages)
     .where(eq(messages.conversationId, conversations.id))
-    .orderBy(desc(messages.createdAt), desc(messages.id))
+    // Mesma régua do fio: a prévia é a ÚLTIMA mensagem da conversa, e última é
+    // pelo que aconteceu, não pelo que foi gravado por último.
+    .orderBy(desc(aconteceuEm), desc(messages.id))
     .limit(1)
     .as("last_message");
 
@@ -384,6 +386,37 @@ export type ConversationDetail = {
   context: ConversationContext | null;
 };
 
+/**
+ * QUANDO A MENSAGEM ACONTECEU.
+ *
+ * `messages` guarda dois carimbos e eles não são a mesma coisa: `sent_at` é o
+ * instante no WhatsApp, e `created_at` é quando NÓS gravamos a linha. Para
+ * mensagem que chega ao vivo pelo webhook os dois ficam a milissegundos um do
+ * outro e a diferença não aparece. Para mensagem IMPORTADA do histórico, todas
+ * nascem com `created_at = now()` da importação carregando o `sent_at`
+ * verdadeiro e antigo — e aí ordenar por `created_at` põe julho depois de
+ * ontem.
+ *
+ * Medido em produção quando o dono relatou: 3.219 das 4.534 mensagens tinham
+ * mais de cinco minutos de diferença entre os dois carimbos, e 34 das 158
+ * conversas mudavam de ordem por causa disso. Na conversa 443, mensagens de
+ * 31/07 gravadas em 25/08 às 03:41 apareciam ENTRE as de 25/08 12:00 e as de
+ * 26/08 00:24.
+ *
+ * O `coalesce` cobre as seis mensagens de demonstração que nasceram sem
+ * `sent_at`: nelas o `created_at` É o instante pretendido.
+ *
+ * Vive aqui, exportado, para que a lista, o fio e os grupos não possam divergir
+ * — duas definições de "quando aconteceu" é como isto começou.
+ */
+export const aconteceuEm = sql<Date>`coalesce(${messages.sentAt}, ${messages.createdAt})`.mapWith(
+  // `mapWith` não é enfeite: expressão SQL crua perde o mapeamento de tipo da
+  // coluna e o driver devolve TEXTO. A tela então chamava `.toISOString()` num
+  // string e quebrava o fio inteiro — os testes não pegaram porque
+  // `new Date(texto)` funciona.
+  messages.createdAt,
+);
+
 export async function getConversation(
   ctx: TenantContext,
   conversationId: number,
@@ -434,7 +467,9 @@ export async function getConversation(
       // (applyReaction), então a asserção fica no único ponto de leitura.
       reactions: sql<Array<{ emoji: string; fromMe: boolean }> | null>`${messages.reactions}`,
       deletedAt: messages.deletedAt,
-      createdAt: messages.createdAt,
+      // O que a tela chama de `createdAt` é o instante em que a mensagem
+      // ACONTECEU: é dele que saem o separador de data e o horário da bolha.
+      createdAt: aconteceuEm,
     })
     .from(messages)
     .leftJoin(sender, eq(sender.id, messages.senderUserId))
@@ -445,7 +480,7 @@ export async function getConversation(
     // recarregamento. O desempate por id importa porque dois inbounds podem
     // cair no mesmo milissegundo, e sem ele o corte escolhe arbitrariamente
     // qual sobrevive.
-    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .orderBy(desc(aconteceuEm), desc(messages.id))
     .limit(200);
 
   /**
