@@ -461,3 +461,109 @@ describe("financeiro", () => {
     expect(events.map((e) => e.type)).toContain("appointment.created");
   });
 });
+
+/**
+ * As duas guardas que o marketplace tornou urgentes.
+ *
+ * Antes, `createAppointment` conferia só serviço e cliente. Profissional,
+ * unidade e recurso iam do chamador direto para o INSERT, e as chaves
+ * estrangeiras de `appointments` são simples — não compostas com
+ * `organization_id` — então o banco aceitava um agendamento da conta A
+ * apontando para a profissional da conta B. E `startsAt` não passava por
+ * validação nenhuma: um POST forjado marcava às 3h da manhã.
+ *
+ * Enquanto cada link público expunha só os próprios ids, isso era obscuro. Num
+ * diretório de manicures, ids de vários salões aparecem na mesma tela.
+ */
+describe("guardas do caminho público", () => {
+  it("recusa profissional de outro tenant", async () => {
+    await expect(
+      createAppointment(alpha.ctx, {
+        customerId: alpha.customerId,
+        serviceId: alpha.serviceId,
+        professionalId: beta.professionalId,
+        branchId: alpha.branchId,
+        startsAt: slotAt(20, 9),
+      }),
+    ).rejects.toMatchObject({ code: "PROFESSIONAL_NOT_FOUND" });
+  });
+
+  it("recusa unidade de outro tenant", async () => {
+    await expect(
+      createAppointment(alpha.ctx, {
+        customerId: alpha.customerId,
+        serviceId: alpha.serviceId,
+        professionalId: alpha.professionalId,
+        branchId: beta.branchId,
+        startsAt: slotAt(20, 10),
+      }),
+    ).rejects.toMatchObject({ code: "BRANCH_NOT_FOUND" });
+  });
+
+  it("recusa recurso de outro tenant", async () => {
+    await expect(
+      createAppointment(alpha.ctx, {
+        customerId: alpha.customerId,
+        serviceId: alpha.equipmentServiceId,
+        professionalId: alpha.professionalId,
+        branchId: alpha.branchId,
+        resourceId: beta.equipmentId,
+        startsAt: slotAt(20, 11),
+      }),
+    ).rejects.toMatchObject({ code: "RESOURCE_NOT_FOUND" });
+  });
+
+  it("recusa horário fora da grade quando a origem é pública", async () => {
+    // A grade da fixture é 08:00–20:00. 03:00 nunca foi aberto pela clínica, e
+    // o EXCLUDE não pega isso: ele só enxerga colisão com o que já existe.
+    await expect(
+      createAppointment(alpha.ctx, {
+        customerId: alpha.customerId,
+        serviceId: alpha.serviceId,
+        professionalId: alpha.professionalId,
+        branchId: alpha.branchId,
+        startsAt: slotAt(21, 3),
+        source: "public",
+      }),
+    ).rejects.toMatchObject({ code: "SLOT_NOT_AVAILABLE" });
+  });
+
+  it("recusa horário fora da grade quando quem marca é o agente de IA", async () => {
+    await expect(
+      createAppointment(alpha.ctx, {
+        customerId: alpha.customerId,
+        serviceId: alpha.serviceId,
+        professionalId: alpha.professionalId,
+        branchId: alpha.branchId,
+        startsAt: slotAt(21, 23),
+        source: "ai",
+      }),
+    ).rejects.toMatchObject({ code: "SLOT_NOT_AVAILABLE" });
+  });
+
+  it("deixa a recepção fazer encaixe fora da grade", async () => {
+    // Encaixe é operação legítima de quem está autenticado no tenant. A guarda
+    // existe contra o caminho anônimo, não contra a dona do salão.
+    const appointment = await createAppointment(alpha.ctx, {
+      customerId: alpha.customerId,
+      serviceId: alpha.serviceId,
+      professionalId: alpha.professionalId,
+      branchId: alpha.branchId,
+      startsAt: slotAt(22, 6, 30),
+      source: "admin",
+    });
+    expect(appointment.id).toBeGreaterThan(0);
+  });
+
+  it("aceita horário que está de fato na grade pelo caminho público", async () => {
+    const appointment = await createAppointment(alpha.ctx, {
+      customerId: alpha.customerId,
+      serviceId: alpha.serviceId,
+      professionalId: alpha.professionalId,
+      branchId: alpha.branchId,
+      startsAt: slotAt(23, 9),
+      source: "public",
+    });
+    expect(appointment.id).toBeGreaterThan(0);
+  });
+});

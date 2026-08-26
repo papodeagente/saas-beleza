@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { and, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
@@ -100,6 +100,21 @@ export async function getSession(): Promise<TenantContext | null> {
     .innerJoin(organizationMembers, eq(organizationMembers.userId, users.id))
     .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
     .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, new Date())))
+    /**
+     * O `order by` não é enfeite: sem ele o `limit(1)` escolhe UMA das contas
+     * do usuário ao acaso, e o Postgres não promete a mesma entre execuções.
+     *
+     * Quem pertence a duas contas — a manicure com dois estúdios, o contador
+     * que administra a agenda de duas clientes — abria o painel e via ora uma,
+     * ora outra, sem entender por quê. Enquanto não existe seletor de conta na
+     * interface, a menos ruim é uma escolha ESTÁVEL: a associação mais antiga,
+     * que é a conta principal de quem se cadastrou primeiro e depois foi
+     * convidado para outra.
+     *
+     * Isto passa a doer mais com o marketplace, que atrai exatamente o perfil
+     * de quem atende em mais de um lugar.
+     */
+    .orderBy(asc(organizationMembers.createdAt), asc(organizations.id))
     .limit(1);
 
   return rows[0] ?? null;

@@ -12,6 +12,7 @@ import {
 } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
 import type { TenantContext } from "@/server/auth";
+import { getAccountAccess } from "./account-access";
 import { createAppointment } from "./appointment-service";
 import { getAvailableSlots } from "./availability-service";
 import { quantosHorariosVisiveis } from "@/app/agendar/[slug]/horarios";
@@ -52,9 +53,42 @@ function publicContext(org: typeof organizations.$inferSelect): TenantContext {
   };
 }
 
+/**
+ * Existe a conta, independentemente de ela poder vender hoje.
+ *
+ * Serve para a página distinguir "link errado" (404) de "agenda fora do ar no
+ * momento" — que são coisas diferentes para quem clicou num panfleto.
+ */
+export async function publicOrganizationExists(slug: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.slug, slug))
+    .limit(1);
+  return Boolean(row);
+}
+
 export async function getPublicOrganization(slug: string): Promise<PublicOrganization | null> {
   const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
   if (!org) return null;
+
+  /**
+   * O portão comercial vale no caminho público também.
+   *
+   * `getAccountAccess` já existia e já resolvia suspensão, teste vencido e
+   * cancelamento com período encerrado — mas era chamada só nos caminhos
+   * autenticados. O resultado é que uma conta suspensa por inadimplência
+   * perdia o painel e mantinha `/agendar/[slug]` no ar: a cliente marcava
+   * horário com alguém que não ia ver o agendamento, e a plataforma seguia
+   * vendendo publicamente a agenda de quem não paga.
+   *
+   * A checagem mora AQUI, e não em cada chamador, porque este é o funil por
+   * onde passam a página, as três Server Actions públicas e tudo que o
+   * marketplace vier a ler. Um portão que se pode esquecer de abrir não é
+   * portão.
+   */
+  const acesso = await getAccountAccess(org.id);
+  if (!acesso.allowed) return null;
 
   const [branchRows, serviceRows] = await Promise.all([
     db

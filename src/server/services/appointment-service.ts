@@ -5,6 +5,7 @@ import { db } from "@/db";
 import {
   appointmentHistory,
   appointments,
+  branches,
   commissions,
   customers,
   domainEvents,
@@ -12,6 +13,7 @@ import {
   payments,
   professionalServices,
   professionals,
+  resources,
   services,
 } from "@/db/schema";
 import { dateISOInTz } from "@/lib/tz";
@@ -50,6 +52,79 @@ function isOverlapViolation(error: unknown): boolean {
   return false;
 }
 
+/**
+ * Confere que profissional, unidade e recurso pertencem ao tenant do contexto.
+ *
+ * Três consultas contadas em uma só: `count(*)` por tabela sairia em três
+ * viagens, e este caminho já faz seis.
+ */
+async function assertPertenceAoTenant(ctx: TenantContext, input: CreateAppointmentInput) {
+  const [prof] = await db
+    .select({ id: professionals.id })
+    .from(professionals)
+    .where(
+      and(
+        eq(professionals.id, input.professionalId),
+        eq(professionals.organizationId, ctx.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!prof) throw new DomainError("Profissional não encontrado.", "PROFESSIONAL_NOT_FOUND");
+
+  const [branch] = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(eq(branches.id, input.branchId), eq(branches.organizationId, ctx.organizationId)))
+    .limit(1);
+  if (!branch) throw new DomainError("Unidade não encontrada.", "BRANCH_NOT_FOUND");
+
+  if (input.resourceId != null) {
+    const [resource] = await db
+      .select({ id: resources.id })
+      .from(resources)
+      .where(
+        and(eq(resources.id, input.resourceId), eq(resources.organizationId, ctx.organizationId)),
+      )
+      .limit(1);
+    if (!resource) throw new DomainError("Recurso não encontrado.", "RESOURCE_NOT_FOUND");
+  }
+}
+
+/**
+ * Confere que o horário pedido existe de verdade na grade da clínica.
+ *
+ * NÃO vale para `source: "admin"`. A recepção faz encaixe fora da grade o tempo
+ * todo — é operação legítima de quem está autenticado naquele tenant e sabe o
+ * que está fazendo. O que não pode é o caminho ANÔNIMO (link público, WhatsApp,
+ * agente de IA) inventar horário: ali quem escolhe é o visitante, e a grade é a
+ * única coisa que traduz "a clínica abre às 9h e o serviço precisa de 2h de
+ * antecedência" para o servidor.
+ */
+async function assertHorarioAberto(
+  ctx: TenantContext,
+  input: CreateAppointmentInput,
+  serviceId: number,
+) {
+  if ((input.source ?? "admin") === "admin") return;
+
+  const { getAvailableSlots } = await import("./availability-service");
+  const slots = await getAvailableSlots(ctx, {
+    serviceId,
+    dateISO: dateISOInTz(input.startsAt, ctx.timezone),
+    branchId: input.branchId,
+    professionalId: input.professionalId,
+  });
+
+  const pedido = input.startsAt.getTime();
+  const existe = slots.some((slot) => slot.start.getTime() === pedido);
+  if (!existe) {
+    throw new DomainError(
+      "Esse horário não está mais disponível. Escolha outro horário.",
+      "SLOT_NOT_AVAILABLE",
+    );
+  }
+}
+
 export type CreateAppointmentInput = {
   customerId: number;
   serviceId: number;
@@ -77,6 +152,39 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
     .where(and(eq(customers.id, input.customerId), eq(customers.organizationId, ctx.organizationId)))
     .limit(1);
   if (!customer) throw new DomainError("Cliente não encontrado.", "CUSTOMER_NOT_FOUND");
+
+  /**
+   * Profissional, unidade e recurso também precisam ser DESTE tenant.
+   *
+   * Antes só serviço e cliente eram conferidos, e os outros três ids iam do
+   * cliente direto para o INSERT. As chaves estrangeiras de `appointments`
+   * (drizzle/0000_init.sql) são simples, não compostas com `organization_id`,
+   * então o banco aceitava de bom grado um agendamento da conta A apontando
+   * para a profissional da conta B — e o EXCLUDE anti-sobreposição, que é por
+   * `professional_id`, passava a reservar a agenda de alguém de outra conta.
+   *
+   * Isso era obscuro enquanto cada link público expunha só os próprios ids.
+   * Num diretório, ids de vários salões circulam na mesma tela e o furo deixa
+   * de ser teórico.
+   */
+  await assertPertenceAoTenant(ctx, input);
+
+  /**
+   * E o horário é revalidado no servidor, contra a mesma função que desenhou a
+   * grade para o cliente.
+   *
+   * `startsAt` chegava sem conferência nenhuma: um POST forjado agendava às 3h
+   * da manhã, furava a antecedência mínima do serviço, a janela máxima e os
+   * intervalos entre atendimentos. O único freio era o EXCLUDE, que só pega
+   * colisão com um agendamento que já existe — não pega horário que a clínica
+   * nunca abriu.
+   *
+   * A checagem fica FORA da transação de propósito: `getAvailableSlots` faz
+   * seis consultas e seguraria a transação aberta durante todas elas. A janela
+   * de corrida que sobra entre esta validação e o INSERT continua coberta pelo
+   * EXCLUDE, que é autoridade de banco.
+   */
+  await assertHorarioAberto(ctx, input, service.id);
 
   const endsAt = addMinutes(input.startsAt, service.durationMin);
 

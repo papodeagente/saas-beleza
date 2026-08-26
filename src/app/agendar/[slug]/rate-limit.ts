@@ -36,9 +36,64 @@ const JANELA_MS = 60_000;
  */
 const MAX_CHAVES = 20_000;
 
-type Janela = { inicio: number; total: number; porChave: Map<string, number> };
+/**
+ * As consultas de disponibilidade custam MUITO mais que uma visita, e até agora
+ * não tinham freio nenhum.
+ *
+ * A conta, medida em `availability-service.ts`: `getAvailableSlots` faz seis
+ * consultas ao banco. `publicAvailableDaysAction` chama uma por data e aceita
+ * até 31 — a tela pede 21. Ou seja, UM toque em "escolher serviço" dispara
+ * ~126 consultas concorrentes contra um pool de 10 conexões
+ * (`src/db/index.ts`). Três visitantes simultâneos e mal-intencionados
+ * derrubam o banco do produto inteiro sem precisar de botnet.
+ *
+ * Por isso o teto de consulta é mais apertado que o de visita, e o de
+ * agendamento — que ESCREVE — é o mais apertado dos três.
+ */
+export const CONSULTAS_POR_MINUTO_POR_IP = 20;
+export const CONSULTAS_POR_MINUTO_NA_PLATAFORMA = 400;
+export const AGENDAMENTOS_POR_MINUTO_POR_IP = 5;
+export const AGENDAMENTOS_POR_MINUTO_NA_PLATAFORMA = 120;
 
-let janela: Janela = { inicio: 0, total: 0, porChave: new Map() };
+type Janela = { inicio: number; total: number; porChave: Map<string, number> };
+type Balde = "visita" | "consulta" | "agendamento";
+
+const LIMITES: Record<Balde, { porChave: number; naPlataforma: number }> = {
+  visita: { porChave: VISITAS_POR_MINUTO_POR_IP, naPlataforma: VISITAS_POR_MINUTO_NA_PLATAFORMA },
+  consulta: {
+    porChave: CONSULTAS_POR_MINUTO_POR_IP,
+    naPlataforma: CONSULTAS_POR_MINUTO_NA_PLATAFORMA,
+  },
+  agendamento: {
+    porChave: AGENDAMENTOS_POR_MINUTO_POR_IP,
+    naPlataforma: AGENDAMENTOS_POR_MINUTO_NA_PLATAFORMA,
+  },
+};
+
+/**
+ * Um balde por tipo de ação, e não um só compartilhado: quem está navegando
+ * muito não pode gastar a cota de quem está tentando fechar um agendamento.
+ */
+const janelas = new Map<Balde, Janela>();
+
+function nova(agora: number): Janela {
+  return { inicio: agora, total: 0, porChave: new Map() };
+}
+
+function permitir(balde: Balde, chave: string, agora: number): boolean {
+  let janela = janelas.get(balde);
+  if (!janela || agora - janela.inicio >= JANELA_MS || janela.porChave.size > MAX_CHAVES) {
+    janela = nova(agora);
+    janelas.set(balde, janela);
+  }
+  const limite = LIMITES[balde];
+  if (janela.total >= limite.naPlataforma) return false;
+  const usadas = janela.porChave.get(chave) ?? 0;
+  if (usadas >= limite.porChave) return false;
+  janela.porChave.set(chave, usadas + 1);
+  janela.total += 1;
+  return true;
+}
 
 /**
  * Registra uma visita e diz se ela pode prosseguir.
@@ -48,18 +103,20 @@ let janela: Janela = { inicio: 0, total: 0, porChave: new Map() };
  * ganha a chance de empurrar a janela para frente insistindo.
  */
 export function permitirVisita(chave: string, agora = Date.now()): boolean {
-  if (agora - janela.inicio >= JANELA_MS || janela.porChave.size > MAX_CHAVES) {
-    janela = { inicio: agora, total: 0, porChave: new Map() };
-  }
-  if (janela.total >= VISITAS_POR_MINUTO_NA_PLATAFORMA) return false;
-  const usadas = janela.porChave.get(chave) ?? 0;
-  if (usadas >= VISITAS_POR_MINUTO_POR_IP) return false;
-  janela.porChave.set(chave, usadas + 1);
-  janela.total += 1;
-  return true;
+  return permitir("visita", chave, agora);
 }
 
-/** Só para o teste: zera a janela entre casos. */
+/** Leitura de dias livres ou de horários. Cara: até 126 consultas por chamada. */
+export function permitirConsulta(chave: string, agora = Date.now()): boolean {
+  return permitir("consulta", chave, agora);
+}
+
+/** Tentativa de fechar um agendamento. É escrita, e o teto é o mais baixo. */
+export function permitirAgendamento(chave: string, agora = Date.now()): boolean {
+  return permitir("agendamento", chave, agora);
+}
+
+/** Só para o teste: zera as janelas entre casos. */
 export function _resetarJanelaDeVisitas(): void {
-  janela = { inicio: 0, total: 0, porChave: new Map() };
+  janelas.clear();
 }

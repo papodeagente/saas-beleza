@@ -9,7 +9,7 @@ import { normalizePhone } from "@/lib/phone";
 import { dateISOInTz, formatTz } from "@/lib/tz";
 import { DomainError } from "@/server/services/appointment-service";
 import { clientIp } from "@/server/services/signup";
-import { permitirVisita } from "./rate-limit";
+import { permitirAgendamento, permitirConsulta, permitirVisita } from "./rate-limit";
 import {
   type PublicSlot,
   createPublicBooking,
@@ -17,6 +17,21 @@ import {
   getPublicOrganization,
   getPublicSlots,
 } from "@/server/services/public-booking-service";
+
+/**
+ * Chave do limitador: endereço + agenda.
+ *
+ * Por agenda, e não só por endereço, para que um visitante insistente numa
+ * clínica não consiga fechar a consulta de disponibilidade das outras — o mesmo
+ * raciocínio que `permitirVisita` já usava.
+ */
+async function chaveDeVazao(slug: string): Promise<string> {
+  return `${clientIp(await headers())}:${slug}`;
+}
+
+/** Erro que a tela mostra quando o freio pega. Neutro: não é culpa da cliente. */
+const MUITAS_TENTATIVAS =
+  "Muitas consultas em pouco tempo. Aguarde alguns segundos e tente de novo.";
 
 const slotsSchema = z.object({
   slug: z.string().min(1),
@@ -28,6 +43,9 @@ const slotsSchema = z.object({
 
 export async function publicSlotsAction(input: unknown): Promise<PublicSlot[]> {
   const data = slotsSchema.parse(input);
+  // Seis consultas ao banco por chamada, sem sessão e sem custo para quem
+  // chama. Ver o comentário do teto em ./rate-limit.
+  if (!permitirConsulta(await chaveDeVazao(data.slug))) return [];
   return getPublicSlots(data.slug, {
     serviceId: data.serviceId,
     dateISO: data.dateISO,
@@ -45,6 +63,8 @@ const daysSchema = z.object({
 
 export async function publicAvailableDaysAction(input: unknown) {
   const data = daysSchema.parse(input);
+  // A mais cara das três: uma varredura de disponibilidade POR DATA, até 31.
+  if (!permitirConsulta(await chaveDeVazao(data.slug))) return [];
   return getPublicAvailableDays(data.slug, data);
 }
 
@@ -109,6 +129,10 @@ export async function publicBookingAction(input: unknown): Promise<BookingAction
   const parsed = bookingSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0].message };
+  }
+
+  if (!permitirAgendamento(await chaveDeVazao(parsed.data.slug))) {
+    return { ok: false, error: MUITAS_TENTATIVAS };
   }
 
   try {

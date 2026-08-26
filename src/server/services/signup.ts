@@ -75,6 +75,16 @@ export const RESERVED_SLUGS = [
   "suporte",
   "webhooks",
   "painel",
+  // Rotas do marketplace. Precisam entrar aqui NO MESMO commit em que a rota
+  // nasce: uma conta chamada "Buscar" sequestraria o endereço da busca, e o
+  // slug de quem já se cadastrou não é reescrito depois.
+  "manicures",
+  "buscar",
+  "cidade",
+  "perto-de-mim",
+  "marketplace",
+  "salao",
+  "saloes",
 ] as const;
 
 /**
