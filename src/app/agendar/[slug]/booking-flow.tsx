@@ -1,8 +1,16 @@
 "use client";
 
-import { addDays, format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CalendarPlus, Check, MapPin, Phone, Plus } from "lucide-react";
+import {
+  CalendarPlus,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  MapPin,
+  Phone,
+  Plus,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
@@ -10,6 +18,16 @@ import { precoPartido } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand";
 import { type Esmalte, type Laca, esmalteDe, lacaDe } from "./esmaltes";
+import {
+  type Celula,
+  diasConsultaveis,
+  gradeDoMes,
+  limitesDeNavegacao,
+  mesAAbrir,
+  mesDe,
+  somarDias,
+  somarMeses,
+} from "./calendario";
 import { afinarHorarios } from "./horarios";
 import { baixarICS, montarICS } from "./ics";
 import {
@@ -28,20 +46,33 @@ type Service = {
   durationMin: number;
   priceCents: number;
   categoryName: string | null;
+  /** Até quantos dias à frente este serviço aceita marcação. */
+  maxLeadDays: number;
 };
 
 type Branch = { id: number; name: string; address: string | null; phone: string | null };
 
 /**
- * "dia" e "hora" eram duas telas. Viraram uma só: no celular a escolha do dia
- * custava 900px de rolagem e mais um toque para depois descobrir que aquele dia
- * não tinha o horário que servia. Agora a faixa de dias fica fixa no topo do
- * passo e os horários trocam embaixo dela.
+ * "dia" e "hora" são uma tela só: no celular a escolha do dia custava 900px de
+ * rolagem e mais um toque para depois descobrir que aquele dia não tinha o
+ * horário que servia.
+ *
+ * O dia se escolhe num MÊS, não numa faixa que rola para o lado. A faixa
+ * mostrava 21 dias enquanto os serviços desta base aceitam marcação de 45 a 120
+ * dias à frente — até quatro meses de agenda que a cliente não tinha como
+ * alcançar, e cuja existência a tela não denunciava. Uma grade de mês também
+ * responde de graça a pergunta que a faixa não respondia: em que semana esta
+ * clínica costuma ter espaço.
  */
 type Step = "service" | "branch" | "when" | "identify" | "done";
 
-/** Abreviação de 3 letras: o nome por extenso vaza do chip de data. */
-const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+/**
+ * Cabeçalho da grade. Uma letra só, porque a coluna tem a largura de um dedo.
+ * A ambiguidade de "S" e "Q" repetidos é convenção de calendário em português e
+ * some na leitura da grade inteira; quem ouve a página nunca passa por aqui,
+ * porque cada dia livre se anuncia com a data por extenso.
+ */
+const INICIAIS_DA_SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
 
 /**
  * Campo de formulário DESTA página — 16px, e o número é a razão de existir.
@@ -90,9 +121,43 @@ export function BookingFlow({
   const [step, setStep] = useState<Step>(
     servicoUnico ? (branches.length > 1 ? "branch" : "when") : "service",
   );
-  const [day, setDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  /**
+   * Hoje, no fuso de quem está olhando, fixado na montagem. Recalcular a cada
+   * render faria a grade trocar de dia sozinha na virada da meia-noite, no meio
+   * de um preenchimento.
+   */
+  const hojeISO = useMemo(() => format(new Date(), "yyyy-MM-dd"), []);
+  /** Nenhum dia escolhido é um estado real: mês sem vaga nenhuma. */
+  const [day, setDay] = useState<string | null>(null);
+  const [mes, setMes] = useState(() => mesDe(hojeISO));
   const [slots, setSlots] = useState<PublicSlot[] | null>(null);
-  const [availableDays, setAvailableDays] = useState<Array<{ dateISO: string; slotCount: number }> | null>(null);
+  /**
+   * Dias livres POR MÊS, guardados desde a primeira visita.
+   *
+   * Voltar um mês é o gesto mais comum do calendário — a cliente espia adiante
+   * e desiste — e sem esta memória cada volta custaria a viagem inteira ao
+   * servidor de novo, com a grade piscando em esqueleto.
+   */
+  const [diasPorMes, setDiasPorMes] = useState<
+    Record<string, Array<{ dateISO: string; slotCount: number }>>
+  >({});
+  /**
+   * O mês visível, em espelho síncrono.
+   *
+   * A grade de mês trouxe uma corrida que a faixa não tinha: duas setas em
+   * sequência disparam duas buscas, e a primeira pode responder por último. Sem
+   * guarda, ela escolheria um dia de agosto embaixo da grade de outubro — dois
+   * meses diferentes na mesma tela, e a cliente marcaria o dia errado. O estado
+   * do React não serve de guarda porque só chega no render seguinte; o espelho
+   * é escrito no mesmo instante do clique.
+   */
+  const mesVisivelRef = useRef(mesDe(hojeISO));
+  function mostrarMes(alvo: string) {
+    mesVisivelRef.current = alvo;
+    setMes(alvo);
+  }
+  /** A busca para a frente já varreu tudo e não achou nada. */
+  const [semVagaAteOFim, setSemVagaAteOFim] = useState(false);
   const [loadingDays, startDaysTransition] = useTransition();
   const [loadingSlots, startSlotsTransition] = useTransition();
   const [slot, setSlot] = useState<PublicSlot | null>(null);
@@ -116,45 +181,155 @@ export function BookingFlow({
     void trackBookingAccessAction({ slug, visitorToken });
   }, [slug]);
 
-  const days = useMemo(() => Array.from({ length: 21 }, (_, i) => addDays(new Date(), i)), []);
-
-
   /**
-   * Ao carregar os dias, o primeiro dia livre já é escolhido e seus horários
-   * já são buscados. É um toque a menos, e resolve o caso mais comum de todos:
-   * a cliente quer o horário mais próximo possível.
+   * Trocar de serviço ou de unidade invalida TODOS os meses guardados: a
+   * disponibilidade é do par serviço × unidade, não da clínica. Reaproveitar a
+   * memória aqui pintaria agosto com os dias livres do serviço anterior.
    */
   function loadDays(next: { service: Service | null; branch: Branch | null }) {
-    setAvailableDays(null);
+    setDiasPorMes({});
+    setSemVagaAteOFim(false);
+    setDay(null);
     setSlot(null);
     setSlots(null);
-    buscarDias(next);
+    mostrarMes(mesDe(hojeISO));
+    buscarDias(next, mesDe(hojeISO), { podeAvancar: true });
   }
 
   /**
-   * Só a ida ao servidor, sem os três `set` de limpeza.
+   * Busca um mês e escolhe o primeiro dia livre dele.
    *
-   * A separação existe para o caminho da montagem: numa página que já abre em
-   * "quando", limpar estado que ainda é nulo é escrita síncrona dentro de
-   * efeito — o que o lint proíbe, com razão, porque é o mesmo gesto que produz
-   * render em cascata quando o alvo NÃO está limpo.
+   * `podeAvancar` existe para a virada do mês: quem abre a página no dia 30 cai
+   * num mês que tem um ou nenhum dia livre, e a grade de agosto vazia diz
+   * "lotado" quando setembro está inteiro em aberto. Avança UMA vez, no
+   * carregamento inicial — dois saltos automáticos já seriam a página decidindo
+   * sozinha para onde a cliente estava olhando.
    */
-  function buscarDias(next: { service: Service | null; branch: Branch | null }) {
-    if (!next.service) return;
+  function buscarDias(
+    next: { service: Service | null; branch: Branch | null },
+    mesAlvo: string,
+    opcoes?: { podeAvancar?: boolean },
+  ) {
+    const servico = next.service;
+    if (!servico) return;
+    const { ultimoISO, ultimoMes } = limitesDeNavegacao(
+      hojeISO,
+      servico.maxLeadDays,
+    );
+    const alvos = diasConsultaveis(mesAlvo, hojeISO, ultimoISO);
+    if (alvos.length === 0) {
+      setDiasPorMes((atual) => ({ ...atual, [mesAlvo]: [] }));
+      return;
+    }
     startDaysTransition(async () => {
       const rows = await publicAvailableDaysAction({
         slug,
-        serviceId: next.service!.id,
+        serviceId: servico.id,
         branchId: next.branch?.id,
-        dateISOs: days.map((date) => format(date, "yyyy-MM-dd")),
+        dateISOs: alvos,
       });
-      setAvailableDays(rows);
+      setDiasPorMes((atual) => ({ ...atual, [mesAlvo]: rows }));
+      // O que voltou vale sempre: guardar o mês no cache é correto mesmo que a
+      // cliente já esteja olhando outro. O que NÃO vale é mexer no dia
+      // escolhido a partir de uma resposta atrasada.
+      if (mesVisivelRef.current !== mesAlvo) return;
+      const abrir = mesAAbrir(
+        mesAlvo,
+        rows.length,
+        opcoes?.podeAvancar ?? false,
+        ultimoMes,
+      );
+      if (abrir !== mesAlvo) {
+        mostrarMes(abrir);
+        buscarDias(next, abrir);
+        return;
+      }
       const primeiro = rows[0];
       if (primeiro) {
         setDay(primeiro.dateISO);
         loadSlots({ ...next, day: primeiro.dateISO });
       }
     });
+  }
+
+  /**
+   * Procura para a frente o primeiro mês com horário.
+   *
+   * Sem isto, um serviço cadastrado numa unidade onde ninguém o executa vira
+   * beco sem saída: a cliente vê uma grade cinzenta e teria que clicar na seta
+   * uma vez por mês para descobrir que não há nada — e a maioria fecha a página
+   * antes. A busca é o mesmo trabalho, feito de uma vez e por conta da página.
+   *
+   * Custa uma consulta por mês vazio, no máximo quatro (`maxLeadDays` chega a
+   * 120 dias nesta base). É gesto pedido pela cliente, nunca automático.
+   */
+  function procurarProximoMesComVaga() {
+    const servico = service;
+    if (!servico) return;
+    const { ultimoISO, ultimoMes } = limitesDeNavegacao(
+      hojeISO,
+      servico.maxLeadDays,
+    );
+    const origem = mes;
+    startDaysTransition(async () => {
+      let alvo = origem;
+      while (alvo < ultimoMes) {
+        // Ela clicou numa seta enquanto a busca corria: a busca desiste. Levá-la
+        // ao mês que a busca achou seria arrancar da tela o mês que ela acabou
+        // de pedir.
+        if (mesVisivelRef.current !== origem) return;
+        alvo = somarMeses(alvo, 1);
+        const dias = diasConsultaveis(alvo, hojeISO, ultimoISO);
+        const rows = dias.length
+          ? await publicAvailableDaysAction({
+              slug,
+              serviceId: servico.id,
+              branchId: branch?.id,
+              dateISOs: dias,
+            })
+          : [];
+        setDiasPorMes((atual) => ({ ...atual, [alvo]: rows }));
+        if (rows.length > 0) {
+          if (mesVisivelRef.current !== origem) return;
+          mostrarMes(alvo);
+          setFoco(null);
+          setDay(rows[0].dateISO);
+          loadSlots({ service, branch, day: rows[0].dateISO });
+          return;
+        }
+      }
+      // Fica no mês em que ela estava: levá-la para dezembro só para mostrar
+      // outra grade cinzenta trocaria uma tela vazia por outra.
+      setSemVagaAteOFim(true);
+    });
+  }
+
+  /**
+   * Trocar o mês visível. Mês já visitado não volta ao servidor.
+   *
+   * O dia escolhido sobrevive à ida e volta: quem espia setembro e retorna a
+   * agosto encontra o mesmo dia marcado e os mesmos horários embaixo. Só quando
+   * o dia atual não pertence ao mês aberto é que o primeiro livre assume.
+   */
+  function abrirMes(mesAlvo: string) {
+    mostrarMes(mesAlvo);
+    setFoco(null);
+    const guardado = diasPorMes[mesAlvo];
+    if (!guardado) {
+      buscarDias({ service, branch }, mesAlvo);
+      return;
+    }
+    if (
+      day &&
+      mesDe(day) === mesAlvo &&
+      guardado.some((d) => d.dateISO === day)
+    )
+      return;
+    const primeiro = guardado[0];
+    setDay(primeiro?.dateISO ?? null);
+    setSlot(null);
+    if (primeiro) loadSlots({ service, branch, day: primeiro.dateISO });
+    else setSlots([]);
   }
 
   /**
@@ -166,6 +341,20 @@ export function BookingFlow({
    * anunciava "nenhum dia livre nas próximas três semanas" para sempre — numa
    * agenda cheia.
    */
+  /**
+   * Tabulação rotativa da grade: um único dia entra na ordem de tabulação, e as
+   * setas movem o foco entre eles. Sem isso, alcançar o painel de horários pelo
+   * teclado custaria vinte e dois Tab — um por dia livre do mês.
+   */
+  const gradeRef = useRef<HTMLDivElement>(null);
+  const [foco, setFoco] = useState<string | null>(null);
+  useEffect(() => {
+    if (!foco) return;
+    gradeRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-dia="${foco}"]`)
+      ?.focus();
+  }, [foco]);
+
   const perguntaRef = useRef<HTMLHeadingElement>(null);
   /**
    * Na PRIMEIRA pintura ninguém roubou o foco de ninguém — mover para a
@@ -185,7 +374,10 @@ export function BookingFlow({
   useEffect(() => {
     if (montado.current) return;
     montado.current = true;
-    if (servicoUnico && branches.length <= 1) buscarDias({ service: servicoUnico, branch });
+    if (servicoUnico && branches.length <= 1)
+      buscarDias({ service: servicoUnico, branch }, mesDe(hojeISO), {
+        podeAvancar: true,
+      });
     // Uma vez na montagem: as dependências reais são as props iniciais.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -195,8 +387,21 @@ export function BookingFlow({
    * (serviço, unidade ou data), então roda numa transição — o indicador de
    * carregamento vem do React, sem efeito nem render em cascata.
    */
-  function loadSlots(next: { service: Service | null; branch: Branch | null; day: string }) {
+  /**
+   * O último dia pedido, em espelho síncrono. Mesma corrida das setas: numa
+   * grade de mês inteiro é fácil tocar dois dias em sequência, e a resposta do
+   * primeiro chegando por último pintaria os horários do dia errado embaixo do
+   * dia marcado.
+   */
+  const diaPedidoRef = useRef<string | null>(null);
+
+  function loadSlots(next: {
+    service: Service | null;
+    branch: Branch | null;
+    day: string;
+  }) {
     setSlot(null);
+    diaPedidoRef.current = next.day;
     if (!next.service) {
       setSlots(null);
       return;
@@ -208,6 +413,7 @@ export function BookingFlow({
         dateISO: next.day,
         branchId: next.branch?.id,
       });
+      if (diaPedidoRef.current !== next.day) return;
       setSlots(rows);
     });
   }
@@ -228,13 +434,108 @@ export function BookingFlow({
     loadDays({ service, branch: value });
   }
 
+  const horariosRef = useRef<HTMLHeadingElement>(null);
+
+  /**
+   * A coluna de horários rola por dentro no desktop, e o último chip fica
+   * cortado ao meio pela borda inferior. Cortado e mais nada lê como defeito de
+   * renderização; cortado sob um esmaecimento lê como "continua". O
+   * esmaecimento só aparece quando há mesmo o que rolar — pintado sempre, ele
+   * apagaria de graça o último horário de um dia curto.
+   */
+  const rolagemRef = useRef<HTMLDivElement>(null);
+  const conteudoRef = useRef<HTMLDivElement>(null);
+  const [temMaisHorarios, setTemMaisHorarios] = useState(false);
+  useEffect(() => {
+    const moldura = rolagemRef.current;
+    const conteudo = conteudoRef.current;
+    if (!moldura || !conteudo) {
+      setTemMaisHorarios(false);
+      return;
+    }
+    const medir = () =>
+      setTemMaisHorarios(
+        moldura.scrollHeight - moldura.scrollTop - moldura.clientHeight > 8,
+      );
+    medir();
+    /**
+     * Observar a MOLDURA não bastava: ela tem altura fixa e nunca muda de
+     * tamanho, então a única medida que valia era a do primeiro instante — e
+     * naquele instante o conteúdo ainda não tinha assentado. Medido, o
+     * esquecimento aparecia como 330 contra 330 numa coluna que segundos depois
+     * media 420. Quem cresce é o CONTEÚDO, e é ele que precisa avisar.
+     */
+    const observador = new ResizeObserver(medir);
+    observador.observe(moldura);
+    observador.observe(conteudo);
+    moldura.addEventListener("scroll", medir, { passive: true });
+    return () => {
+      observador.disconnect();
+      moldura.removeEventListener("scroll", medir);
+    };
+  }, [step, day, slots, loadingSlots]);
+
   function chooseDay(value: string) {
     setDay(value);
+    setFoco(value);
     loadSlots({ service, branch, day: value });
+    /**
+     * No celular a grade do mês ocupa a tela inteira e os horários nascem
+     * abaixo da dobra: sem este salto, escolher um dia parece não fazer nada.
+     * No desktop os dois estão lado a lado e mover a página seria gratuito.
+     *
+     * Só no toque da cliente. Fazer isso na escolha automática da montagem
+     * rolaria a página de quem acabou de chegar, passando por cima do nome da
+     * clínica e do serviço que ela precisa conferir.
+     */
+    if (window.matchMedia("(min-width: 768px)").matches) return;
+    const suave = !window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches;
+    horariosRef.current?.scrollIntoView({
+      behavior: suave ? "smooth" : "auto",
+      block: "start",
+    });
+  }
+
+  /**
+   * Setas do teclado dentro da grade, como em qualquer calendário.
+   *
+   * Só os dias LIVRES entram na navegação, que é o mesmo conjunto que o mouse
+   * alcança: parar o foco num dia lotado seria oferecer um alvo que não
+   * responde. Cima e baixo andam uma semana e caem no dia livre mais próximo
+   * naquele sentido, não no sétimo item da lista — em fevereiro de 2027 o dia
+   * 8 fica exatamente embaixo do 1º, e é isso que o dedo espera.
+   */
+  function navegarGrade(evento: React.KeyboardEvent<HTMLDivElement>) {
+    const atualISO = (evento.target as HTMLElement).dataset?.dia;
+    if (!atualISO) return;
+    const livres = (diasPorMes[mes] ?? []).map((d) => d.dateISO);
+    const i = livres.indexOf(atualISO);
+    if (i < 0) return;
+    const semana = (sentido: 1 | -1) => {
+      const alvo = somarDias(atualISO, 7 * sentido);
+      const candidatos =
+        sentido === 1 ? livres.slice(i + 1) : livres.slice(0, i).reverse();
+      return (
+        candidatos.find((d) => (sentido === 1 ? d >= alvo : d <= alvo)) ??
+        candidatos.at(-1)
+      );
+    };
+    const destino = {
+      ArrowRight: livres[i + 1],
+      ArrowLeft: livres[i - 1],
+      ArrowDown: semana(1),
+      ArrowUp: semana(-1),
+      Home: livres[0],
+      End: livres.at(-1),
+    }[evento.key];
+    if (destino === undefined) return;
+    evento.preventDefault();
+    setFoco(destino);
   }
 
   function submit() {
-    if (!service || !slot) return;
+    if (!service || !slot || !day) return;
     setError(null);
     startTransition(async () => {
       const result = await publicBookingAction({
@@ -283,18 +584,31 @@ export function BookingFlow({
     return h >= 12 && h < 18;
   });
   const noite = times.filter((s) => Number(s.label.slice(0, 2)) >= 18);
-  const dayDate = days.find((d) => format(d, "yyyy-MM-dd") === day) ?? days[0];
+  const dayDate = day ? parseISO(day) : null;
   /**
-   * A régua da barrinha de vagas: o dia mais cheio da faixa.
+   * A barrinha de lotação de cada dia saiu junto com a faixa.
    *
-   * E a barrinha só existe quando os dias DIFEREM entre si. Numa agenda que
-   * ainda não tem nada marcado, catorze dias com a mesma lotação desenhavam
-   * catorze barras idênticas — gráfico sem variância é enfeite, e enfeite que
-   * finge ser informação é pior do que nada.
+   * Numa fita de catorze cartões ela informava; repetida em 31 células de uma
+   * grade vira textura, e textura que finge ser dado é pior do que nada. A
+   * pergunta que ela respondia — "este dia está cheio?" — passou a ser
+   * respondida pelo painel ao lado, que diz o número de horários do dia
+   * escolhido. E a pergunta que a fita NÃO respondia, "quando esta clínica tem
+   * espaço", agora é a forma do mês inteiro.
    */
-  const lotacoes = (availableDays ?? []).map((d) => d.slotCount);
-  const maiorDia = Math.max(1, ...lotacoes);
-  const mostrarLotacao = new Set(lotacoes).size > 1;
+  const diasDoMes = diasPorMes[mes] ?? null;
+  const livresDoMes = useMemo(
+    () => new Map((diasDoMes ?? []).map((d) => [d.dateISO, d.slotCount])),
+    [diasDoMes],
+  );
+  const limites = limitesDeNavegacao(hojeISO, service?.maxLeadDays ?? 60);
+  const grade = useMemo<Celula[]>(() => gradeDoMes(mes), [mes]);
+  /**
+   * Esqueleto só quando o mês NUNCA foi buscado. Mês guardado troca na hora, e
+   * piscar esqueleto por cima de dado que já se tem é fingir trabalho.
+   */
+  const carregandoMes = loadingDays && diasDoMes === null;
+  /** O único dia da grade que entra na ordem de tabulação. */
+  const paradaDeTab = foco ?? day ?? diasDoMes?.[0]?.dateISO ?? null;
   const esmalte = esmalteDe(service?.categoryName);
   const unidade = branch ?? (branches.length === 1 ? branches[0] : null);
   const laca = lacaDe(organizationName);
@@ -528,150 +842,281 @@ export function BookingFlow({
 
           {/* 3. Dia e hora, na mesma tela. */}
           {step === "when" ? (
-            <div className="mt-5">
-              {loadingDays ? (
-                <div className="trilha -mx-5 flex gap-2 overflow-hidden px-5 sm:mx-0 sm:px-0">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <Fantasma key={i} className="h-[78px] w-[58px] shrink-0 rounded-[14px]" />
+            <div className="mt-5 md:grid md:grid-cols-[minmax(0,1fr)_252px] md:gap-6">
+              {/* ————— o mês ————— */}
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-section first-letter:uppercase">
+                    {format(parseISO(`${mes}-01`), "MMMM 'de' yyyy", {
+                      locale: ptBR,
+                    })}
+                  </p>
+                  <div className="flex gap-1">
+                    <SetaDeMes
+                      sentido={-1}
+                      rotulo="Mês anterior"
+                      desabilitada={mes <= limites.primeiroMes}
+                      onClick={() => abrirMes(somarMeses(mes, -1))}
+                    />
+                    <SetaDeMes
+                      sentido={1}
+                      rotulo="Próximo mês"
+                      desabilitada={mes >= limites.ultimoMes}
+                      onClick={() => abrirMes(somarMeses(mes, 1))}
+                    />
+                  </div>
+                </div>
+
+                {/*
+                  A grade sangra 8px para cada lado no celular e aperta o vão
+                  para 2px. É aritmética, não gosto: sete colunas de 44px pedem
+                  308px, e uma tela de 320px tem 280px úteis dentro do cartão.
+                  Sangrando e apertando, a célula vai a 40×48 — 1920px² contra
+                  os 1936px² de um alvo de 44×44, a mesma área, mais alta do que
+                  larga. Acima de 390px sobra folga e nada disso se nota.
+                */}
+                <div
+                  aria-hidden
+                  className="-mx-2 mt-4 grid grid-cols-7 gap-0.5 sm:mx-0 sm:gap-1"
+                >
+                  {INICIAIS_DA_SEMANA.map((letra, i) => (
+                    <span
+                      key={i}
+                      className="text-center text-meta text-ink-secondary"
+                    >
+                      {letra}
+                    </span>
                   ))}
                 </div>
-              ) : availableDays?.length ? (
-                <>
-                  <p className="mb-2 text-section">{format(dayDate, "MMMM", { locale: ptBR })}</p>
-                  {/* A máscara desfaz o corte seco no fim da faixa: sem ela o
-                      último cartão fica cerrado ao meio pela borda e lê como
-                      defeito de renderização, não como "tem mais para o lado". */}
-                  <div
-                    role="group"
-                    aria-label="Dias com horário livre"
-                    className="trilha -mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 pb-1 [mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-40px),transparent_100%)] sm:mx-0 sm:px-0"
-                  >
-                    {availableDays.map((available, i) => {
-                      const date = days.find((item) => format(item, "yyyy-MM-dd") === available.dateISO)!;
-                      const ativo = available.dateISO === day;
-                      /**
-                       * A vira-mês é a única marca de mês dentro da faixa:
-                       * repetir "ago" em catorze cartões era ruído, não
-                       * informação.
-                       *
-                       * A comparação é com o cartão ANTERIOR DA LISTA, e não
-                       * com o dia 1º: `getPublicAvailableDays` devolve só os
-                       * dias que têm vaga, então a faixa pula datas (25, 27,
-                       * 30...) e o dia 1º frequentemente não está nela. Marcar
-                       * "dia === 1" deixaria a virada de setembro sem nenhum
-                       * aviso, que é justamente onde a cliente se perde.
-                       */
-                      const anteriorISO = i > 0 ? availableDays[i - 1].dateISO : null;
-                      const viraMes =
-                        anteriorISO !== null && anteriorISO.slice(0, 7) !== available.dateISO.slice(0, 7);
+
+                {/*
+                  `key={mes}` remonta a grade a cada virada, e é o que faz a
+                  varredura de entrada tocar de novo: sem isso o React
+                  reaproveitaria as 42 células e a troca de mês aconteceria sem
+                  nenhum sinal de que algo mudou.
+                */}
+                <div
+                  key={mes}
+                  ref={gradeRef}
+                  role="group"
+                  aria-label={`Dias com horário livre em ${format(parseISO(`${mes}-01`), "MMMM 'de' yyyy", { locale: ptBR })}`}
+                  onKeyDown={navegarGrade}
+                  className="-mx-2 mt-1.5 grid grid-cols-7 gap-0.5 sm:mx-0 sm:gap-1"
+                >
+                  {grade.map((dia, i) => {
+                    // Célula de mês vizinho: existe para segurar a coluna, e
+                    // não se mostra. Pintar o dia 31 de agosto dentro de
+                    // setembro, apagado e sem resposta ao toque, é oferecer uma
+                    // data que a grade ao lado já oferece de verdade.
+                    if (dia === null)
                       return (
-                        <button
-                          key={available.dateISO}
-                          type="button"
-                          onClick={() => chooseDay(available.dateISO)}
-                          aria-pressed={ativo}
-                          // O chip mostra "qui 28"; quem ouve a página precisa
-                          // da data por extenso e de quantas vagas restam.
-                          aria-label={`${format(date, "EEEE, d 'de' MMMM", { locale: ptBR })} — ${available.slotCount} ${available.slotCount === 1 ? "horário livre" : "horários livres"}`}
-                          style={{ "--aro": esmalte.aro } as React.CSSProperties}
+                        <span key={`fora-${i}`} aria-hidden className="h-12" />
+                      );
+
+                    const atraso = {
+                      "--atraso": `${Math.min(i, 42) * 5}ms`,
+                    } as React.CSSProperties;
+                    // O esqueleto não recebe o atraso: ele já pulsa, e uma
+                    // varredura por cima da pulsação são dois movimentos
+                    // disputando a mesma célula.
+                    if (carregandoMes)
+                      return (
+                        <Fantasma key={dia} className="h-12 rounded-[12px]" />
+                      );
+
+                    const vagas = livresDoMes.get(dia);
+                    const numero = Number(dia.slice(8));
+                    const hoje = dia === hojeISO;
+
+                    if (vagas === undefined)
+                      return (
+                        <span
+                          key={dia}
+                          aria-hidden
+                          style={atraso}
                           className={cn(
-                            "relative flex h-[78px] w-[58px] shrink-0 snap-start flex-col items-center justify-center rounded-[14px] transition-colors",
-                            ativo
-                              ? "bg-accent text-white"
-                              : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",
+                            "dia-entrada flex h-12 items-center justify-center text-body text-ink-muted",
+                            hoje && "font-semibold",
                           )}
                         >
-                          <span
-                            className={cn(
-                              "text-meta uppercase tracking-[0.06em]",
-                              ativo ? "text-white" : "text-ink-secondary",
-                            )}
-                          >
-                            {WEEKDAY_SHORT[date.getDay()]}
-                          </span>
-                          <span className="text-title tabular">{format(date, "d")}</span>
-{/*
-                            Quanto o dia tem de vaga, sem número: uma barrinha
-                            que cresce. Dia lotado e dia com uma sobra eram
-                            idênticos na fita, e a cliente só descobria isso
-                            depois de tocar.
+                          {numero}
+                        </span>
+                      );
 
-                            A largura é RELATIVA ao dia mais cheio da faixa, e
-                            não uma escala absoluta: com "3px por vaga" toda
-                            barra saturava no teto e as catorze ficavam
-                            exatamente iguais — enfeite no lugar de informação.
-
-                            É o `aro` do esmalte e não o `fill`: medido, o fill
-                            a 45% dá de 1,11:1 a 2,39:1 contra o cartão e
-                            reprova o limiar de 3:1 de elemento gráfico.
-                          */}
-                          {mostrarLotacao ? (
-                            <span
-                              aria-hidden
-                              className="mt-1 h-[3px] rounded-pill"
-                              style={{
-                                width: `${Math.round(18 + 42 * (available.slotCount / maiorDia))}%`,
-                                backgroundColor: ativo ? "rgb(255 255 255 / 0.72)" : "var(--aro)",
-                              }}
-                            />
-                          ) : null}
-                          {/* A linha do mês existe em TODOS os cartões, vazia na
-                              maioria. Renderizá-la só na virada empurrava o
-                              número para cima naquele cartão e desalinhava a
-                              fita inteira — o dia 1º ficava meio dedo mais alto
-                              que o 31 ao lado dele. */}
+                    const ativo = dia === day;
+                    return (
+                      <button
+                        key={dia}
+                        data-dia={dia}
+                        type="button"
+                        tabIndex={dia === paradaDeTab ? 0 : -1}
+                        onClick={() => chooseDay(dia)}
+                        aria-pressed={ativo}
+                        aria-label={`${format(parseISO(dia), "EEEE, d 'de' MMMM", { locale: ptBR })} — ${vagas} ${vagas === 1 ? "horário livre" : "horários livres"}`}
+                        style={atraso}
+                        className={cn(
+                          "dia-entrada relative flex h-12 items-center justify-center rounded-[12px] text-body tabular transition-colors",
+                          ativo
+                            ? "bg-accent font-semibold text-white"
+                            : "bg-cartao-sunken text-ink ring-1 ring-cartao-fio hover:bg-cartao-linha",
+                        )}
+                      >
+                        {numero}
+                        {/* Hoje leva um ponto, e só quando não está escolhido:
+                            sobre a ameixa o ponto vira sujeira, e o dia
+                            escolhido já se anuncia inteiro. */}
+                        {hoje && !ativo ? (
                           <span
                             aria-hidden
-                            className={cn("text-meta", ativo ? "text-white" : "text-accent")}
-                          >
-                            {viraMes ? format(date, "MMM", { locale: ptBR }) : " "}
-                          </span>
-                                                  </button>
-                      );
-                    })}
-                  </div>
+                            className="absolute bottom-1.5 size-1 rounded-pill bg-accent"
+                          />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
 
-                  <p role="status" aria-live="polite" className="sr-only">
-                    {loadingSlots
-                      ? "Carregando horários"
-                      : times.length === 0
-                        ? "Nenhum horário livre neste dia"
-                        : `${times.length} horários disponíveis`}
-                  </p>
-
-                  <div className="mt-6 space-y-5">
-                    {loadingSlots ? (
-                      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
-                        {Array.from({ length: 12 }).map((_, i) => (
-                          <Fantasma key={i} className="h-[52px] rounded-[10px]" />
-                        ))}
-                      </div>
-                    ) : times.length === 0 ? (
-                      <Vazio
-                        titulo="Nenhum horário livre neste dia"
-                        detalhe="Escolha outra data na faixa acima."
-                      />
+                {!carregandoMes && diasDoMes?.length === 0 ? (
+                  <div className="mt-3">
+                    <p className="text-body text-ink-secondary">
+                      Nenhum horário livre em{" "}
+                      {format(parseISO(`${mes}-01`), "MMMM", { locale: ptBR })}.
+                    </p>
+                    {semVagaAteOFim || mes >= limites.ultimoMes ? (
+                      <p className="mt-1 text-body text-ink-secondary">
+                        Não há horário livre até{" "}
+                        {format(parseISO(`${limites.ultimoMes}-01`), "MMMM", {
+                          locale: ptBR,
+                        })}
+                        . Fale com {organizationName} para consultar encaixes.
+                      </p>
                     ) : (
-                      <>
-                        {manha.length > 0 ? (
-                          <TimeGroup label="Manhã" slots={manha} selected={slot} onSelect={setSlot} />
-                        ) : null}
-                        {tarde.length > 0 ? (
-                          <TimeGroup label="Tarde" slots={tarde} selected={slot} onSelect={setSlot} />
-                        ) : null}
-                        {noite.length > 0 ? (
-                          <TimeGroup label="Noite" slots={noite} selected={slot} onSelect={setSlot} />
-                        ) : null}
-                      </>
+                      <button
+                        type="button"
+                        onClick={procurarProximoMesComVaga}
+                        disabled={loadingDays}
+                        className="mt-1 inline-flex min-h-11 items-center text-label font-semibold text-accent underline-offset-4 hover:underline disabled:opacity-60"
+                      >
+                        {loadingDays
+                          ? "Procurando…"
+                          : "Procurar o próximo mês com horário"}
+                      </button>
                     )}
                   </div>
-                </>
-              ) : (
-                <Vazio
-                  titulo="Nenhum dia livre nas próximas três semanas"
-                  detalhe={`Fale com ${organizationName} para consultar encaixes ou uma data mais distante.`}
-                />
-              )}
+                ) : null}
+              </div>
+
+              {/*
+                ————— os horários do dia —————
+
+                No desktop esta coluna é uma CAMADA POSTA POR CIMA da própria
+                célula da grade (`absolute inset-0`), e não conteúdo dentro
+                dela. A diferença é a altura: como item de grade, uma lista de
+                quarenta horários esticava a linha, e o cartão — que recorta o
+                próprio conteúdo por causa da linha do sorriso — cortava os
+                últimos horários ao meio, sem barra de rolagem nenhuma. Fora do
+                fluxo, a altura da linha passa a ser a da grade do mês, e a
+                lista rola por dentro.
+              */}
+              <div className="mt-7 md:relative md:mt-0 md:border-l md:border-cartao-linha">
+                <div className="md:absolute md:inset-0 md:flex md:flex-col md:overflow-hidden md:pl-6">
+                  <p role="status" aria-live="polite" className="sr-only">
+                    {carregandoMes
+                      ? "Carregando dias"
+                      : !dayDate
+                        ? "Nenhum dia livre neste mês"
+                        : loadingSlots
+                          ? "Carregando horários"
+                          : `${format(dayDate, "EEEE, d 'de' MMMM", { locale: ptBR })}: ${times.length} ${times.length === 1 ? "horário livre" : "horários livres"}`}
+                  </p>
+
+                  {dayDate ? (
+                    <>
+                      <h3
+                        ref={horariosRef}
+                        className="scroll-mt-4 text-card text-ink first-letter:uppercase"
+                      >
+                        {format(dayDate, "EEEE, d 'de' MMMM", { locale: ptBR })}
+                      </h3>
+                      <p
+                        aria-hidden
+                        className="mt-0.5 text-body text-ink-secondary"
+                      >
+                        {loadingSlots
+                          ? "Buscando horários"
+                          : times.length === 1
+                            ? "1 horário livre"
+                            : `${times.length} horários livres`}
+                      </p>
+                      {/*
+                      A coluna acompanha a altura da grade e rola por dentro: um
+                      dia com quarenta horários empurraria o rodapé do cartão
+                      para baixo do calendário, e a cliente perderia de vista a
+                      grade que acabou de usar. No celular não há coluna — a
+                      lista simplesmente segue embaixo.
+                    */}
+                      <div
+                        ref={rolagemRef}
+                        className={cn(
+                          "mt-4 md:min-h-0 md:flex-1 md:overflow-y-auto md:overscroll-contain md:pr-1 md:pb-1",
+                          temMaisHorarios &&
+                            "md:[mask-image:linear-gradient(to_bottom,#000_0,#000_calc(100%-40px),transparent_100%)]",
+                        )}
+                      >
+                        <div ref={conteudoRef} className="space-y-5">
+                          {loadingSlots ? (
+                            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-3">
+                              {Array.from({ length: 9 }).map((_, i) => (
+                                <Fantasma
+                                  key={i}
+                                  className="h-[52px] rounded-[10px]"
+                                />
+                              ))}
+                            </div>
+                          ) : times.length === 0 ? (
+                            <Vazio
+                              titulo="Nenhum horário livre neste dia"
+                              detalhe="Escolha outra data no calendário."
+                            />
+                          ) : (
+                            <>
+                              {manha.length > 0 ? (
+                                <TimeGroup
+                                  label="Manhã"
+                                  slots={manha}
+                                  selected={slot}
+                                  onSelect={setSlot}
+                                />
+                              ) : null}
+                              {tarde.length > 0 ? (
+                                <TimeGroup
+                                  label="Tarde"
+                                  slots={tarde}
+                                  selected={slot}
+                                  onSelect={setSlot}
+                                />
+                              ) : null}
+                              {noite.length > 0 ? (
+                                <TimeGroup
+                                  label="Noite"
+                                  slots={noite}
+                                  selected={slot}
+                                  onSelect={setSlot}
+                                />
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : carregandoMes ? (
+                    <div className="space-y-3">
+                      <Fantasma className="h-5 w-40 rounded-pill" />
+                      <Fantasma className="h-4 w-24 rounded-pill" />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -979,10 +1424,55 @@ function Vazio({ titulo, detalhe }: { titulo: string; detalhe: string }) {
  * O `Skeleton` do produto pulsa em lavanda; sobre o cartão de osso ele lia como
  * um retângulo azulado colado na página. Mesmo gesto, tinta certa.
  */
-function Fantasma({ className }: { className?: string }) {
+/**
+ * Seta de virar o mês.
+ *
+ * 44px de alvo, e o contorno é o `cartao-fio` — o mesmo fio que já se mediu em
+ * 3,53:1 e que este cartão usa em todo controle. A seta desabilitada continua
+ * na página, apagada: sumir com ela na última virada muda o lugar da seta que
+ * ficou, e o dedo que ia repetir o gesto erra o alvo.
+ */
+function SetaDeMes({
+  sentido,
+  rotulo,
+  desabilitada,
+  onClick,
+}: {
+  sentido: 1 | -1;
+  rotulo: string;
+  desabilitada: boolean;
+  onClick: () => void;
+}) {
+  const Icone = sentido === 1 ? ChevronRight : ChevronLeft;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={desabilitada}
+      aria-label={rotulo}
+      className={cn(
+        "flex size-11 items-center justify-center rounded-[12px] ring-1 transition-colors",
+        desabilitada
+          ? "text-ink-muted ring-cartao-linha"
+          : "text-ink ring-cartao-fio hover:bg-cartao-sunken",
+      )}
+    >
+      <Icone aria-hidden className="size-5" />
+    </button>
+  );
+}
+
+function Fantasma({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   return (
     <div
       aria-hidden
+      style={style}
       className={cn("animate-pulse rounded-[10px] bg-cartao-sunken", className)}
     />
   );
@@ -1222,7 +1712,9 @@ function TimeGroup({
         trabalho inteiro é dizer o que está livre, isso é o pior defeito
         possível.
       */}
-      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+      {/* Quatro colunas no celular, seis na largura toda, três quando a lista
+          vira coluna lateral de 252px. */}
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-3">
         {slots.map((item) => {
           const active = selected?.startsAt === item.startsAt;
           return (
@@ -1234,9 +1726,13 @@ function TimeGroup({
               className={cn(
                 // 52px de alvo: é um dedo, à noite, deitada, numa grade
                 // encostada em outra grade.
-                // 52px de alvo: é um dedo, à noite, deitada, numa grade
-                // encostada em outra grade.
-                "h-[52px] rounded-[10px] text-body tabular transition-colors duration-[120ms]",
+                //
+                // `scroll-mb-12` é por causa do esmaecimento no pé da coluna do
+                // desktop: ao tabular para um horário fora de vista o navegador
+                // rola o mínimo, e o mínimo pararia o chip exatamente dentro
+                // dos 40px que se apagam. Foco visível que ninguém vê não é
+                // foco visível.
+                "h-[52px] scroll-mb-12 rounded-[10px] text-body tabular transition-colors duration-[120ms]",
                 active
                   ? "bg-accent font-bold text-white"
                   : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",

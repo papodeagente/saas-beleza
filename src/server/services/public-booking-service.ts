@@ -14,7 +14,10 @@ import { normalizePhone } from "@/lib/phone";
 import type { TenantContext } from "@/server/auth";
 import { getAccountAccess } from "./account-access";
 import { createAppointment } from "./appointment-service";
-import { getAvailableSlots } from "./availability-service";
+import {
+  getAvailableSlots,
+  getAvailableSlotsByDay,
+} from "./availability-service";
 import { quantosHorariosVisiveis } from "@/app/agendar/[slug]/horarios";
 import { formatTz } from "@/lib/tz";
 
@@ -35,6 +38,14 @@ export type PublicOrganization = {
     durationMin: number;
     priceCents: number;
     categoryName: string | null;
+    /**
+     * Até quantos dias à frente este serviço aceita marcação.
+     *
+     * A tela precisa saber para não deixar a cliente navegar o calendário até
+     * um mês que nunca terá horário: um mês vazio por regra parece agenda
+     * cheia. Varia de verdade entre serviços desta base — de 45 a 120 dias.
+     */
+    maxLeadDays: number;
   }>;
 };
 
@@ -104,6 +115,7 @@ export async function getPublicOrganization(slug: string): Promise<PublicOrganiz
         durationMin: services.durationMin,
         priceCents: services.priceCents,
         categoryName: serviceCategories.name,
+        maxLeadDays: services.maxLeadDays,
       })
       .from(services)
       .leftJoin(serviceCategories, eq(serviceCategories.id, services.categoryId))
@@ -160,13 +172,18 @@ export async function getPublicAvailableDays(
   const org = await getPublicOrganization(slug);
   if (!org || !org.services.some((service) => service.id === input.serviceId)) return [];
 
+  // UMA busca para o intervalo inteiro. Dia a dia eram seis idas ao banco por
+  // dia — um mês custava 186 viagens e até 2,5 segundos, o que inviabilizava
+  // navegar entre meses no calendário.
+  const porDia = await getAvailableSlotsByDay(org.ctx, {
+    serviceId: input.serviceId,
+    dateISOs: input.dateISOs,
+    branchId: input.branchId,
+  });
+
   const rows = await Promise.all(
     input.dateISOs.map(async (dateISO) => {
-      const slots = await getAvailableSlots(org.ctx, {
-        serviceId: input.serviceId,
-        dateISO,
-        branchId: input.branchId,
-      });
+      const slots = porDia.get(dateISO) ?? [];
       /**
        * A contagem é a dos horários que a tela VAI MOSTRAR, não a dos instantes
        * que a agenda tem.

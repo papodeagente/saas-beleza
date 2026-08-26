@@ -568,6 +568,28 @@
 }
 
 /**
+ * A GRADE DO MÊS SE PREENCHE EM VARREDURA.
+ *
+ * Trocar de mês troca 42 células de uma vez. Sem escalonamento a grade
+ * inteira pisca e o olho perde a referência do que mudou; com um atraso
+ * proporcional à posição, o mês entra da primeira semana para a última, no
+ * mesmo sentido em que se lê, e a mudança se explica sozinha.
+ *
+ * O atraso máximo é 210ms — o teto é o que separa "a página respondeu" de
+ * "a página está lenta". Espera `--atraso` no style.
+ */
+@utility dia-entrada {
+  animation: dia-surge 240ms var(--ease-out-quint) var(--atraso, 0ms) backwards;
+}
+
+@keyframes dia-surge {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/**
  * A UNHA POSTIÇA — o átomo que aposentou a gota de 12px.
  *
  * `border-radius` elíptico assimétrico (topo redondo, base quase reta), a poça
@@ -700,6 +722,13 @@
   /* A duração já vai a zero pela regra global, mas o estado inicial `backwards`
      ainda deixa a faixa piscar antes de assentar. */
   .laca-entrada { clip-path: none !important; }
+
+  /* Aqui a regra global não basta: o ATRASO sobrevive a ela, e uma célula com
+     `backwards` fica invisível os 210ms inteiros antes de aparecer de estalo —
+     que é exatamente o piscar que quem desliga movimento está evitando. */
+  .dia-entrada {
+    animation: none !important;
+  }
 
   [data-reveal] {
     opacity: 1 !important;
