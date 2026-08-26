@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { FusoProvider } from "@/lib/fuso";
 import { getSession } from "@/server/auth";
 import { isPlatformAdmin } from "@/server/platform-auth";
 import { getAccountAccess } from "@/server/services/account-access";
@@ -30,12 +31,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!access.allowed) redirect("/conta/assinatura");
 
   return (
-    <AppShell
-      user={{ name: ctx.userName, email: ctx.userEmail, role: ctx.role }}
-      signals={signals}
-      isPlatformAdmin={platformAdmin}
-    >
-      {children}
-    </AppShell>
+    // O fuso do salão embrulha o painel inteiro: toda hora que aparece em tela
+    // é hora do salão, e não a de quem renderizou. Em produção o servidor roda
+    // em UTC.
+    <FusoProvider fuso={ctx.timezone}>
+      <AppShell
+        user={{ name: ctx.userName, email: ctx.userEmail, role: ctx.role }}
+        signals={signals}
+        isPlatformAdmin={platformAdmin}
+      >
+        {children}
+      </AppShell>
+    </FusoProvider>
   );
 }

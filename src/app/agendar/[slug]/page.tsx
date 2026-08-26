@@ -35,6 +35,11 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
     <BookingFlow
       slug={slug}
       organizationName={org.organization.name}
+      /* O relógio da tela é o do SALÃO. Sem isto, quem abre a página de outro
+         fuso vê o dia da semana do próprio relógio ao lado de uma hora que veio
+         pronta do servidor — "quarta às 21:00" para um horário que no salão é
+         terça. */
+      fuso={org.organization.timezone}
       branches={org.branches}
       services={org.services}
     />

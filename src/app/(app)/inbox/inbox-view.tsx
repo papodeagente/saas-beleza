@@ -1,7 +1,5 @@
 "use client";
 
-import { differenceInCalendarDays, format, isToday, isYesterday } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   ArrowLeftRight,
   Bot,
@@ -36,6 +34,9 @@ import {
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { toast } from "sonner";
+import { useFuso } from "@/lib/fuso";
+import { formatTz } from "@/lib/tz";
+import { horaDaLista } from "./relogio";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,22 +147,6 @@ const CHANNEL_LABEL: Record<string, string> = {
 /** Rede ou proxy podem interromper SSE; esta varredura é apenas a rede de segurança. */
 const FALLBACK_POLL_MS = 30_000;
 
-/**
- * Quando a conversa falou pela última vez.
- *
- * "há 13 h" obriga a fazer conta para saber se foi antes ou depois do almoço —
- * e a atendente precisa exatamente disso para decidir o que responder primeiro.
- * Hora absoluta hoje, dia da semana na semana corrente, data depois: é a régua
- * de todo aplicativo de mensagem porque é a que dispensa a conta.
- */
-function horaDaLista(iso: string): string {
-  const data = new Date(iso);
-  if (isToday(data)) return format(data, "HH:mm", { locale: ptBR });
-  if (isYesterday(data)) return "Ontem";
-  if (differenceInCalendarDays(new Date(), data) < 7) return format(data, "EEEEEE", { locale: ptBR });
-  return format(data, "dd/MM", { locale: ptBR });
-}
-
 /** Chave do retrato: as conversas abertas inteiras, antes de qualquer recorte. */
 const CHAVE_DAS_ABERTAS = "abertas";
 
@@ -230,6 +215,7 @@ export function InboxView({
   /** Iniciar conversa é ação de staff; profissional não vê o botão. */
   canStartConversation: boolean;
 }) {
+  const fuso = useFuso();
   const [tab, setTab] = useState<Tab>(initialTab);
   /** O que está digitado na busca. */
   const [termo, setTermo] = useState("");
@@ -1358,15 +1344,16 @@ export function InboxView({
                   {detail.messages.map((message, indice) => {
                     const anterior = detail.messages[indice - 1];
                     const seguinte = detail.messages[indice + 1];
-                    const trocouODia = !anterior || !mesmoDia(anterior.createdAt, message.createdAt);
+                    const trocouODia =
+                      !anterior || !mesmoDia(anterior.createdAt, message.createdAt, fuso);
                     return (
                       <Fragment key={message.id}>
                         {trocouODia ? <SeparadorDeData iso={message.createdAt} /> : null}
                         <MessageBubble
                           message={message}
                           conversationId={detail.conversationId}
-                          agrupada={!trocouODia && mesmoGrupo(anterior, message)}
-                          ultimaDoGrupo={!seguinte || !mesmoGrupo(message, seguinte)}
+                          agrupada={!trocouODia && mesmoGrupo(anterior, message, fuso)}
+                          ultimaDoGrupo={!seguinte || !mesmoGrupo(message, seguinte, fuso)}
                           quoted={
                             message.quotedExternalId
                               ? (detail.messages.find((m) => m.externalId === message.quotedExternalId) ?? null)
@@ -1540,6 +1527,7 @@ function ContactPanel({
   photoUrl?: string | null;
   compact?: boolean;
 }) {
+  const fuso = useFuso();
   if (!context) {
     return (
       <div className="rounded-card border border-line bg-surface-raised px-4 py-3.5">
@@ -1619,7 +1607,7 @@ function ContactPanel({
           label="Última vez"
           value={
             context.lastVisitAt
-              ? format(new Date(context.lastVisitAt), "dd/MM/yy", { locale: ptBR })
+              ? formatTz(new Date(context.lastVisitAt), fuso, "dd/MM/yy")
               : "—"
           }
           tone="text-info"
@@ -1651,7 +1639,7 @@ function ContactPanel({
                 <p className="truncate text-label text-ink">{item.serviceName}</p>
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-caption text-ink-secondary">
                   <span className="tabular">
-                    {format(new Date(item.startsAt), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                    {formatTz(new Date(item.startsAt), fuso, "dd/MM 'às' HH:mm")}
                   </span>
                   <span aria-hidden>·</span>
                   <span className="truncate">{item.professionalName}</span>
@@ -1802,6 +1790,7 @@ function ConversationRow({
   pending: boolean;
   onAssignment: (action: AssignmentAction, targetUserId?: number) => void;
 }) {
+  const fuso = useFuso();
   /**
    * Não lidas: o MAIOR entre o nosso contador e o do aparelho.
    *
@@ -1886,8 +1875,12 @@ function ConversationRow({
               {conversation.customerName}
             </span>
             {quando ? (
+              // "Hoje", "Ontem" e "qua" dependem do instante da montagem, e o
+              // servidor monta antes do navegador. O fuso deixou de ser o
+              // motivo — só sobra a virada da meia-noite entre uma pintura e
+              // outra.
               <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-                {horaDaLista(quando)}
+                {horaDaLista(quando, fuso)}
               </span>
             ) : null}
           </span>

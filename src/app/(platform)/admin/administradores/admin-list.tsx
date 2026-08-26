@@ -1,7 +1,6 @@
 "use client";
 
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { FUSO_DA_PLATAFORMA, formatTz } from "@/lib/tz";
 import { Plus, ShieldOff } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
@@ -124,7 +123,8 @@ export function AdminList({
                     </p>
                     <p className="truncate text-caption text-ink-secondary">{admin.email}</p>
                     <p className="mt-0.5 text-meta text-ink-tertiary">
-                      Desde {format(new Date(admin.grantedAtISO), "d 'de' MMM 'de' yyyy", { locale: ptBR })}
+                      Desde{" "}
+                      {formatTz(new Date(admin.grantedAtISO), FUSO_DA_PLATAFORMA, "d 'de' MMM 'de' yyyy")}
                       {admin.grantedByName ? ` · concedido por ${admin.grantedByName}` : ""}
                       {admin.clinics.length > 0 ? ` · também em ${admin.clinics.join(", ")}` : ""}
                     </p>

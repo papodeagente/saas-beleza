@@ -1,7 +1,5 @@
 "use client";
 
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   Check,
   CheckCircle2,
@@ -21,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useFuso } from "@/lib/fuso";
+import { formatTz } from "@/lib/tz";
 import {
   disconnectAction,
   disconnectDeviceAction,
@@ -72,6 +72,7 @@ export function WhatsappView({
   connection: ConnectionData | null;
   appUrlConfigured: boolean;
 }) {
+  const fuso = useFuso();
   const [current, setCurrent] = useState<ConnectionData | null>(connection);
   const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? "");
   const [token, setToken] = useState("");
@@ -234,7 +235,7 @@ export function WhatsappView({
               <Row label="Instância" value={current.instanceName ?? "—"} />
               <Row
                 label="Última verificação"
-                value={current.lastCheckedAt ? format(new Date(current.lastCheckedAt), "dd/MM HH:mm", { locale: ptBR }) : "—"}
+                value={current.lastCheckedAt ? formatTz(new Date(current.lastCheckedAt), fuso, "dd/MM HH:mm") : "—"}
               />
             </dl>
           ) : null}
@@ -291,7 +292,7 @@ export function WhatsappView({
                   <CheckCircle2 className="size-3.5 shrink-0 text-positive" aria-hidden />
                   <span className="text-positive">
                     Webhook funcionando. Último evento recebido{" "}
-                    {format(new Date(current.webhookSeenAt), "dd/MM 'às' HH:mm", { locale: ptBR })}.
+                    {formatTz(new Date(current.webhookSeenAt), fuso, "dd/MM 'às' HH:mm")}.
                   </span>
                 </>
               ) : (

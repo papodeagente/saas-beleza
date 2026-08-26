@@ -1,7 +1,5 @@
 "use client";
 
-import { format, isToday, isYesterday } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   Bot,
   Check,
@@ -17,7 +15,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
+import { useFuso } from "@/lib/fuso";
+import { dateISOInTz, formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
+import { rotuloDoSeparador } from "./relogio";
 import { MEDIA_LABEL, textoVisivel } from "./previa";
 import { type InboxDetail, loadMediaAction } from "./actions";
 import { MessageActions } from "./message-actions";
@@ -56,7 +57,11 @@ const LARGURA_DO_MENU = 208;
 /** Duas mensagens seguidas do mesmo autor, próximas no tempo, viram um bloco. */
 const JANELA_DO_GRUPO_MS = 2 * 60 * 1000;
 
-export function mesmoGrupo(anterior: Message | undefined, atual: Message): boolean {
+export function mesmoGrupo(
+  anterior: Message | undefined,
+  atual: Message,
+  fuso: string,
+): boolean {
   if (!anterior) return false;
   if (anterior.sender === "system" || atual.sender === "system") return false;
   // Apagada não entra em bloco nenhum. Ela desenha uma caixa tracejada sem
@@ -69,17 +74,19 @@ export function mesmoGrupo(anterior: Message | undefined, atual: Message): boole
   if (anterior.senderName !== atual.senderName) return false;
   const delta = new Date(atual.createdAt).getTime() - new Date(anterior.createdAt).getTime();
   if (delta > JANELA_DO_GRUPO_MS) return false;
-  return mesmoDia(anterior.createdAt, atual.createdAt);
+  return mesmoDia(anterior.createdAt, atual.createdAt, fuso);
 }
 
-export function mesmoDia(a: string, b: string): boolean {
-  const um = new Date(a);
-  const outro = new Date(b);
-  return (
-    um.getFullYear() === outro.getFullYear() &&
-    um.getMonth() === outro.getMonth() &&
-    um.getDate() === outro.getDate()
-  );
+/**
+ * Mesmo dia PARA O SALÃO.
+ *
+ * `getFullYear/getMonth/getDate` respondem no fuso de quem está rodando. Com o
+ * servidor em UTC, as mensagens das 21h em diante já eram do dia seguinte: a
+ * pílula de data caía na mensagem errada na primeira pintura e pulava de lugar
+ * quando o navegador assumia.
+ */
+export function mesmoDia(a: string, b: string, fuso: string): boolean {
+  return dateISOInTz(new Date(a), fuso) === dateISOInTz(new Date(b), fuso);
 }
 
 /**
@@ -89,17 +96,16 @@ export function mesmoDia(a: string, b: string): boolean {
  * meio, e a conversa parecia ter acontecido em minutos.
  */
 export function SeparadorDeData({ iso }: { iso: string }) {
-  const data = new Date(iso);
-  const rotulo = isToday(data)
-    ? "Hoje"
-    : isYesterday(data)
-      ? "Ontem"
-      : format(data, "d 'de' MMMM", { locale: ptBR });
+  const fuso = useFuso();
+  const rotulo = rotuloDoSeparador(iso, fuso);
 
   return (
     <div className="my-3 flex justify-center">
       <span
         data-separador
+        // "Hoje" e "Ontem" dependem do instante em que a página é montada, e o
+        // servidor monta antes do navegador. O fuso já não é mais o motivo — só
+        // sobra a virada da meia-noite entre uma pintura e outra.
         suppressHydrationWarning
         className="rounded-pill bg-surface-raised px-2.5 py-1 text-meta font-medium text-ink-secondary shadow-card"
       >
@@ -128,6 +134,7 @@ export function MessageBubble({
   onReply: () => void;
   onChanged: () => void;
 }) {
+  const fuso = useFuso();
   const outbound = message.direction === "outbound";
   /**
    * O menu vive aqui, e não dentro de MessageActions, porque o toque longo
@@ -404,8 +411,8 @@ export function MessageBubble({
                 message.status === "failed" && outbound ? "text-danger" : "text-ink-secondary",
               )}
             >
-              <span suppressHydrationWarning className="tabular">
-                {format(new Date(message.createdAt), "HH:mm", { locale: ptBR })}
+              <span className="tabular">
+                {formatTz(new Date(message.createdAt), fuso, "HH:mm")}
               </span>
               {outbound ? <DeliveryTick status={message.status} /> : null}
             </span>

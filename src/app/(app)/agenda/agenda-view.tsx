@@ -1,6 +1,6 @@
 "use client";
 
-import { addDays, addMonths, addWeeks, eachDayOfInterval, isSameMonth, parseISO } from "date-fns";
+import { addDays, addMonths, addWeeks, parseISO } from "date-fns";
 import { CalendarCog, CalendarPlus, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Select } from "@/components/ui/select";
 import { ProfessionalDot, stripeColor } from "@/components/ui/status-stripe";
 import { STATUS_LABEL, STATUS_TONE, type AppointmentStatus } from "@/domain/appointment-status";
-import { formatTz, formatTzCapitalized } from "@/lib/tz";
+import { diasDoIntervaloUtc, formatTz, formatTzCapitalized } from "@/lib/tz";
 import { useCurrentMinute } from "@/lib/use-current-minute";
 import { identityTint } from "@/lib/color";
 import { cn } from "@/lib/utils";
@@ -559,10 +559,7 @@ function RangeAgenda({
   onOpenDay: (dateISO: string) => void;
   onSelect: (id: number) => void;
 }) {
-  const days = eachDayOfInterval({
-    start: parseISO(`${startISO}T12:00:00Z`),
-    end: parseISO(`${endISO}T12:00:00Z`),
-  });
+  const days = diasDoIntervaloUtc(startISO, endISO);
   const anchor = parseISO(`${anchorISO}T12:00:00Z`);
   const byDay = new Map<string, AgendaAppointment[]>();
   for (const appointment of appointments) {
@@ -604,7 +601,11 @@ function RangeAgenda({
           {days.map((day) => {
             const date = formatTz(day, "UTC", "yyyy-MM-dd");
             const items = byDay.get(date) ?? [];
-            const muted = !isSameMonth(day, anchor);
+            // Mês comparado em UTC, e não com `isSameMonth`, que responde no
+            // fuso do navegador: no dia 1º e no dia 31 as duas respostas
+            // divergem, e a célula acendia ou apagava conforme quem olhasse.
+            const muted =
+              formatTz(day, "UTC", "yyyy-MM") !== formatTz(anchor, "UTC", "yyyy-MM");
             return (
               <section key={date} className={cn("min-h-32 bg-surface p-1.5", muted && "bg-surface-sunken/70")}>
                 <button type="button" onClick={() => onOpenDay(date)} className={cn("mb-1 flex size-7 items-center justify-center rounded-full text-caption tabular hover:bg-accent-soft hover:text-accent", muted ? "text-ink-tertiary" : "text-ink")} aria-label={`Abrir ${formatTz(day, "UTC", "dd/MM/yyyy")}`}>

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { precoPartido } from "@/lib/money";
+import { dateISOInTz, formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand";
 import { type Esmalte, type Laca, esmalteDe, lacaDe } from "./esmaltes";
@@ -96,11 +97,14 @@ const CAMPO =
 export function BookingFlow({
   slug,
   organizationName,
+  fuso,
   branches,
   services,
 }: {
   slug: string;
   organizationName: string;
+  /** Fuso do salão. Toda hora e todo dia desta tela são lidos nele. */
+  fuso: string;
   branches: Branch[];
   services: Service[];
 }) {
@@ -126,7 +130,7 @@ export function BookingFlow({
    * render faria a grade trocar de dia sozinha na virada da meia-noite, no meio
    * de um preenchimento.
    */
-  const hojeISO = useMemo(() => format(new Date(), "yyyy-MM-dd"), []);
+  const hojeISO = useMemo(() => dateISOInTz(new Date(), fuso), [fuso]);
   /** Nenhum dia escolhido é um estado real: mês sem vaga nenhuma. */
   const [day, setDay] = useState<string | null>(null);
   const [mes, setMes] = useState(() => mesDe(hojeISO));
@@ -707,7 +711,7 @@ export function BookingFlow({
           ) : null}
           {slot && step === "identify" ? (
             <LinhaRecibo
-              principal={`${maiuscula(format(new Date(slot.startsAt), "EEEE, d 'de' MMMM", { locale: ptBR }))} às ${slot.label}`}
+              principal={`${maiuscula(formatTz(new Date(slot.startsAt), fuso, "EEEE, d 'de' MMMM"))} às ${slot.label}`}
               secundario={`com ${slot.professionalName}`}
               onTrocar={() => setStep("when")}
             />
@@ -1224,7 +1228,7 @@ export function BookingFlow({
         {step === "when" && slot ? (
           <div className="mt-6 hidden items-center justify-between gap-4 border-t border-cartao-linha pt-5 md:flex">
             <span className="min-w-0 text-body text-ink-secondary">
-              {maiuscula(format(new Date(slot.startsAt), "EEEE, d 'de' MMMM", { locale: ptBR }))} às{" "}
+              {maiuscula(formatTz(new Date(slot.startsAt), fuso, "EEEE, d 'de' MMMM"))} às{" "}
               <span className="text-card tabular text-ink">{slot.label}</span>
             </span>
             <Button variant="primary" size="lg" onClick={() => setStep("identify")}>

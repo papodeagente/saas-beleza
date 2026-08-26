@@ -1,7 +1,5 @@
 "use client";
 
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   BarChart3,
   CalendarClock,
@@ -48,6 +46,8 @@ import { Field, Input, Textarea } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatPhone } from "@/lib/phone";
+import { useFuso } from "@/lib/fuso";
+import { formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import {
   classifyGroupAction,
@@ -209,7 +209,7 @@ async function pedirSincronia(jid?: string): Promise<Sincronia> {
   }
 }
 
-function tempoRelativo(iso: string | Date): string {
+function tempoRelativo(iso: string | Date, fuso: string): string {
   const minutos = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (minutos < 1) return "agora";
   if (minutos < 60) return `${minutos} min`;
@@ -217,7 +217,7 @@ function tempoRelativo(iso: string | Date): string {
   if (horas < 24) return `${horas}h`;
   const dias = Math.round(horas / 24);
   if (dias < 7) return `${dias}d`;
-  return format(new Date(iso), "d MMM", { locale: ptBR });
+  return formatTz(new Date(iso), fuso, "d MMM");
 }
 
 /** A primeira página, já montada pelo servidor. */
@@ -625,6 +625,7 @@ function GroupRow({
   active: boolean;
   onOpen: () => void;
 }) {
+  const fuso = useFuso();
   const classe = CLASSIFICACOES.find((c) => c.id === group.classification);
   const IconePrevia = group.lastMessageKind ? ICONE_DA_PREVIA[group.lastMessageKind] : undefined;
 
@@ -655,8 +656,10 @@ function GroupRow({
             </span>
           </span>
           {group.lastMessageAt ? (
+            // "há 3h" e "5d" dependem do instante da montagem, e o servidor
+            // monta antes do navegador. O fuso deixou de ser o motivo.
             <span suppressHydrationWarning className="shrink-0 text-meta text-ink-secondary tabular">
-              {tempoRelativo(group.lastMessageAt)}
+              {tempoRelativo(group.lastMessageAt, fuso)}
             </span>
           ) : null}
         </span>
@@ -1020,6 +1023,7 @@ function GroupThread({
   ultimaConhecida: Pick<GroupItem, "lastMessagePreview" | "lastMessageSender" | "lastMessageAt">;
   onSent: () => void;
 }) {
+  const fuso = useFuso();
   const [texto, setTexto] = useState("");
   const [arquivo, setArquivo] = useState<{ file: File; kind: "image" | "video" | "ptt" | "document" } | null>(null);
   const [enviando, startEnviando] = useTransition();
@@ -1069,7 +1073,7 @@ function GroupThread({
           <p className="mx-auto max-w-[560px] rounded-card bg-surface-sunken px-4 py-6 text-center text-caption text-ink-secondary">
             No WhatsApp, a última mensagem daqui é
             {ultimaConhecida.lastMessageSender ? ` de ${ultimaConhecida.lastMessageSender}` : ""}
-            {ultimaConhecida.lastMessageAt ? `, há ${tempoRelativo(ultimaConhecida.lastMessageAt)}` : ""}:{" "}
+            {ultimaConhecida.lastMessageAt ? `, há ${tempoRelativo(ultimaConhecida.lastMessageAt, fuso)}` : ""}:{" "}
             <span className="text-ink">“{ultimaConhecida.lastMessagePreview}”</span>. O histórico ainda está sendo
             trazido do aparelho e aparece aqui assim que chegar.
           </p>
@@ -1106,8 +1110,8 @@ function GroupThread({
                       </span>
                     ) : null}
                   </div>
-                  <span suppressHydrationWarning className="mt-0.5 px-1 text-meta text-ink-secondary">
-                    {format(new Date(mensagem.createdAt), "dd/MM HH:mm", { locale: ptBR })}
+                  <span className="mt-0.5 px-1 text-meta text-ink-secondary">
+                    {formatTz(new Date(mensagem.createdAt), fuso, "dd/MM HH:mm")}
                   </span>
                 </div>
               );
@@ -1725,6 +1729,7 @@ function ScheduledPanel({
   participantCount: number;
   onCountChange: (quantidade: number) => void;
 }) {
+  const fuso = useFuso();
   const [itens, setItens] = useState<ScheduledView[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [texto, setTexto] = useState("");
@@ -1879,7 +1884,7 @@ function ScheduledPanel({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-label text-ink tabular">
-                      {format(new Date(item.scheduledFor), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                      {formatTz(new Date(item.scheduledFor), fuso, "dd/MM 'às' HH:mm")}
                     </p>
                     {item.body ? (
                       <p className="mt-0.5 line-clamp-3 text-caption text-ink-secondary">{item.body}</p>
@@ -1929,7 +1934,7 @@ function ScheduledPanel({
                 <div className="min-w-0">
                   <p className="truncate text-caption text-ink">{item.body || "(só arquivo)"}</p>
                   <p className="text-meta text-ink-secondary tabular">
-                    {format(new Date(item.scheduledFor), "dd/MM HH:mm", { locale: ptBR })}
+                    {formatTz(new Date(item.scheduledFor), fuso, "dd/MM HH:mm")}
                   </p>
                   {item.error ? <p className="mt-0.5 text-meta text-danger">{item.error}</p> : null}
                 </div>
