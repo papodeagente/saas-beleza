@@ -9,8 +9,8 @@ import { Field, Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { type TimeRange, validateDayRanges } from "@/domain/working-hours";
+import { BranchSheet } from "./branch-sheet";
 import {
-  createBranchAction,
   createMemberAction,
   createProfessionalAction,
   createResourceAction,
@@ -65,7 +65,12 @@ export function ManagementForms({ branches, services }: { branches: Option[]; se
       </div>
       {!branches.length ? <p className="mt-2 text-caption text-ink-secondary">Cadastre a primeira unidade para liberar profissionais, usuários e recursos.</p> : null}
 
-      {open === "branch" ? <BranchSheet pending={pending} error={error} close={close} submit={submit} /> : null}
+      {open === "branch" ? (
+        <BranchSheet
+          onClose={close}
+          onSaved={(m) => { toast.success(m); router.refresh(); close(); }}
+        />
+      ) : null}
       {open === "resource" ? <ResourceSheet branches={branches} pending={pending} error={error} close={close} submit={submit} /> : null}
       {open === "professional" ? <ProfessionalSheet branches={branches} services={services} pending={pending} error={error} close={close} submit={submit} /> : null}
       {open === "member" ? <MemberSheet branches={branches} pending={pending} error={error} close={close} submit={submit} /> : null}
@@ -79,18 +84,6 @@ function ErrorMessage({ result }: { result: CadastroResult | null }) {
   return result && !result.ok ? <p role="alert" className="text-caption text-danger">{result.error}</p> : null;
 }
 
-function BranchSheet({ pending, error, close, submit }: SheetProps) {
-  const [name, setName] = useState(""); const [address, setAddress] = useState(""); const [phone, setPhone] = useState("");
-  return <Sheet open onOpenChange={(v) => !v && close()}><SheetContent title="Nova unidade" description="Local onde os atendimentos acontecem." footer={<Actions pending={pending} disabled={name.trim().length < 2} label="Cadastrar unidade" close={close} />}>
-    <form className="space-y-4 px-5 py-4" onSubmit={(e) => { e.preventDefault(); submit(() => createBranchAction({ name, address, phone }), "Unidade cadastrada"); }}>
-      <button id="cadastro-submit" type="submit" hidden />
-      <Field label="Nome" htmlFor="branch-name"><Input id="branch-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Unidade Centro" /></Field>
-      <Field label="Endereço" htmlFor="branch-address" optional><Input id="branch-address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Rua, número e bairro" /></Field>
-      <Field label="Telefone" htmlFor="branch-phone" optional><Input id="branch-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(84) 99999-0000" /></Field>
-      <ErrorMessage result={error} />
-    </form>
-  </SheetContent></Sheet>;
-}
 
 function ResourceSheet({ branches, pending, error, close, submit }: SheetProps & { branches: Option[] }) {
   const [name, setName] = useState(""); const [branchId, setBranchId] = useState(branches[0]?.id ?? 0); const [type, setType] = useState<"room"|"cabin"|"equipment">("room");

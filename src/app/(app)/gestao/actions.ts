@@ -8,6 +8,7 @@ import { db } from "@/db";
 import {
   branches,
   organizationMemberBranches,
+  organizations,
   organizationMembers,
   professionalServices,
   professionalWorkingHours,
@@ -18,6 +19,8 @@ import {
 } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
 import { hashPassword, requireRole, requireSession } from "@/server/auth";
+import { BranchError, createBranch, updateBranch } from "@/server/services/branch-service";
+import { CepError, apenasDigitos, buscarCep } from "@/server/services/location-service";
 
 export type CadastroResult = { ok: true } | { ok: false; error: string; field?: string };
 
@@ -37,7 +40,22 @@ const branchSchema = z.object({
   name: z.string().trim().min(2, "Informe o nome da unidade."),
   address: z.string().trim().max(300).transform((v) => v || null),
   phone: z.string().trim().transform((v) => (v ? normalizePhone(v) : null)),
+  // Endereço estruturado. Opcional inteiro: a maioria da base não tem nada
+  // disto, e exigir agora quebraria o cadastro de quem só quer marcar horário.
+  postalCode: z.string().trim().max(9).optional().transform((v) => (v ? apenasDigitos(v) : null)),
+  street: z.string().trim().max(200).optional().transform((v) => v || null),
+  number: z.string().trim().max(20).optional().transform((v) => v || null),
+  complement: z.string().trim().max(80).optional().transform((v) => v || null),
+  district: z.string().trim().max(120).optional().transform((v) => v || null),
+  city: z.string().trim().max(120).optional().transform((v) => v || null),
+  uf: z.string().trim().length(2).optional().or(z.literal("")).transform((v) => v || null),
+  ibgeCode: z.number().int().positive().optional().nullable(),
 });
+
+function branchFailure(error: unknown): CadastroResult {
+  if (error instanceof BranchError) return { ok: false, error: error.message, field: error.field };
+  return failure(error);
+}
 
 export async function createBranchAction(input: unknown): Promise<CadastroResult> {
   const parsed = branchSchema.safeParse(input);
@@ -45,11 +63,65 @@ export async function createBranchAction(input: unknown): Promise<CadastroResult
   try {
     const ctx = await requireSession();
     requireRole(ctx, "admin");
-    await db.insert(branches).values({ organizationId: ctx.organizationId, ...parsed.data });
+    await createBranch(ctx, parsed.data);
     revalidatePath("/gestao");
     return { ok: true };
   } catch (error) {
-    return failure(error);
+    return branchFailure(error);
+  }
+}
+
+const updateBranchSchema = branchSchema.extend({
+  branchId: z.number().int().positive(),
+  active: z.boolean().optional(),
+});
+
+/**
+ * Editar unidade — o que não existia.
+ *
+ * Até aqui `gestao/actions.ts` só sabia CRIAR. Uma clínica que digitasse o
+ * endereço errado convivia com ele para sempre, e isso deixou de ser incômodo
+ * para virar bloqueio no dia em que o endereço passou a decidir se o salão
+ * aparece na busca por cidade.
+ */
+export async function updateBranchAction(input: unknown): Promise<CadastroResult> {
+  const parsed = updateBranchSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed);
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const { branchId, ...campos } = parsed.data;
+    await updateBranch(ctx, branchId, campos);
+    revalidatePath("/gestao");
+    revalidatePath("/manicures");
+    return { ok: true };
+  } catch (error) {
+    return branchFailure(error);
+  }
+}
+
+export type CepResult =
+  | { ok: true; endereco: Awaited<ReturnType<typeof buscarCep>> }
+  | { ok: false; error: string };
+
+/**
+ * Busca de CEP.
+ *
+ * Sai daqui e não do navegador de propósito: o ViaCEP não publica CORS
+ * garantido, e chamar de dentro do servidor deixa a chave de vazão, o prazo e o
+ * tratamento de erro num lugar só. É `requireSession` porque é ferramenta do
+ * painel, não rota aberta que qualquer um usa como proxy de CEP.
+ */
+export async function buscarCepAction(cep: unknown): Promise<CepResult> {
+  const parsed = z.string().safeParse(cep);
+  if (!parsed.success) return { ok: false, error: "CEP inválido." };
+  try {
+    await requireSession();
+    return { ok: true, endereco: await buscarCep(parsed.data) };
+  } catch (error) {
+    if (error instanceof CepError) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "Não conseguimos consultar o CEP agora." };
   }
 }
 
@@ -196,6 +268,67 @@ export async function createMemberAction(input: unknown): Promise<CadastroResult
       })));
     });
     revalidatePath("/gestao");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Vitrine pública — o marketplace de manicures
+// ---------------------------------------------------------------------------
+
+const vitrineSchema = z.object({
+  /** O interruptor. Nasce desligado e só a clínica liga. */
+  listed: z.boolean(),
+  bio: z.string().trim().max(280, "Máximo de 280 caracteres.").transform((v) => v || null),
+  whatsapp: z.string().trim().transform((v) => (v ? normalizePhone(v) : null)),
+  instagram: z
+    .string()
+    .trim()
+    .max(60)
+    // Aceita "@nome", "nome" ou a URL colada do navegador — quem cadastra copia
+    // de onde estiver, e recusar por causa do formato é atrito à toa.
+    .transform((v) => v.replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/^@/, "").replace(/\/$/, ""))
+    .transform((v) => v || null),
+});
+
+/**
+ * Liga ou desliga o salão no diretório, e guarda como ele se apresenta.
+ *
+ * O `revalidatePath("/manicures")` existe porque o diretório é cacheado: sem
+ * ele a clínica liga o interruptor, vai conferir e não se encontra — e conclui
+ * que não funcionou.
+ */
+export async function salvarVitrineAction(input: unknown): Promise<CadastroResult> {
+  const parsed = vitrineSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed);
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const { listed, bio, whatsapp, instagram } = parsed.data;
+
+    const [antes] = await db
+      .select({ listed: organizations.marketplaceListed })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.organizationId))
+      .limit(1);
+
+    await db
+      .update(organizations)
+      .set({
+        marketplaceListed: listed,
+        marketplaceBio: bio,
+        marketplaceWhatsapp: whatsapp,
+        marketplaceInstagram: instagram,
+        // Carimba só na virada de desligado para ligado: é a data de entrada no
+        // diretório, não a de qualquer salvamento.
+        ...(listed && !antes?.listed ? { marketplaceListedAt: new Date() } : {}),
+      })
+      .where(eq(organizations.id, ctx.organizationId));
+
+    revalidatePath("/gestao");
+    revalidatePath("/manicures");
     return { ok: true };
   } catch (error) {
     return failure(error);

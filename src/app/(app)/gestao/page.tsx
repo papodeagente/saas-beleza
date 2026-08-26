@@ -21,8 +21,10 @@ import {
 } from "@/db/schema";
 import { formatPhone } from "@/lib/phone";
 import { requireRole, requireSession } from "@/server/auth";
+import { organizations } from "@/db/schema";
 import { CopyLink } from "./copy-link";
 import { ManagementForms } from "./management-forms";
+import { Vitrine } from "./vitrine";
 
 export const metadata = { title: "Gestão" };
 export const dynamic = "force-dynamic";
@@ -63,7 +65,16 @@ export default async function ManagementPage() {
   // Comissão, acessos e unidades são assunto de quem administra a clínica.
   requireRole(ctx, "admin");
 
-  const [professionalRows, branchRows, resourceRows, memberRows, serviceOptions] = await Promise.all([
+  const [
+    professionalRows,
+    branchRows,
+    resourceRows,
+    memberRows,
+    serviceOptions,
+    contaRows,
+    unidadesRows,
+    catalogoRows,
+  ] = await Promise.all([
     db
       .select({
         id: professionals.id,
@@ -113,6 +124,50 @@ export default async function ManagementPage() {
       eq(services.organizationId, ctx.organizationId),
       eq(services.active, true),
     )).orderBy(asc(services.name)),
+    // Vitrine: a conta, as unidades com endereço estruturado e o resumo do
+    // catálogo publicado. O `pronta` é a mesma condição que o diretório aplica
+    // — se divergir, a clínica liga o interruptor e não se encontra.
+    db
+      .select({
+        listed: organizations.marketplaceListed,
+        bio: organizations.marketplaceBio,
+        whatsapp: organizations.marketplaceWhatsapp,
+        instagram: organizations.marketplaceInstagram,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.organizationId))
+      .limit(1),
+    db
+      .select({
+        id: branches.id,
+        name: branches.name,
+        address: branches.address,
+        phone: branches.phone,
+        active: branches.active,
+        postalCode: branches.postalCode,
+        street: branches.street,
+        number: branches.number,
+        complement: branches.complement,
+        district: branches.district,
+        city: branches.city,
+        uf: branches.uf,
+        ibgeCode: branches.ibgeCode,
+        lat: branches.lat,
+      })
+      .from(branches)
+      .where(eq(branches.organizationId, ctx.organizationId))
+      .orderBy(asc(branches.name)),
+    db
+      .select({
+        publicados: sql<number>`count(*)`.mapWith(Number),
+        precoMin: sql<number | null>`min(${services.priceCents})`,
+      })
+      .from(services)
+      .where(and(
+        eq(services.organizationId, ctx.organizationId),
+        eq(services.active, true),
+        eq(services.onlineBooking, true),
+      )),
   ]);
 
   // Endereço completo — é ele que a clínica cola na bio, não o caminho relativo.
@@ -157,6 +212,26 @@ export default async function ManagementPage() {
               <CopyLink url={bookingUrl} />
             </div>
           </Card>
+        </section>
+
+        {/* Vitrine pública — o diretório de manicures */}
+        <section aria-labelledby="vitrine">
+          <SectionLabel>
+            <span id="vitrine">Vitrine pública</span>
+          </SectionLabel>
+          <Vitrine
+            estado={{
+              listed: contaRows[0]?.listed ?? false,
+              bio: contaRows[0]?.bio ?? null,
+              whatsapp: contaRows[0]?.whatsapp ?? null,
+              instagram: contaRows[0]?.instagram ?? null,
+              nome: ctx.organizationName,
+              slug: ctx.organizationSlug,
+              servicosPublicados: catalogoRows[0]?.publicados ?? 0,
+              precoMinCents: catalogoRows[0]?.precoMin ?? null,
+              unidades: unidadesRows.map(({ lat, ...u }) => ({ ...u, pronta: lat != null })),
+            }}
+          />
         </section>
 
         {/* Profissionais */}
