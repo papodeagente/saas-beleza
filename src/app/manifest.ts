@@ -10,6 +10,16 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: "#FCFAFF",
     theme_color: "#8744CD",
     lang: "pt-BR",
+    /**
+     * Atalhos da tela de início. O primeiro é o diretório: quem instala pelo
+     * marketplace instala para PROCURAR manicure, não para operar um salão —
+     * e o `start_url` "/" leva à landing.
+     */
+    shortcuts: [
+      { name: "Buscar manicure", short_name: "Buscar", url: "/manicures" },
+      { name: "Minha agenda de hoje", short_name: "Hoje", url: "/hoje" },
+      { name: "Conversas", short_name: "Inbox", url: "/inbox" },
+    ],
     icons: [
       {
         src: "/app-icon-192.png",

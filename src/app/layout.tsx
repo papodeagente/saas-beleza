@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Playfair_Display, Plus_Jakarta_Sans } from "next/font/google";
 import { Toaster } from "sonner";
+import { PWA } from "@/components/pwa";
 import "./globals.css";
 
 // Geométrica e arredondada, na linha da referência aprovada.
@@ -50,6 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR" className={`${sans.variable} ${brand.variable} h-full`}>
       <body className="min-h-full">
         {children}
+        <PWA />
         <Toaster
           position="bottom-right"
           toastOptions={{
