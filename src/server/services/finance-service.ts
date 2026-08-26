@@ -272,6 +272,7 @@ export async function getRevenueByService(ctx: TenantContext, period: Period) {
 
   return db
     .select({
+      id: services.id,
       name: services.name,
       total: sum(payments.amountCents).mapWith(Number),
       count: sql<number>`count(distinct ${appointments.id})`.mapWith(Number),
@@ -286,7 +287,10 @@ export async function getRevenueByService(ctx: TenantContext, period: Period) {
         lte(payments.paidAt, to),
       ),
     )
-    .groupBy(services.name)
+    // Agrupa por ID, não por nome: dois serviços diferentes podem se chamar
+    // igual, e a partir do momento em que renomear virou possível, um nome
+    // repetido passa a somar a receita de dois serviços numa linha só.
+    .groupBy(services.id, services.name)
     .orderBy(desc(sum(payments.amountCents)))
     .limit(8);
 }

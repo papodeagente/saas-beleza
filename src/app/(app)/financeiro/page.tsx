@@ -211,8 +211,11 @@ export default async function FinancePage({
               </Card>
             ) : (
               <ul className="mt-3 space-y-3">
+                {/* Chave pelo id: agrupando por serviço, dois homônimos viram
+                    duas linhas — e duas linhas com a mesma chave fazem o React
+                    reaproveitar a errada ao reordenar. */}
                 {byService.map((row) => (
-                  <li key={row.name}>
+                  <li key={row.id}>
                     <div className="flex items-baseline justify-between gap-3">
                       <span className="min-w-0 truncate text-label text-ink">{row.name}</span>
                       <span className="shrink-0 text-label tabular text-ink">
