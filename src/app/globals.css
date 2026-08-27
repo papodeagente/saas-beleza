@@ -590,86 +590,6 @@
 }
 
 /**
- * A ENTRADA ESCALONADA — o mesmo princípio da grade do mês, para listas.
- *
- * Carta de serviços, chips de horário, unidades: o bloco inteiro aparecendo de
- * uma vez é um estalo, e o olho não sabe por onde começar a ler. Entrando de
- * cima para baixo, com 30ms entre um item e o outro, a lista se apresenta na
- * ordem em que vai ser lida. Espera `--atraso` no style.
- */
-@utility entrada-escalonada {
-  animation: dia-surge 260ms var(--ease-out-quint) var(--atraso, 0ms) backwards;
-}
-
-/**
- * A TROCA DE PASSO TEM SENTIDO.
- *
- * Avançar e voltar eram o mesmo movimento — o conteúdo subia 10px nos dois
- * casos — e a página não confirmava o que a cliente acabou de fazer. Agora o
- * passo novo entra do lado de onde veio: da direita quando se avança, da
- * esquerda quando se volta. É a mesma gramática do carrossel de fotos do
- * celular, e ninguém precisa aprendê-la.
- *
- * Espera `--dir` no style: 1 avança, -1 volta.
- */
-@utility passo-entrada {
-  animation: passo-desliza 300ms var(--ease-out-quint) backwards;
-}
-
-/**
- * O PRIMEIRO PREENCHIMENTO DA TRILHA.
- *
- * Depois da abertura, cada traço TRANSICIONA de um estado para o outro e o
- * movimento se explica sozinho. Na primeira pintura não há estado anterior:
- * sem isto, a trilha nasce pronta e a cliente nunca vê a página se medir. O
- * "para onde" é o `transform` inline do próprio elemento — daí o `backwards`
- * e nenhum `to` aqui dentro.
- *
- * Espera `--atraso` no style.
- */
-@utility trilha-enche {
-  animation: trilha-enche 620ms var(--ease-out-quint) var(--atraso, 0ms) backwards;
-}
-
-@keyframes trilha-enche {
-  from {
-    transform: scaleX(0);
-  }
-}
-
-/**
- * O CARIMBO do bilhete: o selo cai no papel, não aparece nele.
- *
- * É o único momento da página em que algo entra ampliado — a confirmação é a
- * recompensa do caminho inteiro, e chega uma vez só por agendamento.
- */
-@utility carimbo {
-  animation: carimbo 460ms var(--ease-out-quint) 260ms backwards;
-}
-
-@keyframes carimbo {
-  from {
-    opacity: 0;
-    transform: scale(1.3) rotate(-5deg);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) rotate(0deg);
-  }
-}
-
-@keyframes passo-desliza {
-  from {
-    opacity: 0;
-    transform: translate3d(calc(var(--dir, 1) * 24px), 0, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-/**
  * A UNHA POSTIÇA — o átomo que aposentou a gota de 12px.
  *
  * `border-radius` elíptico assimétrico (topo redondo, base quase reta), a poça
@@ -806,10 +726,7 @@
   /* Aqui a regra global não basta: o ATRASO sobrevive a ela, e uma célula com
      `backwards` fica invisível os 210ms inteiros antes de aparecer de estalo —
      que é exatamente o piscar que quem desliga movimento está evitando. */
-  .dia-entrada,
-  .entrada-escalonada,
-  .trilha-enche,
-  .carimbo {
+  .dia-entrada {
     animation: none !important;
   }
 

@@ -10,20 +10,22 @@ describe("quantos passos esta clínica tem", () => {
   it("não cobra o passo de escolha quando não há escolha", () => {
     // Foi na conta com UM serviço publicado que o dono chamou a página de feia:
     // "O que você quer fazer?" com uma opção só é pergunta que já tem resposta.
-    expect(passosDaClinica(1)).toEqual(["Dia e hora", "Seus dados"]);
+    expect(passosDaClinica(1, 1)).toEqual(["Dia e hora", "Seus dados"]);
   });
 
-  it("são três com catálogo, e três é o teto", () => {
-    // A unidade saiu da conta: ela deixou de ser tela e virou uma pílula ao
-    // lado do calendário, porque "em qual loja?" é detalhe do "quando".
-    expect(passosDaClinica(6)).toEqual(["Serviço", "Dia e hora", "Seus dados"]);
-    expect(passosDaClinica(40)).toHaveLength(3);
+  it("conta a unidade só quando há mais de uma", () => {
+    expect(passosDaClinica(1, 3)).toEqual(["Unidade", "Dia e hora", "Seus dados"]);
+    expect(passosDaClinica(6, 1)).toEqual(["Serviço", "Dia e hora", "Seus dados"]);
+  });
+
+  it("chega a quatro passos, que a trilha antiga jurava serem três", () => {
+    expect(passosDaClinica(40, 3)).toEqual(["Serviço", "Unidade", "Dia e hora", "Seus dados"]);
   });
 
   it("nunca fica sem passo, mesmo com catálogo vazio", () => {
     // Clínica sem serviço publicado ainda vê a tela de vazio, e a linha de
     // passo não pode sair como "1 de 0".
-    expect(passosDaClinica(0).length).toBeGreaterThanOrEqual(2);
+    expect(passosDaClinica(0, 0).length).toBeGreaterThanOrEqual(2);
   });
 });
 
