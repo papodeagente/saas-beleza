@@ -65,7 +65,13 @@ type Branch = { id: number; name: string; address: string | null; phone: string 
  * responde de graça a pergunta que a faixa não respondia: em que semana esta
  * clínica costuma ter espaço.
  */
-type Step = "service" | "branch" | "when" | "identify" | "done";
+type Step = "service" | "when" | "identify" | "done";
+
+/**
+ * A ordem em que os passos acontecem. Serve para saber, na troca, se a cliente
+ * avançou ou voltou — e é isso que decide de que lado a tela nova entra.
+ */
+const ORDEM_DOS_PASSOS: Step[] = ["service", "when", "identify", "done"];
 
 /**
  * Cabeçalho da grade. Uma letra só, porque a coluna tem a largura de um dedo.
@@ -121,10 +127,28 @@ export function BookingFlow({
    */
   const servicoUnico = services.length === 1 ? services[0] : null;
   const [service, setService] = useState<Service | null>(servicoUnico);
-  const [branch, setBranch] = useState<Branch | null>(branches.length === 1 ? branches[0] : null);
-  const [step, setStep] = useState<Step>(
-    servicoUnico ? (branches.length > 1 ? "branch" : "when") : "service",
-  );
+  /**
+   * A unidade nasce escolhida — a primeira da lista — em vez de ser um passo.
+   *
+   * Uma tela inteira só para dizer "Ponta Negra" custava um toque e um passo a
+   * mais no contador, e a pergunta que ela fazia não é a que a cliente tem na
+   * cabeça: ela quer saber QUANDO, e a unidade é um detalhe da resposta. Agora
+   * a troca mora ao lado do calendário, onde é o que de fato é — um filtro do
+   * que está livre.
+   */
+  const [branch, setBranch] = useState<Branch | null>(branches[0] ?? null);
+  const [step, setStep] = useState<Step>(servicoUnico ? "when" : "service");
+  /**
+   * De que lado a próxima tela entra: 1 avança, -1 volta. Mora em estado, e não
+   * num efeito, porque quem sabe o sentido é o clique — o efeito só descobriria
+   * depois, com um quadro já pintado no sentido errado.
+   */
+  const [sentido, setSentido] = useState(1);
+
+  function irPara(proximo: Step) {
+    setSentido(ORDEM_DOS_PASSOS.indexOf(proximo) >= ORDEM_DOS_PASSOS.indexOf(step) ? 1 : -1);
+    setStep(proximo);
+  }
   /**
    * Hoje, no fuso de quem está olhando, fixado na montagem. Recalcular a cada
    * render faria a grade trocar de dia sozinha na virada da meia-noite, no meio
@@ -378,7 +402,7 @@ export function BookingFlow({
   useEffect(() => {
     if (montado.current) return;
     montado.current = true;
-    if (servicoUnico && branches.length <= 1)
+    if (servicoUnico)
       buscarDias({ service: servicoUnico, branch }, mesDe(hojeISO), {
         podeAvancar: true,
       });
@@ -424,17 +448,20 @@ export function BookingFlow({
 
   function chooseService(value: Service) {
     setService(value);
-    if (branches.length > 1) {
-      setStep("branch");
-      return;
-    }
-    setStep("when");
+    irPara("when");
     loadDays({ service: value, branch });
   }
 
-  function chooseBranch(value: Branch) {
+  /**
+   * Trocar de unidade no meio do calendário.
+   *
+   * A disponibilidade é do par serviço × unidade, então tudo o que estava na
+   * tela — mês, dia e horário — deixa de valer no instante da troca. É o mesmo
+   * `loadDays` que a escolha de serviço usa.
+   */
+  function trocarUnidade(value: Branch) {
+    if (value.id === branch?.id) return;
     setBranch(value);
-    setStep("when");
     loadDays({ service, branch: value });
   }
 
@@ -556,7 +583,7 @@ export function BookingFlow({
       });
       if (result.ok) {
         setConfirmation(result.confirmation);
-        setStep("done");
+        irPara("done");
       } else {
         setError(result.error);
         // O horário pode ter sido ocupado enquanto o cliente preenchia os dados
@@ -569,7 +596,7 @@ export function BookingFlow({
         setSlots(fresh);
         if (!fresh.some((s) => s.startsAt === slot.startsAt)) {
           setSlot(null);
-          setStep("when");
+          irPara("when");
         }
       }
     });
@@ -631,15 +658,9 @@ export function BookingFlow({
    * A trilha antiga dizia "3" sempre, e mentia nas duas pontas: com serviço
    * único são 2, com mais de uma unidade são 4.
    */
-  const passos = passosDaClinica(services.length, branches.length);
+  const passos = passosDaClinica(services.length);
   const rotuloDoPasso =
-    step === "service"
-      ? "Serviço"
-      : step === "branch"
-        ? "Unidade"
-        : step === "when"
-          ? "Dia e hora"
-          : "Seus dados";
+    step === "service" ? "Serviço" : step === "when" ? "Dia e hora" : "Seus dados";
   /** Zero quando o passo aberto não é um dos que esta clínica anuncia. */
   const posicaoDoPasso = passos.indexOf(rotuloDoPasso) + 1;
 
@@ -672,22 +693,30 @@ export function BookingFlow({
       compacta={fachadaCompacta}
       barraFixa={step === "when" && slot !== null}
     >
-      <div key={step} className="animate-passo min-w-0">
-        <div className="min-w-0">
-          {/* Uma linha no lugar de três traços: diz em que passo a cliente está
-              e quantos existem NESTA clínica, sem prometer etapa que não há. */}
-          {/*
-            A contagem só sai quando o passo aberto ESTÁ na lista.
+      <div className="min-w-0">
+        {/*
+          A trilha fica FORA da árvore que remonta a cada passo.
 
-            Clínica sem serviço publicado abre em "service", e "Serviço" não
-            entra em `passos` (a lista só o inclui quando há mais de um): o
-            `indexOf` devolvia -1 e a primeira tela da cliente dizia
-            "0 DE 2 · SERVIÇO" acima de "Nada disponível para agendar online".
-          */}
-          <p role="status" aria-live="polite" className="text-eyebrow text-ink-secondary">
-            {posicaoDoPasso > 0 ? `${posicaoDoPasso} de ${passos.length} · ` : ""}
-            {rotuloDoPasso}
-          </p>
+          Dentro dela, cada traço nasceria já preenchido e não haveria travessia
+          nenhuma para ver — animação que só existe no código. Aqui ela
+          sobrevive à troca, e é o traço que cresce da esquerda para a direita
+          que conta à cliente que ela andou.
+
+          A contagem só sai quando o passo aberto ESTÁ na lista: clínica sem
+          serviço publicado abre em "service", que não é passo quando não há
+          escolha, e a trilha diria "0 de 2" acima de "nada disponível".
+        */}
+        {posicaoDoPasso > 0 ? <Trilha passos={passos} atual={posicaoDoPasso - 1} /> : null}
+        {/* A trilha desenhada é para os olhos; esta linha é para quem ouve. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {posicaoDoPasso > 0 ? `Passo ${posicaoDoPasso} de ${passos.length}: ` : ""}
+          {rotuloDoPasso}
+        </p>
+        <div
+          key={step}
+          style={{ "--dir": sentido } as React.CSSProperties}
+          className="passo-entrada min-w-0"
+        >
           {/* O recibo.
               Cada escolha feita encolhe para uma linha e continua na tela, com
               o botão que a desfaz. É o que substituiu o "Voltar": trocar o
@@ -699,21 +728,21 @@ export function BookingFlow({
               esmalte={esmalte}
               principal={service.name}
               secundario={`${duracao(service.durationMin)} · ${precoPartido(service.priceCents).join(" ")}`}
-              onTrocar={services.length > 1 ? () => setStep("service") : undefined}
+              onTrocar={services.length > 1 ? () => irPara("service") : undefined}
             />
           ) : null}
-          {branch && branches.length > 1 && step !== "service" && step !== "branch" ? (
+          {branch && branches.length > 1 && step === "identify" ? (
             <LinhaRecibo
               principal={branch.name}
               secundario={branch.address ?? undefined}
-              onTrocar={branches.length > 1 ? () => setStep("branch") : undefined}
+              onTrocar={() => irPara("when")}
             />
           ) : null}
           {slot && step === "identify" ? (
             <LinhaRecibo
               principal={`${maiuscula(formatTz(new Date(slot.startsAt), fuso, "EEEE, d 'de' MMMM"))} às ${slot.label}`}
               secundario={`com ${slot.professionalName}`}
-              onTrocar={() => setStep("when")}
+              onTrocar={() => irPara("when")}
             />
           ) : null}
 
@@ -729,17 +758,15 @@ export function BookingFlow({
           <h2 ref={perguntaRef} tabIndex={-1} className="mt-4 text-ask text-ink outline-none">
             {step === "service"
               ? "O que você quer fazer?"
-              : step === "branch"
-                ? "Em qual unidade?"
-                : step === "when"
-                  ? "Quando fica bom para você?"
-                  : "Só falta você se identificar"}
+              : step === "when"
+                ? "Quando fica bom para você?"
+                : "Só falta você se identificar"}
           </h2>
 
           {/* 1. Serviço — uma carta de preços, que é como salão mostra serviço. */}
           {step === "service" ? (
             <div className="mt-5 space-y-6">
-              {groupByCategory(services).map(([category, list]) => {
+              {groupByCategory(services).map(([category, list], indiceDaSecao) => {
                 const tom = esmalteDe(category);
                 return (
                   <section key={category ?? "sem-categoria"}>
@@ -759,10 +786,22 @@ export function BookingFlow({
                       Seta cinza à direita é vocabulário de tela de ajustes.
                     */}
                     <ul className="space-y-3">
-                      {list.map((item) => {
+                      {list.map((item, indiceNaSecao) => {
                         const [simbolo, numero] = precoPartido(item.priceCents);
+                        /*
+                          A cascata entra na ordem em que se lê, e para aos
+                          260ms: passado esse ponto, o escalonamento deixa de
+                          soar como "a carta está se abrindo" e passa a soar
+                          como "a página está lenta". Catálogo de trinta itens
+                          não pode custar dois segundos de espera coreografada.
+                        */
+                        const atraso = Math.min(indiceDaSecao * 70 + indiceNaSecao * 34, 260);
                         return (
-                          <li key={item.id}>
+                          <li
+                            key={item.id}
+                            className="entrada-escalonada"
+                            style={{ "--atraso": `${atraso}ms` } as React.CSSProperties}
+                          >
                             <button
                               type="button"
                               onClick={() => chooseService(item)}
@@ -822,31 +861,48 @@ export function BookingFlow({
             </div>
           ) : null}
 
-          {/* 2. Unidade */}
-          {step === "branch" ? (
-            // Mesma placa da carta de serviços, sem postiça (unidade não tem
-            // esmalte) e sem seta: a afordância é a placa, não um chevron.
-            <ul className="mt-5 space-y-3">
-              {branches.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    onClick={() => chooseBranch(item)}
-                    className="w-full rounded-[14px] bg-cartao px-4 py-4 text-left ring-1 ring-cartao-fio transition-transform duration-100 hover:bg-cartao-sunken active:translate-y-px active:scale-[.985]"
-                  >
-                    <span className="block text-card text-ink">{item.name}</span>
-                    {item.address ? (
-                      <span className="mt-1 block text-body text-ink-secondary">{item.address}</span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
-          {/* 3. Dia e hora, na mesma tela. */}
+          {/* 2. Dia e hora, na mesma tela. */}
           {step === "when" ? (
-            <div className="mt-5 md:grid md:grid-cols-[minmax(0,1fr)_252px] md:gap-6">
+            <>
+              {/*
+                A unidade virou o primeiro gesto DESTA tela, no lugar de uma
+                tela só dela.
+
+                Em pílula, e não em placa: placa é para o que se escolhe uma vez
+                (o serviço); pílula é para o que se alterna enquanto se procura,
+                que é o que a cliente faz com duas unidades da mesma casa. O
+                endereço da que estiver ativa continua à vista, no alto do
+                cartão — trocar aqui troca a fachada lá em cima.
+              */}
+              {branches.length > 1 ? (
+                <nav
+                  aria-label="Unidade"
+                  className="-mx-1 mt-5 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  {branches.map((item, i) => {
+                    const ativa = item.id === branch?.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => trocarUnidade(item)}
+                        aria-pressed={ativa}
+                        style={{ "--atraso": `${i * 40}ms` } as React.CSSProperties}
+                        className={cn(
+                          "entrada-escalonada min-h-11 shrink-0 rounded-pill px-4 text-body transition-[background-color,color,box-shadow] duration-[160ms]",
+                          ativa
+                            ? "bg-accent font-semibold text-white"
+                            : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",
+                        )}
+                      >
+                        {item.name}
+                      </button>
+                    );
+                  })}
+                </nav>
+              ) : null}
+
+              <div className="mt-5 md:grid md:grid-cols-[minmax(0,1fr)_252px] md:gap-6">
               {/* ————— o mês ————— */}
               <div>
                 <div className="flex items-center justify-between gap-3">
@@ -1121,10 +1177,11 @@ export function BookingFlow({
                   ) : null}
                 </div>
               </div>
-            </div>
+              </div>
+            </>
           ) : null}
 
-          {/* 4. Identificação */}
+          {/* 3. Identificação */}
           {step === "identify" && slot ? (
             // A medida do formulário é limitada: campo de nome com 940px de
             // largura numa tela grande não é generosidade, é desorientação.
@@ -1226,12 +1283,12 @@ export function BookingFlow({
             A barra fixa abaixo é `md:hidden`; sem este bloco, o desktop chegava
             a um beco — horário escolhido e nenhuma forma de seguir. */}
         {step === "when" && slot ? (
-          <div className="mt-6 hidden items-center justify-between gap-4 border-t border-cartao-linha pt-5 md:flex">
+          <div className="animate-passo mt-6 hidden items-center justify-between gap-4 border-t border-cartao-linha pt-5 md:flex">
             <span className="min-w-0 text-body text-ink-secondary">
               {maiuscula(formatTz(new Date(slot.startsAt), fuso, "EEEE, d 'de' MMMM"))} às{" "}
               <span className="text-card tabular text-ink">{slot.label}</span>
             </span>
-            <Button variant="primary" size="lg" onClick={() => setStep("identify")}>
+            <Button variant="primary" size="lg" onClick={() => irPara("identify")}>
               Continuar
             </Button>
           </div>
@@ -1242,13 +1299,13 @@ export function BookingFlow({
           adiante. Fundo SÓLIDO e não desfocado — desfoque sobre o grão do
           balcão vira lama, e este é o alvo que não pode perder contraste. */}
       {step === "when" && slot ? (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-cartao-fio bg-cartao px-5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-sticky md:hidden">
+        <div className="animate-passo fixed inset-x-0 bottom-0 z-20 border-t border-cartao-fio bg-cartao px-5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-sticky md:hidden">
           <div className="mx-auto flex max-w-[620px] items-center justify-between gap-3">
             <span className="min-w-0 text-caption text-ink-secondary">
               {format(new Date(slot.startsAt), "EEE, d 'de' MMM", { locale: ptBR })} às{" "}
               <span className="text-label text-ink tabular">{slot.label}</span>
             </span>
-            <Button variant="primary" size="lg" onClick={() => setStep("identify")}>
+            <Button variant="primary" size="lg" onClick={() => irPara("identify")}>
               Continuar
             </Button>
           </div>
@@ -1607,7 +1664,7 @@ function Bilhete({
     <div className="mx-auto max-w-[520px] animate-rise-in [filter:drop-shadow(0_26px_55px_rgb(67_35_88/0.20))]">
       <div className="picote rounded-t-overlay bg-surface-raised pb-6">
         <div className="px-6 pt-7 sm:px-8">
-          <span className="inline-flex items-center gap-1.5 rounded-pill bg-positive-soft px-2.5 py-1 text-meta font-semibold uppercase tracking-[0.1em] text-positive">
+          <span className="carimbo inline-flex items-center gap-1.5 rounded-pill bg-positive-soft px-2.5 py-1 text-meta font-semibold uppercase tracking-[0.1em] text-positive">
             <Check className="size-3.5" aria-hidden />
             Confirmado
           </span>
@@ -1629,15 +1686,22 @@ function Bilhete({
           <span className="h-px flex-1 bg-[repeating-linear-gradient(to_right,var(--color-cartao-linha)_0_6px,transparent_6px_12px)]" />
         </div>
 
+        {/* As quatro linhas entram na ordem de leitura, atrás do carimbo: o
+            bilhete se escreve, em vez de já estar escrito. */}
         <dl className="mt-5 space-y-3.5 px-6 sm:px-8">
-          <LinhaBilhete rotulo="Serviço" valor={confirmation.serviceName} />
-          <LinhaBilhete rotulo="Com" valor={confirmation.professionalName} />
+          <LinhaBilhete rotulo="Serviço" valor={confirmation.serviceName} atraso={420} />
+          <LinhaBilhete rotulo="Com" valor={confirmation.professionalName} atraso={480} />
           <LinhaBilhete
             rotulo="Onde"
             valor={confirmation.branchName}
             complemento={confirmation.branchAddress ?? undefined}
+            atraso={540}
           />
-          <LinhaBilhete rotulo="Valor" valor={precoPartido(service.priceCents).join(" ")} />
+          <LinhaBilhete
+            rotulo="Valor"
+            valor={precoPartido(service.priceCents).join(" ")}
+            atraso={600}
+          />
         </dl>
 
         <div className="mt-6 grid gap-2 px-6 sm:px-8">
@@ -1670,13 +1734,19 @@ function LinhaBilhete({
   rotulo,
   valor,
   complemento,
+  atraso = 0,
 }: {
   rotulo: string;
   valor: string;
   complemento?: string;
+  /** Milissegundos até esta linha entrar, para o bilhete se escrever em ordem. */
+  atraso?: number;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-4">
+    <div
+      className="entrada-escalonada flex items-baseline justify-between gap-4"
+      style={{ "--atraso": `${atraso}ms` } as React.CSSProperties}
+    >
       <dt className="shrink-0 text-caption text-ink-secondary">{rotulo}</dt>
       <dd className="min-w-0 text-right">
         <span className="block text-label text-ink">{valor}</span>
@@ -1719,7 +1789,7 @@ function TimeGroup({
       {/* Quatro colunas no celular, seis na largura toda, três quando a lista
           vira coluna lateral de 252px. */}
       <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-3">
-        {slots.map((item) => {
+        {slots.map((item, i) => {
           const active = selected?.startsAt === item.startsAt;
           return (
             <button
@@ -1727,6 +1797,7 @@ function TimeGroup({
               type="button"
               onClick={() => onSelect(item)}
               aria-pressed={active}
+              style={{ "--atraso": `${Math.min(i * 22, 200)}ms` } as React.CSSProperties}
               className={cn(
                 // 52px de alvo: é um dedo, à noite, deitada, numa grade
                 // encostada em outra grade.
@@ -1736,9 +1807,14 @@ function TimeGroup({
                 // rola o mínimo, e o mínimo pararia o chip exatamente dentro
                 // dos 40px que se apagam. Foco visível que ninguém vê não é
                 // foco visível.
-                "h-[52px] scroll-mb-12 rounded-[10px] text-body tabular transition-colors duration-[120ms]",
+                // O horário escolhido não muda só de cor: ele SALTA um pouco à
+                // frente dos outros, com a sombra curta de quem está por cima.
+                // Numa grade de quarenta chips iguais, cor sozinha se perde —
+                // e é a única escolha que a cliente precisa reencontrar depois
+                // de rolar a lista inteira.
+                "entrada-escalonada h-[52px] scroll-mb-12 rounded-[10px] text-body tabular transition-[background-color,color,transform,box-shadow] duration-[160ms] ease-[var(--ease-out-quint)] active:scale-[0.96]",
                 active
-                  ? "bg-accent font-bold text-white"
+                  ? "scale-[1.04] bg-accent font-bold text-white shadow-[0_8px_18px_-8px_color-mix(in_oklab,var(--color-accent)_70%,transparent)]"
                   : "bg-cartao text-ink ring-1 ring-cartao-fio hover:bg-cartao-sunken",
               )}
             >
@@ -1754,19 +1830,76 @@ function TimeGroup({
 /**
  * Os passos que ESTA clínica realmente tem.
  *
- * A trilha antiga dizia "3" sempre, e mentia nas duas pontas: com um serviço
- * publicado são 2 passos, com mais de uma unidade são 4. Vive fora do
- * componente para poder ser provada sem navegador — contador de passo que mente
- * é o tipo de defeito que ninguém nota até a cliente perguntar quantas telas
- * ainda faltam.
+ * São três — escolher o que fazer, escolher quando, dizer quem é —, e a
+ * unidade não é um deles: com duas lojas da mesma casa, a pergunta "em qual?"
+ * é um detalhe do "quando", e virou uma pílula ao lado do calendário.
+ *
+ * Continuam sendo três de verdade, e não três por promessa: a clínica com um
+ * serviço publicado só tem dois, porque "o que você quer fazer?" com uma opção
+ * só é pergunta que já tem resposta. Vive fora do componente para poder ser
+ * provada sem navegador — contador de passo que mente é o tipo de defeito que
+ * ninguém nota até a cliente perguntar quantas telas ainda faltam.
  */
-export function passosDaClinica(quantosServicos: number, quantasUnidades: number): string[] {
-  return [
-    ...(quantosServicos > 1 ? ["Serviço"] : []),
-    ...(quantasUnidades > 1 ? ["Unidade"] : []),
-    "Dia e hora",
-    "Seus dados",
-  ];
+export function passosDaClinica(quantosServicos: number): string[] {
+  return [...(quantosServicos > 1 ? ["Serviço"] : []), "Dia e hora", "Seus dados"];
+}
+
+/**
+ * A TRILHA — um traço por passo, e o passo vencido pintado de esmalte.
+ *
+ * A linha "1 DE 4 · SERVIÇO" dizia a mesma coisa e não mostrava nada: para
+ * saber o quanto falta, a cliente tinha que fazer a conta. Aqui a distância é
+ * a própria imagem — e o traço não aparece preenchido, ele se preenche, da
+ * esquerda para a direita, no mesmo gesto de quem passa esmalte.
+ *
+ * O traço do passo aberto fica pela metade: cheio ele diria "terminado", vazio
+ * diria "nem começou", e nenhum dos dois é verdade enquanto a cliente está
+ * dentro dele.
+ */
+function Trilha({ passos, atual }: { passos: string[]; atual: number }) {
+  return (
+    <nav aria-label="Etapas do agendamento" className="mb-6 flex gap-2">
+      {passos.map((rotulo, i) => {
+        const vencido = i < atual;
+        const aqui = i === atual;
+        return (
+          <div key={rotulo} className="min-w-0 flex-1" aria-current={aqui ? "step" : undefined}>
+            <div className="h-[3px] overflow-hidden rounded-pill bg-cartao-linha">
+              {/*
+                `scaleX` com origem à esquerda, e não `width`: largura anima no
+                layout — reflui a página inteira a cada quadro — e o traço de
+                3px chega tremendo. A transformação roda na composição.
+              */}
+              <div
+                className="trilha-enche h-full origin-left rounded-pill bg-accent transition-transform duration-[460ms] ease-[var(--ease-out-quint)]"
+                style={{
+                  transform: `scaleX(${vencido ? 1 : aqui ? 0.42 : 0})`,
+                  "--atraso": `${180 + i * 90}ms`,
+                } as React.CSSProperties}
+              />
+            </div>
+            <p
+              className={cn(
+                "mt-2 flex min-w-0 items-center gap-1 text-meta transition-colors duration-200",
+                aqui
+                  ? "font-semibold text-ink"
+                  : vencido
+                    ? "text-ink-secondary"
+                    : "text-ink-tertiary",
+              )}
+            >
+              {/* O visto cai no lugar com o mesmo salto da postiça: é a única
+                  recompensa da trilha, e ela precisa ser vista acontecer. */}
+              {vencido ? (
+                <Check aria-hidden className="animate-postica-in size-3 shrink-0 text-accent" />
+              ) : null}
+              <span className="truncate">{rotulo}</span>
+            </p>
+          </div>
+        );
+      })}
+    </nav>
+  );
 }
 
 /**
