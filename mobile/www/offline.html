@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sem conexão — Agenda de Unha</title>
+    <style>
+      /*
+        Esta é a ÚNICA tela que mora dentro do telefone. Todo o resto vem do
+        servidor, então ela é o que a dona do salão vê quando o sinal cai no
+        meio do atendimento — e por isso não pode ser uma tela de erro de
+        navegador. Usa a paleta do produto e diz o que fazer.
+
+        Sem fonte da marca: baixar tipografia é justamente o que não funciona
+        aqui. A pilha do sistema é a escolha honesta.
+      */
+      :root {
+        --canvas: #f8f6fb;
+        --ink: #2d203b;
+        --ink-2: #675a73;
+        --accent: #7437b7;
+        --line: #ece6f1;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: grid;
+        place-items: center;
+        padding: 24px calc(24px + env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom));
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main { max-width: 320px; text-align: center; }
+      .marca {
+        width: 64px; height: 64px; margin: 0 auto 20px;
+        border-radius: 16px; background: var(--accent);
+        display: grid; place-items: center;
+      }
+      .marca svg { width: 34px; height: 34px; }
+      h1 { margin: 0 0 8px; font-size: 20px; line-height: 1.25; font-weight: 650; }
+      p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+      button {
+        margin-top: 24px; width: 100%; min-height: 52px; padding: 0 20px;
+        border: 0; border-radius: 14px; background: var(--accent); color: #fff;
+        font: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
+      }
+      button:active { opacity: 0.85; }
+      button:disabled { opacity: 0.6; }
+      .aviso { margin-top: 14px; font-size: 13px; color: var(--ink-2); min-height: 18px; }
+      @media (prefers-color-scheme: dark) {
+        :root { --canvas: #17121d; --ink: #f3eef8; --ink-2: #b3a7bf; --line: #2e2637; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="marca" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">
+          <path d="M5 3v4M13 3v4" />
+          <path d="M4 8h12a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8z" />
+          <path d="M8 12h.01M11 12h.01M8 15h.01M11 15h.01" />
+        </svg>
+      </div>
+      <h1>Sem conexão</h1>
+      <p>
+        O Agenda de Unha precisa de internet para mostrar a sua agenda de hoje.
+        Confira o wi-fi ou os dados do celular.
+      </p>
+      <button type="button" id="tentar">Tentar de novo</button>
+      <p class="aviso" id="aviso" role="status" aria-live="polite"></p>
+    </main>
+    <script>
+      /*
+        Recarregar é a única ação possível aqui, e ela não pergunta nada ao
+        navegador antes.
+
+        A primeira versão consultava `navigator.onLine` e escutava o evento
+        "online". Medido no emulador com Android 15: o evento NUNCA dispara
+        dentro de uma WebView — o Android só o emite quando o aplicativo chama
+        `setNetworkAvailable()`, coisa que o Capacitor não faz. Ficava um
+        listener que nunca rodava e uma condição que às vezes mentia. Agora o
+        botão simplesmente navega: se a rede voltou, entra; se não voltou, o
+        Capacitor devolve esta mesma página, e é ela que conta o que houve.
+      */
+      const CHAVE = "tentou-reconectar";
+      const botao = document.getElementById("tentar");
+      const aviso = document.getElementById("aviso");
+
+      if (sessionStorage.getItem(CHAVE)) {
+        // Voltamos para cá depois de uma tentativa: ela falhou.
+        aviso.textContent = "Ainda sem internet.";
+        sessionStorage.removeItem(CHAVE);
+      }
+
+      botao.addEventListener("click", () => {
+        botao.disabled = true;
+        aviso.textContent = "Procurando conexão…";
+        try {
+          sessionStorage.setItem(CHAVE, "1");
+        } catch (e) {
+          // Armazenamento bloqueado: perde-se só o aviso, não a tentativa.
+        }
+        location.replace("https://agendadeunha.com.br/hoje");
+      });
+    </script>
+  </body>
+</html>

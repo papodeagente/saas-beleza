@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A tela de abertura do Android 12 em diante.
+
+  A partir do Android 12 o sistema desenha a splash sozinho e ignora o
+  `@drawable/splash` que vale nas versões antigas. Sem estes três valores ele
+  usa o padrão: fundo claro do tema com o ícone do aplicativo num círculo — que
+  foi o que apareceu no teste, um clarão branco antes de uma tela ameixa.
+-->
+<resources>
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+    </style>
+</resources>

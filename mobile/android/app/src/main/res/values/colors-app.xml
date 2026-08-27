@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- O topo do degradê do ícone, e o `theme_color` que o site já declara. -->
+    <color name="splashBackground">#8643CC</color>
+    <color name="splashBackgroundDark">#3C1C5C</color>
+</resources>

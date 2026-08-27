@@ -1,0 +1,95 @@
+# Compila o aplicativo sem depender da máquina de ninguém.
+#
+# Existe por um motivo concreto: montar o ambiente Android à mão custou o
+# download de um JDK, do SDK e de três pacotes de ferramentas, e o Mac onde isso
+# foi feito não é o único lugar onde o aplicativo vai precisar ser gerado. Aqui
+# o APK sai como artefato do próprio GitHub — baixar, mandar para o telefone,
+# instalar.
+#
+# Disparo manual em Actions > Aplicativo iOS e Android > Run workflow.
+name: Aplicativo iOS e Android
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/app-mobile.yml"
+
+jobs:
+  android:
+    name: APK do Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar dependências
+        working-directory: mobile
+        run: npm ci
+
+      # `sync` reescreve a configuração nativa a partir do capacitor.config.ts.
+      # Sem ele, uma mudança de endereço do servidor ou de splash não chega ao
+      # APK e o build passa mostrando a versão velha.
+      - name: Sincronizar a configuração com o projeto nativo
+        working-directory: mobile
+        run: npx cap sync android
+
+      - name: Montar o APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agenda-de-unha-android
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  ios:
+    name: Compilação do iOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Instalar dependências
+        working-directory: mobile
+        run: npm ci
+
+      - name: Sincronizar a configuração com o projeto nativo
+        working-directory: mobile
+        run: npx cap sync ios
+
+      # Compila SEM assinar. Um .ipa instalável exige o certificado de
+      # distribuição da conta Apple, que não vive num repositório — nem deve.
+      # O que este passo garante é o que dá para garantir sem ela: que o projeto
+      # compila, que os pacotes resolvem e que nada quebrou no Xcode.
+      - name: Compilar sem assinatura
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build

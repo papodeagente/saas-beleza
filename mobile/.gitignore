@@ -1,0 +1,25 @@
+node_modules/
+
+# Saída de build. O APK que interessa é o artefato do GitHub Actions ou o que
+# foi entregue à mão; nenhum binário mora no repositório.
+android/build/
+android/app/build/
+android/.gradle/
+android/captures/
+android/app/release/
+ios/App/build/
+ios/App/App/public/
+ios/App/DerivedData/
+*.apk
+*.aab
+*.ipa
+
+# Aponta para o SDK do Android da máquina de quem compilou. Caminho de máquina
+# não é configuração de projeto.
+android/local.properties
+
+# Chave de assinatura e senha. Se isto entrar no repositório, qualquer pessoa
+# publica atualização em nome do aplicativo.
+*.keystore
+*.jks
+keystore.properties
