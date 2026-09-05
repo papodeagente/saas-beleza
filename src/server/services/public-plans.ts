@@ -102,27 +102,50 @@ export async function getPublicPlanBySlug(slug: string): Promise<PublicPlan | nu
  * O que o botão de um plano deve fazer, decidido PELO PLANO e não pelo provedor
  * de pagamento.
  *
- * É o que desacopla a página do meio de cobrança: a Hotmart pode ficar dormente
- * o tempo que for, e o site continua vendendo teste grátis em vez de exibir um
- * botão morto.
+ * É o que desacopla a página do meio de cobrança: a Hotmart/Hubla pode ficar
+ * dormente o tempo que for, e o site continua vendendo teste grátis em vez de
+ * exibir um botão morto.
+ *
+ * Duas prioridades diferentes, escolhidas por `preferTrial`, porque a mesma
+ * pergunta ("o plano tem link de checkout?") vale respostas opostas em dois
+ * lugares:
+ *
+ * - Captação (site público, `preferTrial: true`) — o teste grátis vem
+ *   primeiro sempre que existir, mesmo com checkout colado: o site promete
+ *   "14 dias sem cartão" no topo e no FAQ, e cobrar na hora de quem clicou
+ *   "assinar" quebraria essa promessa. O checkout só aparece aqui quando não
+ *   há teste (`trialDays === 0`) — plano pago desde o primeiro dia.
+ * - Reativação (`(billing)/conta/assinatura`, padrão / `preferTrial: false`)
+ *   — quem chega ali já USOU o teste; oferecer outro teria virasse desconto
+ *   escondido para os primeiros a esbarrar aí. O checkout vem primeiro
+ *   porque é o único caminho que faz sentido.
  */
 export type PlanCta =
   | { kind: "checkout"; href: string; label: string }
   | { kind: "trial"; href: string; label: string }
   | { kind: "contact"; href: string; label: string };
 
-export function planCta(plan: PublicPlan, cycle: "monthly" | "quarterly" | "yearly"): PlanCta {
+export function planCta(
+  plan: PublicPlan,
+  cycle: "monthly" | "quarterly" | "yearly",
+  opts?: { preferTrial?: boolean },
+): PlanCta {
   const checkout =
     cycle === "yearly" ? plan.checkout.yearly : cycle === "quarterly" ? plan.checkout.quarterly : plan.checkout.monthly;
-  if (checkout) {
-    return { kind: "checkout", href: checkout, label: plan.ctaLabel ?? "Assinar agora" };
-  }
-  if (plan.trialDays > 0) {
-    return {
-      kind: "trial",
-      href: `/criar-conta?plano=${encodeURIComponent(plan.slug)}&ciclo=${cycle}`,
-      label: plan.ctaLabel ?? `Começar o teste de ${plan.trialDays} dias`,
-    };
-  }
-  return { kind: "contact", href: "/entrar", label: plan.ctaLabel ?? "Falar com a gente" };
+
+  const trial = (): PlanCta | null =>
+    plan.trialDays > 0
+      ? {
+          kind: "trial",
+          href: `/criar-conta?plano=${encodeURIComponent(plan.slug)}&ciclo=${cycle}`,
+          label: plan.ctaLabel ?? `Começar o teste de ${plan.trialDays} dias`,
+        }
+      : null;
+  const checkoutCta = (): PlanCta | null =>
+    checkout ? { kind: "checkout", href: checkout, label: plan.ctaLabel ?? "Assinar agora" } : null;
+
+  const primeiro = opts?.preferTrial ? trial() : checkoutCta();
+  const segundo = opts?.preferTrial ? checkoutCta() : trial();
+
+  return primeiro ?? segundo ?? { kind: "contact", href: "/entrar", label: plan.ctaLabel ?? "Falar com a gente" };
 }

@@ -354,11 +354,13 @@ function Checkout({
   return (
     <p className="flex items-baseline gap-1.5 text-caption">
       <span className="shrink-0 text-ink-secondary">{ciclo}:</span>
-      <span className={colado ? "text-positive" : "text-ink-tertiary"}>
-        {colado
-          ? "Link colado"
-          : trialDays > 0
-            ? "Sem checkout — o botão do site leva ao teste grátis"
+      <span className={colado || trialDays > 0 ? "text-positive" : "text-ink-tertiary"}>
+        {trialDays > 0
+          ? colado
+            ? "Teste grátis no site — o link fica guardado para quando o teste acabar"
+            : "Sem checkout — o botão do site leva ao teste grátis"
+          : colado
+            ? "Link colado — o botão do site leva direto ao pagamento"
             : "Sem checkout e sem teste — o botão do site só leva ao contato"}
       </span>
     </p>

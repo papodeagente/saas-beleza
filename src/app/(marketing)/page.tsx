@@ -189,10 +189,12 @@ export default async function LandingPage() {
   const principal = planos[0];
 
   // O botão do topo e o do fim seguem a mesma precedência do cartão de preço:
-  // checkout quando existe link, teste grátis quando não existe. É isso que
-  // impede a página de exibir um botão morto enquanto a cobrança não está no ar.
+  // teste grátis primeiro (é o que o topo e o FAQ prometem — "14 dias, sem
+  // cartão"), checkout só quando o plano não tem teste. `preferTrial` é o que
+  // separa esta página de `(billing)/conta/assinatura`, onde a mesma função
+  // decide o oposto — ver o comentário de `planCta`.
   const ctaTopo = principal
-    ? planCta(principal, "monthly")
+    ? planCta(principal, "monthly", { preferTrial: true })
     : { kind: "trial" as const, href: "/entrar", label: "Entrar" };
 
   return (
@@ -497,9 +499,9 @@ export default async function LandingPage() {
                 plans={planos.map((plan) => ({
                   plan,
                   cta: {
-                    monthly: planCta(plan, "monthly"),
-                    quarterly: planCta(plan, "quarterly"),
-                    yearly: planCta(plan, "yearly"),
+                    monthly: planCta(plan, "monthly", { preferTrial: true }),
+                    quarterly: planCta(plan, "quarterly", { preferTrial: true }),
+                    yearly: planCta(plan, "yearly", { preferTrial: true }),
                   },
                 }))}
               />

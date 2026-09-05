@@ -53,6 +53,25 @@ const BILLED_LABEL: Record<CycleKey, (plan: PublicPlan) => string> = {
   yearly: (plan) => `R$97 na adesão, depois ${formatBRL(plan.yearlyPriceCents)} uma vez por ano.`,
 };
 
+/**
+ * A legenda embaixo do preço — muda com o que o botão faz, não só com o
+ * ciclo. `BILLED_LABEL` fala de cobrança na adesão porque nasceu para o
+ * checkout direto da Hubla; contar essa mesma história embaixo de um botão
+ * de teste grátis prometeria cobrança de quem ainda não vai pagar nada. A
+ * promoção das 30 primeiras clientes também é coisa do checkout — quem
+ * assina depois de um teste não passou pelo link da Hubla, então entra pelo
+ * preço de tabela.
+ */
+function legendaPreco(cycleKey: CycleKey, plan: PublicPlan, cta: PlanCta, precoCents: number, periodo: string): string {
+  if (cta.kind === "trial") {
+    return `Grátis por ${plan.trialDays} dias, sem cartão. Depois, ${formatBRL(precoCents)} ${periodo}.`;
+  }
+  if (cta.kind === "checkout") {
+    return BILLED_LABEL[cycleKey](plan);
+  }
+  return "A gente combina o valor com você antes de qualquer cobrança.";
+}
+
 type Props = {
   plans: Array<{ plan: PublicPlan; cta: { monthly: PlanCta; quarterly: PlanCta; yearly: PlanCta } }>;
 };
@@ -140,7 +159,9 @@ function CycleColumns({
               <span className="text-body text-night-ink-secondary">{PERIOD_LABEL[cycleKey]}</span>
             </p>
 
-            <p className="mt-1.5 text-caption text-night-ink-tertiary">{BILLED_LABEL[cycleKey](plan)}</p>
+            <p className="mt-1.5 text-caption text-night-ink-tertiary">
+              {legendaPreco(cycleKey, plan, ctas[cycleKey], prices[cycleKey], PERIOD_LABEL[cycleKey])}
+            </p>
 
             {deal && deal.savedCents > 0 ? (
               <p className="mt-2">
@@ -289,7 +310,9 @@ function TierToggle({ plans }: Props) {
                 <span className="text-body text-night-ink-secondary">por mês</span>
               </p>
 
-              <p className="mt-1.5 text-caption text-night-ink-tertiary">{BILLED_LABEL[ciclo](plan)}</p>
+              <p className="mt-1.5 text-caption text-night-ink-tertiary">
+                {legendaPreco(ciclo, plan, acao, valorPrincipal, "por mês")}
+              </p>
 
               {plan.benefits.length > 0 ? (
                 <ul className="mt-6 space-y-2.5 border-t border-night-line pt-6">
