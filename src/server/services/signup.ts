@@ -168,7 +168,7 @@ export type SignupInput = {
   phone: string;
   password: string;
   planSlug: string;
-  cycle: "monthly" | "yearly";
+  cycle: "monthly" | "quarterly" | "yearly";
   /** Fuso sugerido pelo navegador. Fora da lista, cai no de Brasília. */
   timezone: string;
   ip: string;

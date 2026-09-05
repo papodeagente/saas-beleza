@@ -19,6 +19,7 @@ export type PlanRecord = {
   slug: string;
   description: string | null;
   monthlyPriceCents: number;
+  quarterlyPriceCents: number;
   yearlyPriceCents: number;
   trialDays: number;
   maxBranches: number | null;
@@ -31,6 +32,7 @@ export type PlanRecord = {
   benefits: string[];
   ctaLabel: string | null;
   checkoutUrlMonthly: string | null;
+  checkoutUrlQuarterly: string | null;
   checkoutUrlYearly: string | null;
   highlight: boolean;
   highlightLabel: string | null;
@@ -41,6 +43,7 @@ type FormValues = {
   slug: string;
   description: string;
   monthlyPrice: string;
+  quarterlyPrice: string;
   yearlyPrice: string;
   trialDays: string;
   maxBranches: string;
@@ -52,6 +55,7 @@ type FormValues = {
   benefits: string[];
   ctaLabel: string;
   checkoutUrlMonthly: string;
+  checkoutUrlQuarterly: string;
   checkoutUrlYearly: string;
   highlight: boolean;
   highlightLabel: string;
@@ -65,6 +69,7 @@ const EMPTY: FormValues = {
   slug: "",
   description: "",
   monthlyPrice: "",
+  quarterlyPrice: "",
   yearlyPrice: "",
   trialDays: "14",
   maxBranches: "",
@@ -76,6 +81,7 @@ const EMPTY: FormValues = {
   benefits: [],
   ctaLabel: "",
   checkoutUrlMonthly: "",
+  checkoutUrlQuarterly: "",
   checkoutUrlYearly: "",
   highlight: false,
   highlightLabel: "",
@@ -87,6 +93,7 @@ function toForm(plan: PlanRecord): FormValues {
     slug: plan.slug,
     description: plan.description ?? "",
     monthlyPrice: reais(plan.monthlyPriceCents),
+    quarterlyPrice: reais(plan.quarterlyPriceCents),
     yearlyPrice: reais(plan.yearlyPriceCents),
     trialDays: String(plan.trialDays),
     maxBranches: plan.maxBranches === null ? "" : String(plan.maxBranches),
@@ -98,6 +105,7 @@ function toForm(plan: PlanRecord): FormValues {
     benefits: plan.benefits,
     ctaLabel: plan.ctaLabel ?? "",
     checkoutUrlMonthly: plan.checkoutUrlMonthly ?? "",
+    checkoutUrlQuarterly: plan.checkoutUrlQuarterly ?? "",
     checkoutUrlYearly: plan.checkoutUrlYearly ?? "",
     highlight: plan.highlight,
     highlightLabel: plan.highlightLabel ?? "",
@@ -235,7 +243,7 @@ export function PlanForm({ plan, onClose }: { plan?: PlanRecord; onClose: () => 
             />
           </Field>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Preço mensal" htmlFor="p-mensal" error={fieldError("monthlyPrice")} hint="Em reais.">
               <Input
                 id="p-mensal"
@@ -246,6 +254,24 @@ export function PlanForm({ plan, onClose }: { plan?: PlanRecord; onClose: () => 
                 className="tabular"
                 aria-invalid={fieldError("monthlyPrice") ? true : undefined}
                 aria-describedby="p-mensal-desc"
+              />
+            </Field>
+
+            <Field
+              label="Preço trimestral"
+              htmlFor="p-trimestral"
+              error={fieldError("quarterlyPrice")}
+              hint="Os três meses, não o mês equivalente."
+            >
+              <Input
+                id="p-trimestral"
+                inputMode="decimal"
+                value={values.quarterlyPrice}
+                onChange={(e) => set("quarterlyPrice", e.target.value)}
+                placeholder="807,00"
+                className="tabular"
+                aria-invalid={fieldError("quarterlyPrice") ? true : undefined}
+                aria-describedby="p-trimestral-desc"
               />
             </Field>
 
@@ -402,7 +428,7 @@ export function PlanForm({ plan, onClose }: { plan?: PlanRecord; onClose: () => 
                 />
               </Field>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <Field
                   label="Checkout mensal"
                   htmlFor="p-checkout-mensal"
@@ -419,6 +445,25 @@ export function PlanForm({ plan, onClose }: { plan?: PlanRecord; onClose: () => 
                     placeholder="https://pay.hotmart.com/..."
                     aria-invalid={fieldError("checkoutUrlMonthly") ? true : undefined}
                     aria-describedby="p-checkout-mensal-desc"
+                  />
+                </Field>
+
+                <Field
+                  label="Checkout trimestral"
+                  htmlFor="p-checkout-trimestral"
+                  optional
+                  error={fieldError("checkoutUrlQuarterly")}
+                  hint="A oferta trimestral tem link próprio no provedor."
+                >
+                  <Input
+                    id="p-checkout-trimestral"
+                    type="url"
+                    inputMode="url"
+                    value={values.checkoutUrlQuarterly}
+                    onChange={(e) => set("checkoutUrlQuarterly", e.target.value)}
+                    placeholder="https://pay.hotmart.com/..."
+                    aria-invalid={fieldError("checkoutUrlQuarterly") ? true : undefined}
+                    aria-describedby="p-checkout-trimestral-desc"
                   />
                 </Field>
 

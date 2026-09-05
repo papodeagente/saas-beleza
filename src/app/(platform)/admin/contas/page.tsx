@@ -41,7 +41,7 @@ const STATUS: Record<string, { label: string; tone: "positive" | "attention" | "
     canceled: { label: "Cancelada", tone: "neutral" },
   };
 
-const CYCLE: Record<string, string> = { monthly: "Mensal", yearly: "Anual" };
+const CYCLE: Record<string, string> = { monthly: "Mensal", quarterly: "Trimestral", yearly: "Anual" };
 
 /**
  * `max(starts_at)` sai do agregado como string: o driver devolve o timestamp

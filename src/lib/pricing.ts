@@ -10,9 +10,9 @@
  */
 
 export type AnnualDeal = {
-  /** Quanto sai o mês quando se paga o ano inteiro. */
+  /** Quanto sai o mês quando se paga o ciclo inteiro. */
   equivalentMonthlyCents: number;
-  /** Diferença entre doze mensalidades e o preço do ano. */
+  /** Diferença entre as mensalidades avulsas e o preço do ciclo. */
   savedCents: number;
   /** Fração economizada (0.167 = 16,7%). */
   ratio: number;
@@ -20,19 +20,34 @@ export type AnnualDeal = {
   months: number;
 };
 
-export function annualDeal(monthlyCents: number, yearlyCents: number): AnnualDeal {
-  const equivalentMonthlyCents = Math.round(yearlyCents / 12);
+/**
+ * A conta de qualquer ciclo maior que o mensal, generalizada por número de
+ * meses — 3 para o trimestre, 12 para o ano. `annualDeal` e `quarterlyDeal`
+ * são as duas instâncias concretas que o produto usa; a conta em si mora aqui
+ * uma vez só, pela mesma razão do comentário acima: painel e site não podem
+ * arredondar o desconto cada um do seu jeito.
+ */
+export function cycleDeal(monthlyCents: number, cycleCents: number, months: number): AnnualDeal {
+  const equivalentMonthlyCents = Math.round(cycleCents / months);
   if (monthlyCents <= 0) {
     return { equivalentMonthlyCents, savedCents: 0, ratio: 0, months: 0 };
   }
-  const fullCents = monthlyCents * 12;
-  const savedCents = fullCents - yearlyCents;
+  const fullCents = monthlyCents * months;
+  const savedCents = fullCents - cycleCents;
   return {
     equivalentMonthlyCents,
     savedCents,
     ratio: savedCents / fullCents,
     months: savedCents / monthlyCents,
   };
+}
+
+export function annualDeal(monthlyCents: number, yearlyCents: number): AnnualDeal {
+  return cycleDeal(monthlyCents, yearlyCents, 12);
+}
+
+export function quarterlyDeal(monthlyCents: number, quarterlyCents: number): AnnualDeal {
+  return cycleDeal(monthlyCents, quarterlyCents, 3);
 }
 
 export function formatPercent(ratio: number): string {

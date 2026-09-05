@@ -18,9 +18,22 @@ type Plano = {
   name: string;
   description: string | null;
   monthlyPriceCents: number;
+  quarterlyPriceCents: number;
   yearlyPriceCents: number;
   trialDays: number;
 };
+
+const CYCLE_LABEL: Record<"monthly" | "quarterly" | "yearly", string> = {
+  monthly: "por mês",
+  quarterly: "por trimestre",
+  yearly: "por ano",
+};
+
+function priceFor(plano: Plano, cycle: "monthly" | "quarterly" | "yearly"): number {
+  if (cycle === "yearly") return plano.yearlyPriceCents;
+  if (cycle === "quarterly") return plano.quarterlyPriceCents;
+  return plano.monthlyPriceCents;
+}
 
 const FUSOS = [
   "America/Sao_Paulo",
@@ -45,15 +58,11 @@ export function NewAccountForm({ planos }: { planos: Plano[] }) {
   const [ownerEmail, setOwnerEmail] = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
   const [planId, setPlanId] = useState(planos[0]?.id ?? 0);
-  const [cycle, setCycle] = useState<"monthly" | "yearly">("monthly");
+  const [cycle, setCycle] = useState<"monthly" | "quarterly" | "yearly">("monthly");
   const [start, setStart] = useState<"trial" | "active">("trial");
 
   const plano = planos.find((p) => p.id === planId) ?? planos[0];
-  const preco = plano
-    ? cycle === "yearly"
-      ? plano.yearlyPriceCents
-      : plano.monthlyPriceCents
-    : 0;
+  const preco = plano ? priceFor(plano, cycle) : 0;
 
   function salvar() {
     setErros({});
@@ -188,8 +197,7 @@ export function NewAccountForm({ planos }: { planos: Plano[] }) {
               >
                 <span className="block text-label text-ink">{p.name}</span>
                 <span className="mt-0.5 block tabular text-caption text-ink-secondary">
-                  {formatBRL(cycle === "yearly" ? p.yearlyPriceCents : p.monthlyPriceCents)}
-                  {cycle === "yearly" ? " por ano" : " por mês"}
+                  {formatBRL(priceFor(p, cycle))} {CYCLE_LABEL[cycle]}
                 </span>
                 {p.description ? (
                   <span className="mt-1 block text-meta leading-4 text-ink-tertiary">
@@ -206,9 +214,10 @@ export function NewAccountForm({ planos }: { planos: Plano[] }) {
             <Select
               id="cycle"
               value={cycle}
-              onChange={(e) => setCycle(e.target.value as "monthly" | "yearly")}
+              onChange={(e) => setCycle(e.target.value as "monthly" | "quarterly" | "yearly")}
             >
               <option value="monthly">Mensal</option>
+              <option value="quarterly">Trimestral</option>
               <option value="yearly">Anual</option>
             </Select>
           </Field>
@@ -239,7 +248,7 @@ export function NewAccountForm({ planos }: { planos: Plano[] }) {
             <span className="tabular text-entity text-ink">
               {formatBRL(preco)}
               <span className="ml-1 text-caption font-normal text-ink-secondary">
-                {cycle === "yearly" ? "por ano" : "por mês"}
+                {CYCLE_LABEL[cycle]}
               </span>
             </span>
           </div>

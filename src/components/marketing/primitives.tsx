@@ -125,15 +125,15 @@ export function CtaButton({
   className?: string;
 }) {
   const base =
-    "inline-flex h-12 items-center justify-center gap-2 rounded-control px-6 text-[15px] font-semibold tracking-[-0.011em] transition-colors duration-150";
+    "inline-flex h-12 items-center justify-center gap-2 rounded-control px-6 text-[15px] font-semibold tracking-[-0.011em] transition-[background-color,border-color,color,transform,box-shadow] duration-150 ease-out-quint hover:-translate-y-px active:translate-y-0 active:scale-[0.98]";
   const estilo =
     variant === "primary"
       ? // O fundo do botão contra a noite mede 2,66:1 — abaixo dos 3:1 que um
         // controle precisa ter de contorno, então sozinho ele desapareceria na
         // seção escura. Quem faz o recorte é o anel em accent-lift, que mede
         // 9,35:1 contra o mesmo fundo. O texto branco sobre o botão dá 7,06:1.
-        "bg-accent text-white shadow-[0_0_0_1px_var(--color-accent-lift)] hover:bg-accent-hover"
-      : "border border-night-line-strong text-night-ink hover:bg-white/6";
+        "bg-accent text-white shadow-[0_0_0_1px_var(--color-accent-lift)] hover:bg-accent-hover hover:shadow-[0_0_0_1px_var(--color-accent-lift),0_8px_20px_-8px_var(--color-accent-lift)]"
+      : "border border-night-line-strong text-night-ink hover:border-night-ink-tertiary hover:bg-white/6";
 
   if (external) {
     return (

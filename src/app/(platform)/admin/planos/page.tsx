@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { db } from "@/db";
 import { subscriptionEvents, subscriptions } from "@/db/schema";
 import { formatBRL } from "@/lib/money";
-import { annualDeal, formatMonths, formatPercent } from "@/lib/pricing";
+import { annualDeal, formatMonths, formatPercent, quarterlyDeal } from "@/lib/pricing";
 import { cn } from "@/lib/utils";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import { listPlans } from "@/server/services/platform-accounts";
@@ -25,10 +25,11 @@ export const dynamic = "force-dynamic";
  * plano achando que reajustou a base.
  */
 
-/** Mesma normalização de MRR do resto do painel: anual conta como 1/12 por mês. */
+/** Mesma normalização de MRR do resto do painel: trimestral conta 1/3, anual 1/12 por mês. */
 const MRR_CASE = sql<number>`
-  case when ${subscriptions.cycle} = 'yearly'
-    then round(${subscriptions.priceCents}::numeric / 12)::int
+  case
+    when ${subscriptions.cycle} = 'yearly' then round(${subscriptions.priceCents}::numeric / 12)::int
+    when ${subscriptions.cycle} = 'quarterly' then round(${subscriptions.priceCents}::numeric / 3)::int
     else ${subscriptions.priceCents}
   end
 `;
@@ -120,12 +121,14 @@ export default async function PlanosPage() {
             {planRows.map((plan) => {
               const usage = usageByPlan.get(plan.id) ?? EMPTY_USAGE;
               const deal = annualDeal(plan.monthlyPriceCents, plan.yearlyPriceCents);
+              const dealTri = quarterlyDeal(plan.monthlyPriceCents, plan.quarterlyPriceCents);
               const record: PlanRecord = {
                 id: plan.id,
                 name: plan.name,
                 slug: plan.slug,
                 description: plan.description,
                 monthlyPriceCents: plan.monthlyPriceCents,
+                quarterlyPriceCents: plan.quarterlyPriceCents,
                 yearlyPriceCents: plan.yearlyPriceCents,
                 trialDays: plan.trialDays,
                 maxBranches: plan.maxBranches,
@@ -138,6 +141,7 @@ export default async function PlanosPage() {
                 benefits: Array.isArray(plan.features) ? plan.features : [],
                 ctaLabel: plan.ctaLabel,
                 checkoutUrlMonthly: plan.checkoutUrlMonthly,
+                checkoutUrlQuarterly: plan.checkoutUrlQuarterly,
                 checkoutUrlYearly: plan.checkoutUrlYearly,
                 highlight: plan.highlight,
                 highlightLabel: plan.highlightLabel,
@@ -171,13 +175,38 @@ export default async function PlanosPage() {
                       />
                     </div>
 
-                    <div className="mt-4 grid gap-x-6 gap-y-4 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="mt-4 grid gap-x-6 gap-y-4 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-6">
                       <div>
                         <p className="text-section">Mensal</p>
                         <p className="mt-1 tabular text-entity text-ink">
                           {formatBRL(plan.monthlyPriceCents)}
                         </p>
                         <p className="mt-0.5 text-meta text-ink-secondary">por mês</p>
+                      </div>
+
+                      <div>
+                        <p className="text-section">Trimestral</p>
+                        <p className="mt-1 tabular text-entity text-ink">
+                          {formatBRL(plan.quarterlyPriceCents)}
+                        </p>
+                        <p className="mt-0.5 text-meta text-ink-secondary">
+                          {formatBRL(dealTri.equivalentMonthlyCents)} por mês
+                          {dealTri.savedCents > 0 ? (
+                            <>
+                              {" · "}
+                              <span className="text-positive">
+                                {formatPercent(dealTri.ratio)} de desconto
+                              </span>
+                            </>
+                          ) : dealTri.savedCents < 0 ? (
+                            <>
+                              {" · "}
+                              <span className="text-attention">mais caro que o mensal</span>
+                            </>
+                          ) : (
+                            " · sem desconto"
+                          )}
+                        </p>
                       </div>
 
                       <div>
@@ -302,8 +331,9 @@ function Vitrine({ plan }: { plan: Awaited<ReturnType<typeof listPlans>>[number]
         </span>
       </p>
 
-      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-3">
         <Checkout ciclo="Mensal" url={plan.checkoutUrlMonthly} trialDays={plan.trialDays} />
+        <Checkout ciclo="Trimestral" url={plan.checkoutUrlQuarterly} trialDays={plan.trialDays} />
         <Checkout ciclo="Anual" url={plan.checkoutUrlYearly} trialDays={plan.trialDays} />
       </div>
     </div>

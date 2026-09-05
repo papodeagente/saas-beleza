@@ -21,6 +21,7 @@ import { normalizePhone } from "@/lib/phone";
 import { hashPassword, requireRole, requireSession } from "@/server/auth";
 import { BranchError, createBranch, updateBranch } from "@/server/services/branch-service";
 import { CepError, apenasDigitos, buscarCep } from "@/server/services/location-service";
+import { ProfessionalError, deleteProfessional, updateProfessional } from "@/server/services/professional-service";
 
 export type CadastroResult = { ok: true } | { ok: false; error: string; field?: string };
 
@@ -221,6 +222,72 @@ export async function createProfessionalAction(input: unknown): Promise<Cadastro
     return { ok: true };
   } catch (error) {
     return failure(error);
+  }
+}
+
+const professionalUpdateSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string().trim().min(2, "Informe o nome do profissional."),
+  specialty: z.string().trim().max(120).transform((v) => v || null),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida."),
+  commissionPct: z.number().min(0).max(100),
+  active: z.boolean(),
+  serviceIds: z.array(z.number().int().positive()),
+});
+
+function professionalFailure(error: unknown): CadastroResult {
+  if (error instanceof ProfessionalError) return { ok: false, error: error.message, field: error.field };
+  return failure(error);
+}
+
+export async function updateProfessionalAction(input: unknown): Promise<CadastroResult> {
+  const parsed = professionalUpdateSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed);
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const { id, ...campos } = parsed.data;
+    await updateProfessional(ctx, id, campos);
+    revalidatePath("/gestao");
+    revalidatePath("/catalogo");
+    revalidatePath("/agenda");
+    return { ok: true };
+  } catch (error) {
+    return professionalFailure(error);
+  }
+}
+
+export type DeleteProfessionalResult =
+  | { ok: true; deactivated: false }
+  | { ok: true; deactivated: true; reason: string }
+  | { ok: false; error: string };
+
+export async function deleteProfessionalAction(input: unknown): Promise<DeleteProfessionalResult> {
+  const parsed = z.object({ id: z.number().int().positive() }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Profissional inválido." };
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const [nome] = await db.select({ name: professionals.name }).from(professionals).where(and(
+      eq(professionals.id, parsed.data.id),
+      eq(professionals.organizationId, ctx.organizationId),
+    )).limit(1);
+    const { deactivated } = await deleteProfessional(ctx, parsed.data.id);
+    revalidatePath("/gestao");
+    revalidatePath("/catalogo");
+    revalidatePath("/agenda");
+    if (deactivated) {
+      return {
+        ok: true,
+        deactivated: true,
+        reason: `${nome?.name ?? "Profissional"} tem atendimentos ou comissões no histórico — foi desativado(a) em vez de excluído(a), para preservar esse histórico.`,
+      };
+    }
+    return { ok: true, deactivated: false };
+  } catch (error) {
+    if (error instanceof ProfessionalError) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "Não foi possível excluir. Tente novamente." };
   }
 }
 

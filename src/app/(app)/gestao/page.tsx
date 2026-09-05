@@ -24,6 +24,7 @@ import { requireRole, requireSession } from "@/server/auth";
 import { organizations } from "@/db/schema";
 import { CopyLink } from "./copy-link";
 import { ManagementForms } from "./management-forms";
+import { ProfessionalActions } from "./professional-actions";
 import { Vitrine } from "./vitrine";
 
 export const metadata = { title: "Gestão" };
@@ -85,6 +86,7 @@ export default async function ManagementPage() {
         active: professionals.active,
         serviceCount: sql<number>`count(distinct ${professionalServices.serviceId})`.mapWith(Number),
         weekdays: sql<number[]>`coalesce(array_agg(distinct ${professionalWorkingHours.weekday}) filter (where ${professionalWorkingHours.weekday} is not null), '{}')`,
+        serviceIds: sql<number[]>`coalesce(array_agg(distinct ${professionalServices.serviceId}) filter (where ${professionalServices.serviceId} is not null), '{}')`,
       })
       .from(professionals)
       .leftJoin(professionalServices, eq(professionalServices.professionalId, professionals.id))
@@ -247,6 +249,7 @@ export default async function ManagementPage() {
               <span className="flex-1 text-section">Dias</span>
               <span className="w-20 shrink-0 text-right text-section">Serviços</span>
               <span className="w-20 shrink-0 text-right text-section">Comissão</span>
+              <span className="w-[84px] shrink-0 text-right text-section">Ações</span>
             </div>
 
             <CardList>
@@ -294,6 +297,19 @@ export default async function ManagementPage() {
                       {days} · {serviceCount} · comissão de{" "}
                       {formatCommission(professional.commissionBps)}
                     </span>
+
+                    <ProfessionalActions
+                      professional={{
+                        id: professional.id,
+                        name: professional.name,
+                        specialty: professional.specialty,
+                        color: professional.color,
+                        commissionBps: professional.commissionBps,
+                        active: professional.active,
+                        serviceIds: professional.serviceIds,
+                      }}
+                      services={serviceOptions}
+                    />
                   </li>
                 );
               })}

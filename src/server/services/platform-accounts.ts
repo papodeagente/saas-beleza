@@ -12,6 +12,7 @@ import {
   users,
 } from "@/db/schema";
 import type { PlatformContext } from "@/server/platform-auth";
+import { normalizedMrrCents } from "./platform-metrics";
 
 /**
  * Gestão de contas — cross-tenant por definição. Nunca importar de tela de
@@ -20,8 +21,9 @@ import type { PlatformContext } from "@/server/platform-auth";
  */
 
 const MRR_CASE = sql<number>`
-  case when ${subscriptions.cycle} = 'yearly'
-    then round(${subscriptions.priceCents}::numeric / 12)::int
+  case
+    when ${subscriptions.cycle} = 'yearly' then round(${subscriptions.priceCents}::numeric / 12)::int
+    when ${subscriptions.cycle} = 'quarterly' then round(${subscriptions.priceCents}::numeric / 3)::int
     else ${subscriptions.priceCents}
   end
 `;
@@ -211,9 +213,7 @@ export async function getAccount(
 
   const mrrCents =
     sub && ["active", "past_due"].includes(sub.subscription.status)
-      ? sub.subscription.cycle === "yearly"
-        ? Math.round(sub.subscription.priceCents / 12)
-        : sub.subscription.priceCents
+      ? normalizedMrrCents(sub.subscription.cycle, sub.subscription.priceCents)
       : 0;
 
   return {

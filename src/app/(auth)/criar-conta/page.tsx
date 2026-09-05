@@ -11,7 +11,7 @@ import { SignupForm } from "./signup-form";
 export const metadata = { title: "Criar conta" };
 
 /**
- * Fim do funil da landing: `?plano=<slug>&ciclo=<mensal|anual>`.
+ * Fim do funil da landing: `?plano=<slug>&ciclo=<monthly|quarterly|yearly>`.
  *
  * O plano vem por SLUG e é relido do banco aqui — o cartão que a pessoa vê sai
  * do mesmo registro que a action vai cobrar, então preço na tela e preço na
@@ -30,7 +30,8 @@ export default async function CriarContaPage({
   if (await getSession()) redirect("/hoje");
 
   const params = await searchParams;
-  const ciclo = params.ciclo === "anual" ? ("anual" as const) : ("mensal" as const);
+  const ciclo =
+    params.ciclo === "yearly" ? ("yearly" as const) : params.ciclo === "quarterly" ? ("quarterly" as const) : ("monthly" as const);
 
   const escolhido = params.plano ? await getPublicPlanBySlug(params.plano) : null;
   const plano = escolhido ?? (await listPublicPlans())[0] ?? null;
@@ -58,8 +59,10 @@ export default async function CriarContaPage({
     );
   }
 
-  const anual = ciclo === "anual";
-  const preco = anual ? plano.yearlyPriceCents : plano.monthlyPriceCents;
+  const anual = ciclo === "yearly";
+  const trimestral = ciclo === "quarterly";
+  const preco = anual ? plano.yearlyPriceCents : trimestral ? plano.quarterlyPriceCents : plano.monthlyPriceCents;
+  const deal = anual ? plano.annual : trimestral ? plano.quarterly : null;
 
   return (
     <AuthShell>
@@ -74,13 +77,13 @@ export default async function CriarContaPage({
           <span className="tabular text-label text-ink">
             {formatBRL(preco)}
             <span className="ml-1 font-normal text-ink-secondary">
-              {anual ? "por ano" : "por mês"}
+              {anual ? "por ano" : trimestral ? "por trimestre" : "por mês"}
             </span>
           </span>
         </p>
         <p className="mt-1 text-caption text-ink-tertiary">
-          {anual
-            ? `Sai por ${formatBRL(plano.annual.equivalentMonthlyCents)} por mês — ${formatMonths(plano.annual.months)} de economia. A cobrança só começa depois dos ${plano.trialDays} dias.`
+          {deal
+            ? `Sai por ${formatBRL(deal.equivalentMonthlyCents)} por mês — ${formatMonths(deal.months)} de economia. A cobrança só começa depois dos ${plano.trialDays} dias.`
             : `A cobrança começa depois dos ${plano.trialDays} dias de teste. Cancele quando quiser.`}
         </p>
       </div>

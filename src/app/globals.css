@@ -715,9 +715,123 @@
   to { opacity: 1; transform: perspective(1800px) rotateY(-7deg) rotateX(4deg) scale(1); }
 }
 
+/**
+ * ATIVIDADE AMBIENTE DO HERO — os cartõezinhos flutuando ao redor do print.
+ *
+ * Um `@keyframes` só, reaproveitado por todos os cartões: cada um recebe seu
+ * próprio atraso e duração por variável (`--atraso-flutuar`/`--duracao-flutuar`),
+ * do mesmo jeito que `dia-entrada` já faz com `--atraso`. Assim o movimento de
+ * cada cartão parece independente sem precisar de uma classe por cartão.
+ *
+ * Só `transform` — nunca `top`/`left` — para o navegador animar isso na GPU
+ * sem recalcular layout a cada frame.
+ */
+@keyframes flutuar {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+
+@utility flutuar {
+  animation: flutuar var(--duracao-flutuar, 6s) ease-in-out infinite;
+  animation-delay: var(--atraso-flutuar, 0ms);
+}
+
+/**
+ * O brilho que percorre a borda do painel do hero.
+ *
+ * Um pseudo-elemento maior que o painel, com um gradiente cônico girando por
+ * `transform: rotate` (não por `background-position`, que forçaria repaint em
+ * vez de compositing). `mask` recorta o miolo, sobrando só o traço da borda —
+ * a mesma ideia do `picote`, aplicada a um anel em vez de um furo.
+ */
+@keyframes borda-brilho-girar {
+  to { transform: rotate(360deg); }
+}
+
+@utility borda-brilho {
+  position: relative;
+  isolation: isolate;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(
+      from 0deg,
+      transparent 0%,
+      var(--color-accent-lift) 8%,
+      transparent 18%
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: borda-brilho-girar 5.5s linear infinite;
+    pointer-events: none;
+  }
+}
+
+/**
+ * O pulso do indicador de status (IA ativa, confirmação).
+ *
+ * Dois elementos empilhados: o ponto fixo (opacidade constante, é o que carrega
+ * a cor de verdade) e o anel que cresce e desaparece por cima — igual ao
+ * indicador de "gravando" de qualquer app de chamada. Só `transform`/`opacity`.
+ */
+@keyframes pulso-anel {
+  from { transform: scale(1); opacity: 0.55; }
+  to { transform: scale(2.4); opacity: 0; }
+}
+
+@utility pulso-ponto {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: currentColor;
+    animation: pulso-anel 1.8s ease-out infinite;
+  }
+}
+
+/**
+ * Entrada de cada balão/cartão da jornada animada — uma vez só, ao montar,
+ * não em loop. `backwards` seria natural aqui, mas o elemento só existe a
+ * partir do momento em que a história chega nele (é montagem condicional, não
+ * uma classe presa desde o início), então o padrão comum já cai certo.
+ */
+@keyframes mensagem-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@utility mensagem-in {
+  animation: mensagem-in 320ms var(--ease-out-quint);
+}
+
+/** O horário da agenda ganhando a cliente — um leve assentar, não um pulo. */
+@keyframes preenche-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@utility preenche-in {
+  animation: preenche-in 360ms var(--ease-out-quint);
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Quem pede menos movimento também não precisa do print torto. */
   .mockup-tilt { transform: none; }
+
+  /* O brilho girando na borda do hero e o anel de pulso são só decoração —
+     param sozinhos pela regra global de duração, mas o `content` do
+     pseudo-elemento continuaria ocupando um frame parado. Melhor sumir. */
+  .borda-brilho::before,
+  .pulso-ponto::after {
+    display: none;
+  }
 
   /* A duração já vai a zero pela regra global, mas o estado inicial `backwards`
      ainda deixa a faixa piscar antes de assentar. */

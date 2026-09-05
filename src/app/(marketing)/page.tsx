@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AnimatedBookingJourney } from "@/components/marketing/booking-journey";
 import { Ciclo } from "@/components/marketing/ciclo";
 import { Faq, type Pergunta } from "@/components/marketing/faq";
 import { MarketingNav } from "@/components/marketing/nav";
@@ -13,6 +14,7 @@ import {
   SectionHead,
 } from "@/components/marketing/primitives";
 import { Reveal } from "@/components/marketing/reveal";
+import { HeroBookingActivity } from "@/components/marketing/hero-booking-activity";
 import { ProductShowcase } from "@/components/marketing/showcase";
 import { BrandLogo } from "@/components/brand";
 import { cn } from "@/lib/utils";
@@ -283,8 +285,12 @@ export default async function LandingPage() {
                 aparece: animar rotação de um elemento grande com desfoque atrás
                 é o pior caso de repaint justamente onde está a maior parte do
                 tráfego. */}
-            <div className="animate-fade-in mockup-tilt [animation-delay:200ms] lg:animate-mockup-in">
-              <BrowserFrame url="agendadeunha.com.br/hoje">
+            <div className="relative animate-fade-in mockup-tilt [animation-delay:200ms] lg:animate-mockup-in">
+              {/* A atividade ambiente entra por trás/na frente do painel via
+                  posicionamento absoluto — não empurra layout nenhum, e some
+                  cedo em telas pequenas (ver hero-booking-activity.tsx). */}
+              <HeroBookingActivity />
+              <BrowserFrame url="agendadeunha.com.br/hoje" className="borda-brilho">
           {/* eslint-disable-next-line @next/next/no-img-element -- os sete prints
               já saem daqui em WebP de 1600px (316KB somados). Passar por next/image
               exigiria o sharp em runtime, que não está declarado no package.json e
@@ -315,6 +321,10 @@ export default async function LandingPage() {
               description="A IA atende e agenda 24 horas. Os lembretes ajudam a cliente a comparecer. Depois do serviço, a automação chama de volta no intervalo ideal para a próxima manutenção."
             />
             <Ciclo />
+
+            {/* A mesma história das seis estações, agora vista acontecendo —
+                aditivo, não substitui o resumo acima. */}
+            <AnimatedBookingJourney />
           </div>
         </section>
 
@@ -346,8 +356,20 @@ export default async function LandingPage() {
             <ul className="mt-12 grid gap-x-8 gap-y-9 sm:grid-cols-2 lg:grid-cols-3">
               {RECURSOS.map((r, i) => (
                 <Reveal as="li" key={r.titulo} delay={(i % 3) * 80}>
-                  <h3 className="text-card text-night-ink">{r.titulo}</h3>
-                  <p className="mt-2 text-body leading-relaxed text-night-ink-secondary">{r.texto}</p>
+                  {/* O hover mora numa div própria, nunca na raiz do `Reveal`:
+                      aquela já tem sua própria transição de entrada por scroll
+                      (opacity+transform, 700ms), e sobrescrever `transition-*`
+                      aqui apagaria isso — `twMerge` mantém só a última. */}
+                  <div className="group -m-4 rounded-overlay border border-transparent p-4 transition-[border-color,background-color,transform] duration-200 ease-out-quint hover:-translate-y-0.5 hover:border-night-line hover:bg-white/[0.03]">
+                    <h3 className="flex items-center gap-2 text-card text-night-ink">
+                      <span
+                        aria-hidden
+                        className="size-1.5 shrink-0 rounded-pill bg-accent-lift/50 transition-[background-color,transform] duration-200 group-hover:scale-125 group-hover:bg-accent-lift"
+                      />
+                      {r.titulo}
+                    </h3>
+                    <p className="mt-2 text-body leading-relaxed text-night-ink-secondary">{r.texto}</p>
+                  </div>
                 </Reveal>
               ))}
             </ul>
@@ -474,7 +496,11 @@ export default async function LandingPage() {
               <Pricing
                 plans={planos.map((plan) => ({
                   plan,
-                  cta: { monthly: planCta(plan, "monthly"), yearly: planCta(plan, "yearly") },
+                  cta: {
+                    monthly: planCta(plan, "monthly"),
+                    quarterly: planCta(plan, "quarterly"),
+                    yearly: planCta(plan, "yearly"),
+                  },
                 }))}
               />
             </div>

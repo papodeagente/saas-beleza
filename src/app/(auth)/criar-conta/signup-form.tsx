@@ -39,7 +39,7 @@ export function SignupForm({
 }: {
   planSlug: string;
   /** Como veio na URL: é o que o formulário devolve para a action. */
-  cycle: "mensal" | "anual";
+  cycle: "monthly" | "quarterly" | "yearly";
   formIssuedAtMs: number;
   submitLabel: string;
 }) {

@@ -36,9 +36,22 @@ type PlanOption = {
   id: number;
   name: string;
   monthlyPriceCents: number;
+  quarterlyPriceCents: number;
   yearlyPriceCents: number;
   active: boolean;
 };
+
+function cycleLabel(cycle: string): string {
+  if (cycle === "yearly") return "anual";
+  if (cycle === "quarterly") return "trimestral";
+  return "mensal";
+}
+
+function priceForCycle(plan: PlanOption, cycle: string): number {
+  if (cycle === "yearly") return plan.yearlyPriceCents;
+  if (cycle === "quarterly") return plan.quarterlyPriceCents;
+  return plan.monthlyPriceCents;
+}
 
 type SubscriptionSummary = {
   status: string;
@@ -55,7 +68,9 @@ const PAYING = ["active", "past_due"];
 /** Mesma normalização do servidor — aqui só para mostrar o efeito antes do clique. */
 function monthlyMrr(status: string, cycle: string, priceCents: number): number {
   if (!PAYING.includes(status)) return 0;
-  return cycle === "yearly" ? Math.round(priceCents / 12) : priceCents;
+  if (cycle === "yearly") return Math.round(priceCents / 12);
+  if (cycle === "quarterly") return Math.round(priceCents / 3);
+  return priceCents;
 }
 
 export function AccountActions({
@@ -120,11 +135,7 @@ export function AccountActions({
 
   const status = subscription?.status ?? null;
   const selectedPlan = plans.find((p) => String(p.id) === planId);
-  const nextPriceCents = selectedPlan
-    ? cycle === "yearly"
-      ? selectedPlan.yearlyPriceCents
-      : selectedPlan.monthlyPriceCents
-    : 0;
+  const nextPriceCents = selectedPlan ? priceForCycle(selectedPlan, cycle) : 0;
   const mrrBefore = subscription
     ? monthlyMrr(subscription.status, subscription.cycle, subscription.priceCents)
     : 0;
@@ -135,7 +146,7 @@ export function AccountActions({
     options.push({
       panel: "plan",
       title: "Trocar plano ou ciclo",
-      description: `Hoje: ${subscription.planName}, ${subscription.cycle === "yearly" ? "anual" : "mensal"}.`,
+      description: `Hoje: ${subscription.planName}, ${cycleLabel(subscription.cycle)}.`,
     });
     if (status === "trialing") {
       options.push({
@@ -270,6 +281,7 @@ export function AccountActions({
                   <Field label="Ciclo" htmlFor="ciclo">
                     <Select id="ciclo" value={cycle} onChange={(e) => setCycle(e.target.value)}>
                       <option value="monthly">Mensal</option>
+                      <option value="quarterly">Trimestral</option>
                       <option value="yearly">Anual</option>
                     </Select>
                   </Field>
@@ -278,7 +290,7 @@ export function AccountActions({
                     <p className="text-caption text-ink-secondary">
                       Novo preço travado:{" "}
                       <span className="tabular text-ink">{formatBRL(nextPriceCents)}</span>
-                      {cycle === "yearly" ? " por ano" : " por mês"}
+                      {cycle === "yearly" ? " por ano" : cycle === "quarterly" ? " por trimestre" : " por mês"}
                     </p>
                     <p className="mt-1 flex flex-wrap items-center gap-2 text-caption text-ink-secondary">
                       <span className="tabular">

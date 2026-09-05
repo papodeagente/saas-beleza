@@ -33,13 +33,16 @@ const REVENUE_STATUSES = ["active", "past_due"] as const;
 
 /** MRR normalizado de uma assinatura, em centavos. */
 export function normalizedMrrCents(cycle: string, priceCents: number): number {
-  return cycle === "yearly" ? Math.round(priceCents / 12) : priceCents;
+  if (cycle === "yearly") return Math.round(priceCents / 12);
+  if (cycle === "quarterly") return Math.round(priceCents / 3);
+  return priceCents;
 }
 
 const MRR_EXPR = sql<number>`
   coalesce(sum(
-    case when ${subscriptions.cycle} = 'yearly'
-      then round(${subscriptions.priceCents}::numeric / 12)
+    case
+      when ${subscriptions.cycle} = 'yearly' then round(${subscriptions.priceCents}::numeric / 12)
+      when ${subscriptions.cycle} = 'quarterly' then round(${subscriptions.priceCents}::numeric / 3)
       else ${subscriptions.priceCents}
     end
   ), 0)::int

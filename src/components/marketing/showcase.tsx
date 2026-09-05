@@ -97,10 +97,10 @@ export function ProductShowcase() {
             aria-controls={`painel-${t.id}`}
             onClick={() => setAtiva(t.id)}
             className={cn(
-              "shrink-0 rounded-pill px-4 py-2 text-label transition-colors duration-150",
+              "shrink-0 rounded-pill px-4 py-2 text-label transition-[background-color,color,transform] duration-150 ease-out-quint active:scale-95",
               t.id === ativa
                 ? "bg-accent-lift/15 font-semibold text-accent-lift"
-                : "text-night-ink-secondary hover:bg-white/6 hover:text-night-ink",
+                : "text-night-ink-secondary hover:-translate-y-px hover:bg-white/6 hover:text-night-ink",
             )}
           >
             {t.aba}

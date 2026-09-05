@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePlatformAdmin } from "@/server/platform-auth";
-import { PROVIDER_KINDS, saveProvider } from "@/server/services/hotmart";
+import { PROVIDER_KINDS, deleteProvider, saveProvider } from "@/server/services/hotmart";
 
 /**
  * Ações da tela de pagamentos.
@@ -32,6 +32,19 @@ export async function saveProviderAction(input: unknown): Promise<SaveProviderRe
     const ctx = await requirePlatformAdmin();
     const data = saveSchema.parse(input);
     await saveProvider(ctx, data);
+    revalidatePath("/admin/pagamentos");
+    return { ok: true };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+export async function deleteProviderAction(providerId: number): Promise<SaveProviderResult> {
+  try {
+    const ctx = await requirePlatformAdmin();
+    const result = await deleteProvider(ctx, providerId);
+    if (!result.ok) return result;
     revalidatePath("/admin/pagamentos");
     return { ok: true };
   } catch (error) {

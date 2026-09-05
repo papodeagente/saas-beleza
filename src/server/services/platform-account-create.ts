@@ -14,6 +14,7 @@ import {
 } from "@/db/schema";
 import { hashPassword } from "@/server/auth";
 import type { PlatformContext } from "@/server/platform-auth";
+import { normalizedMrrCents } from "./platform-metrics";
 
 /**
  * Cadastro de uma clínica real — pelo painel da plataforma OU pelo autocadastro
@@ -65,7 +66,7 @@ export type CreateAccountInput = {
   /** WhatsApp de quem assina, só dígitos. O painel não coleta; o site, sim. */
   ownerPhone?: string | null;
   planId: number;
-  cycle: "monthly" | "yearly";
+  cycle: "monthly" | "quarterly" | "yearly";
   /** `trial` começa no período de testes do plano; `active` já entra pagando. */
   start: "trial" | "active";
 };
@@ -101,8 +102,10 @@ export function slugFromClinicName(name: string): string {
   return limpo.length >= 2 ? limpo : "clinica";
 }
 
-function periodEnd(from: Date, cycle: "monthly" | "yearly"): Date {
-  return cycle === "yearly" ? addYears(from, 1) : addMonths(from, 1);
+function periodEnd(from: Date, cycle: "monthly" | "quarterly" | "yearly"): Date {
+  if (cycle === "yearly") return addYears(from, 1);
+  if (cycle === "quarterly") return addMonths(from, 3);
+  return addMonths(from, 1);
 }
 
 export async function createAccount(
@@ -210,16 +213,17 @@ export async function createAccount(
       .values({ organizationId: organization.id, name: clinicName });
 
     const now = new Date();
-    const priceCents = input.cycle === "yearly" ? plan.yearlyPriceCents : plan.monthlyPriceCents;
+    const priceCents =
+      input.cycle === "yearly"
+        ? plan.yearlyPriceCents
+        : input.cycle === "quarterly"
+          ? plan.quarterlyPriceCents
+          : plan.monthlyPriceCents;
     const emTeste = input.start === "trial";
     const trialEndsAt = emTeste ? addDays(now, plan.trialDays) : null;
 
     // Teste não é receita: entra com MRR zero e só vira dinheiro na conversão.
-    const mrrAfter = emTeste
-      ? 0
-      : input.cycle === "yearly"
-        ? Math.round(priceCents / 12)
-        : priceCents;
+    const mrrAfter = emTeste ? 0 : normalizedMrrCents(input.cycle, priceCents);
 
     const [subscription] = await tx
       .insert(subscriptions)
@@ -288,6 +292,7 @@ export async function listPlansForNewAccount() {
       name: plans.name,
       description: plans.description,
       monthlyPriceCents: plans.monthlyPriceCents,
+      quarterlyPriceCents: plans.quarterlyPriceCents,
       yearlyPriceCents: plans.yearlyPriceCents,
       trialDays: plans.trialDays,
     })

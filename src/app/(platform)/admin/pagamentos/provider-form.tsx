@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy, KeyRound, Link2, Plus, TriangleAlert } from "lucide-react";
+import { Check, Copy, KeyRound, Link2, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,9 +9,10 @@ import { Field, Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { copyToClipboard } from "@/lib/clipboard";
-import { saveProviderAction } from "./actions";
+import { deleteProviderAction, saveProviderAction } from "./actions";
 
 export type ProviderSummary = {
+  id: number;
   kind: string;
   name: string;
   enabled: boolean;
@@ -41,6 +43,7 @@ export function ProviderEditor({
   variant?: "primary" | "secondary" | "ghost";
 }) {
   const editing = Boolean(provider);
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState(provider?.kind ?? kindOptions[0]?.value ?? "");
   const [name, setName] = useState(provider?.name ?? kindOptions[0]?.label ?? "");
@@ -48,6 +51,8 @@ export function ProviderEditor({
   const [token, setToken] = useState("");
   const [clearToken, setClearToken] = useState(false);
   const [saving, startSaving] = useTransition();
+  const [deleting, startDeleting] = useTransition();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const usesWebhook = editing
     ? (provider?.usesWebhook ?? false)
@@ -61,6 +66,22 @@ export function ProviderEditor({
     setEnabled(provider?.enabled ?? false);
     setToken("");
     setClearToken(false);
+    setConfirmingDelete(false);
+  }
+
+  function remove() {
+    if (!provider) return;
+    startDeleting(async () => {
+      const result = await deleteProviderAction(provider.id);
+      if (!result.ok) {
+        toast.error(result.error);
+        setConfirmingDelete(false);
+        return;
+      }
+      toast.success(`${provider.name} excluído.`);
+      setOpen(false);
+      router.refresh();
+    });
   }
 
   function submit() {
@@ -111,6 +132,17 @@ export function ProviderEditor({
         }
         footer={
           <>
+            {editing ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mr-auto text-danger hover:text-danger"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 aria-hidden />
+                Excluir
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
               Cancelar
             </Button>
@@ -121,6 +153,24 @@ export function ProviderEditor({
         }
       >
         <div className="space-y-4 px-5 py-4">
+          {confirmingDelete && provider ? (
+            <div className="space-y-3 rounded-card border border-danger/25 bg-danger-soft px-3 py-3">
+              <p className="flex items-start gap-1.5 text-caption text-danger">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                Excluir {provider.name}? Só é possível quando ele nunca recebeu evento nem cobrança —
+                se já tiver histórico, a exclusão é recusada e o jeito é desligar.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button variant="danger" size="sm" onClick={remove} loading={deleting}>
+                  Confirmar exclusão
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmingDelete(false)}>
+                  Voltar
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {editing ? null : (
             <Field label="Provedor" htmlFor="provider-kind">
               <Select

@@ -37,6 +37,7 @@ const payloadSchema = z.object({
   slug: z.string(),
   description: z.string(),
   monthlyPrice: z.string(),
+  quarterlyPrice: z.string(),
   yearlyPrice: z.string(),
   trialDays: z.string(),
   maxBranches: z.string(),
@@ -51,6 +52,7 @@ const payloadSchema = z.object({
   benefits: z.array(z.string()),
   ctaLabel: z.string(),
   checkoutUrlMonthly: z.string(),
+  checkoutUrlQuarterly: z.string(),
   checkoutUrlYearly: z.string(),
   highlight: z.boolean(),
   highlightLabel: z.string(),
@@ -65,6 +67,7 @@ type PlanValues = {
   name: string;
   description: string | null;
   monthlyPriceCents: number;
+  quarterlyPriceCents: number;
   yearlyPriceCents: number;
   trialDays: number;
   maxBranches: number | null;
@@ -76,6 +79,7 @@ type PlanValues = {
   features: string[];
   ctaLabel: string | null;
   checkoutUrlMonthly: string | null;
+  checkoutUrlQuarterly: string | null;
   checkoutUrlYearly: string | null;
   highlight: boolean;
   highlightLabel: string | null;
@@ -200,9 +204,11 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
 
   const monthlyPriceCents = parseBRL(input.monthlyPrice);
   if (monthlyPriceCents === null) return invalid("monthlyPrice", "Informe o preço mensal em reais.");
+  const quarterlyPriceCents = parseBRL(input.quarterlyPrice);
+  if (quarterlyPriceCents === null) return invalid("quarterlyPrice", "Informe o preço trimestral em reais.");
   const yearlyPriceCents = parseBRL(input.yearlyPrice);
   if (yearlyPriceCents === null) return invalid("yearlyPrice", "Informe o preço anual em reais.");
-  if (monthlyPriceCents > 5_000_000 || yearlyPriceCents > 50_000_000) {
+  if (monthlyPriceCents > 5_000_000 || quarterlyPriceCents > 15_000_000 || yearlyPriceCents > 50_000_000) {
     return invalid("monthlyPrice", "Esse preço parece errado. Confira as casas decimais.");
   }
 
@@ -255,6 +261,12 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
     "Link de checkout mensal",
   );
   if (isInvalid(checkoutUrlMonthly)) return checkoutUrlMonthly;
+  const checkoutUrlQuarterly = checkoutUrl(
+    input.checkoutUrlQuarterly,
+    "checkoutUrlQuarterly",
+    "Link de checkout trimestral",
+  );
+  if (isInvalid(checkoutUrlQuarterly)) return checkoutUrlQuarterly;
   const checkoutUrlYearly = checkoutUrl(
     input.checkoutUrlYearly,
     "checkoutUrlYearly",
@@ -269,6 +281,7 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
       name,
       description: input.description.trim() || null,
       monthlyPriceCents,
+      quarterlyPriceCents,
       yearlyPriceCents,
       trialDays,
       maxBranches,
@@ -280,6 +293,7 @@ function normalize(input: PlanPayload, creating: boolean): Normalized {
       features,
       ctaLabel,
       checkoutUrlMonthly,
+      checkoutUrlQuarterly,
       checkoutUrlYearly,
       highlight: input.highlight,
       highlightLabel,

@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { organizations, plans, subscriptionEvents, subscriptions } from "@/db/schema";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import { CreateAccountError, createAccount } from "@/server/services/platform-account-create";
+import { normalizedMrrCents } from "@/server/services/platform-metrics";
 
 /**
  * Mutações de assinatura feitas à mão pelo painel da plataforma.
@@ -30,11 +31,19 @@ const PAYING: string[] = ["active", "past_due"];
 /** MRR normalizado para o mês. Teste e cancelada valem ZERO. */
 function monthlyMrr(status: string, cycle: string, priceCents: number): number {
   if (!PAYING.includes(status)) return 0;
-  return cycle === "yearly" ? Math.round(priceCents / 12) : priceCents;
+  return normalizedMrrCents(cycle, priceCents);
 }
 
-function periodEnd(from: Date, cycle: "monthly" | "yearly"): Date {
-  return cycle === "yearly" ? addYears(from, 1) : addMonths(from, 1);
+function periodEnd(from: Date, cycle: "monthly" | "quarterly" | "yearly"): Date {
+  if (cycle === "yearly") return addYears(from, 1);
+  if (cycle === "quarterly") return addMonths(from, 3);
+  return addMonths(from, 1);
+}
+
+function cycleLabel(cycle: string): string {
+  if (cycle === "yearly") return "anual";
+  if (cycle === "quarterly") return "trimestral";
+  return "mensal";
 }
 
 function revalidate(organizationId: number) {
@@ -61,7 +70,7 @@ const reason = z.string().trim().min(3, "Escreva o motivo — ele fica no histó
 const changePlanSchema = z.object({
   organizationId: orgId,
   planId: z.coerce.number().int().positive(),
-  cycle: z.enum(["monthly", "yearly"]),
+  cycle: z.enum(["monthly", "quarterly", "yearly"]),
 });
 
 export async function changePlanAction(input: unknown): Promise<ActionResult> {
@@ -84,7 +93,8 @@ export async function changePlanAction(input: unknown): Promise<ActionResult> {
       const [plan] = await tx.select().from(plans).where(eq(plans.id, planId)).limit(1);
       if (!plan) return { ok: false, error: "Plano não encontrado." } as ActionResult;
 
-      const priceCents = cycle === "yearly" ? plan.yearlyPriceCents : plan.monthlyPriceCents;
+      const priceCents =
+        cycle === "yearly" ? plan.yearlyPriceCents : cycle === "quarterly" ? plan.quarterlyPriceCents : plan.monthlyPriceCents;
       if (sub.planId === planId && sub.cycle === cycle && sub.priceCents === priceCents) {
         return { ok: false, error: "O plano e o ciclo já são esses." } as ActionResult;
       }
@@ -108,7 +118,7 @@ export async function changePlanAction(input: unknown): Promise<ActionResult> {
         planIdBefore: sub.planId,
         planIdAfter: planId,
         source: "platform_admin",
-        note: `Plano alterado para ${plan.name} (${cycle === "yearly" ? "anual" : "mensal"}) por ${ctx.userName}.`,
+        note: `Plano alterado para ${plan.name} (${cycleLabel(cycle)}) por ${ctx.userName}.`,
         payload: { actorUserId: ctx.userId, actorEmail: ctx.userEmail },
       });
 
@@ -448,7 +458,7 @@ const createAccountSchema = z.object({
   ownerEmail: z.string().trim().toLowerCase().email("Informe um e-mail válido."),
   ownerPassword: z.string().min(8, "A senha precisa de pelo menos 8 caracteres."),
   planId: z.coerce.number().int().positive("Escolha um plano."),
-  cycle: z.enum(["monthly", "yearly"]),
+  cycle: z.enum(["monthly", "quarterly", "yearly"]),
   start: z.enum(["trial", "active"]),
 });
 

@@ -29,13 +29,15 @@ export function Faq({ itens }: { itens: Pergunta[] }) {
                 aria-expanded={estaAberta}
                 aria-controls={`${base}-${i}`}
                 onClick={() => setAberta(estaAberta ? null : i)}
-                className="flex w-full items-start justify-between gap-5 py-5 text-left"
+                className="group flex w-full items-start justify-between gap-5 py-5 text-left transition-colors duration-150"
               >
-                <span className="text-card text-night-ink">{item.pergunta}</span>
+                <span className="text-card text-night-ink transition-colors duration-150 group-hover:text-accent-lift">
+                  {item.pergunta}
+                </span>
                 <span
                   aria-hidden
                   className={cn(
-                    "mt-0.5 shrink-0 text-night-ink-tertiary transition-transform duration-200",
+                    "mt-0.5 shrink-0 text-night-ink-tertiary transition-[transform,color] duration-200 group-hover:text-night-ink",
                     estaAberta && "rotate-45",
                   )}
                 >

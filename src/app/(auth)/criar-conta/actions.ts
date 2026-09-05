@@ -29,10 +29,7 @@ export type SignupState = {
   field?: SignupField;
 };
 
-const cycleFromForm = z
-  .enum(["mensal", "anual"])
-  .catch("mensal")
-  .transform((v) => (v === "anual" ? ("yearly" as const) : ("monthly" as const)));
+const cycleFromForm = z.enum(["monthly", "quarterly", "yearly"]).catch("monthly");
 
 const schema = z.object({
   clinicName: z.string().trim().min(2, "Escreva o nome da sua clínica.").max(120),
@@ -65,7 +62,7 @@ export async function signUpAction(_prev: SignupState, formData: FormData): Prom
     phone: formData.get("phone") ?? "",
     password: formData.get("password") ?? "",
     planSlug: formData.get("planSlug") ?? "",
-    cycle: formData.get("cycle") ?? "mensal",
+    cycle: formData.get("cycle") ?? "monthly",
     timezone: formData.get("timezone") ?? DEFAULT_TIMEZONE,
     honeypot: formData.get("site") ?? "",
     formIssuedAtMs: formData.get("formIssuedAtMs") ?? 0,

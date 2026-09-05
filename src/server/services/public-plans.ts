@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { plans } from "@/db/schema";
-import { type AnnualDeal, annualDeal } from "@/lib/pricing";
+import { type AnnualDeal, annualDeal, quarterlyDeal } from "@/lib/pricing";
 
 /**
  * Os planos como o site pode vê-los.
@@ -24,14 +24,16 @@ export type PublicPlan = {
   tagline: string | null;
   description: string | null;
   monthlyPriceCents: number;
+  quarterlyPriceCents: number;
   yearlyPriceCents: number;
   annual: AnnualDeal;
+  quarterly: AnnualDeal;
   trialDays: number;
   benefits: string[];
   highlight: boolean;
   highlightLabel: string | null;
   ctaLabel: string | null;
-  checkout: { monthly: string | null; yearly: string | null };
+  checkout: { monthly: string | null; quarterly: string | null; yearly: string | null };
 };
 
 /**
@@ -55,8 +57,10 @@ function toPublic(row: typeof plans.$inferSelect): PublicPlan {
     tagline: row.tagline,
     description: row.description,
     monthlyPriceCents: row.monthlyPriceCents,
+    quarterlyPriceCents: row.quarterlyPriceCents,
     yearlyPriceCents: row.yearlyPriceCents,
     annual: annualDeal(row.monthlyPriceCents, row.yearlyPriceCents),
+    quarterly: quarterlyDeal(row.monthlyPriceCents, row.quarterlyPriceCents),
     trialDays: row.trialDays,
     benefits: Array.isArray(row.features) ? row.features : [],
     highlight: row.highlight,
@@ -64,6 +68,7 @@ function toPublic(row: typeof plans.$inferSelect): PublicPlan {
     ctaLabel: row.ctaLabel,
     checkout: {
       monthly: safeCheckout(row.checkoutUrlMonthly),
+      quarterly: safeCheckout(row.checkoutUrlQuarterly),
       yearly: safeCheckout(row.checkoutUrlYearly),
     },
   };
@@ -106,8 +111,9 @@ export type PlanCta =
   | { kind: "trial"; href: string; label: string }
   | { kind: "contact"; href: string; label: string };
 
-export function planCta(plan: PublicPlan, cycle: "monthly" | "yearly"): PlanCta {
-  const checkout = cycle === "yearly" ? plan.checkout.yearly : plan.checkout.monthly;
+export function planCta(plan: PublicPlan, cycle: "monthly" | "quarterly" | "yearly"): PlanCta {
+  const checkout =
+    cycle === "yearly" ? plan.checkout.yearly : cycle === "quarterly" ? plan.checkout.quarterly : plan.checkout.monthly;
   if (checkout) {
     return { kind: "checkout", href: checkout, label: plan.ctaLabel ?? "Assinar agora" };
   }

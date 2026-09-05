@@ -1427,7 +1427,7 @@ export const auditLogs = pgTable(
 // os dois contamina o financeiro do tenant e o MRR da plataforma de uma vez.
 // ---------------------------------------------------------------------------
 
-export const billingCycle = pgEnum("billing_cycle", ["monthly", "yearly"]);
+export const billingCycle = pgEnum("billing_cycle", ["monthly", "quarterly", "yearly"]);
 
 export const subscriptionStatus = pgEnum("subscription_status", [
   "trialing",
@@ -1459,6 +1459,8 @@ export const subscriptionEventKind = pgEnum("subscription_event_kind", [
 
 export const paymentProviderKind = pgEnum("payment_provider_kind", [
   "hotmart",
+  "hubla",
+  "kiwify",
   "asaas",
   "pagarme",
   "cakto",
@@ -1496,6 +1498,8 @@ export const plans = pgTable(
     slug: text("slug").notNull().unique(),
     description: text("description"),
     monthlyPriceCents: integer("monthly_price_cents").notNull(),
+    /** Preço do trimestre inteiro, não do mês equivalente. */
+    quarterlyPriceCents: integer("quarterly_price_cents").notNull().default(0),
     /** Preço do ano inteiro, não do mês equivalente. */
     yearlyPriceCents: integer("yearly_price_cents").notNull(),
     trialDays: integer("trial_days").notNull().default(14),
@@ -1530,6 +1534,7 @@ export const plans = pgTable(
      * meio de pagamento não está ligado.
      */
     checkoutUrlMonthly: text("checkout_url_monthly"),
+    checkoutUrlQuarterly: text("checkout_url_quarterly"),
     checkoutUrlYearly: text("checkout_url_yearly"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1549,6 +1554,7 @@ export const plans = pgTable(
     check(
       "plans_checkout_urls_https",
       sql`(${t.checkoutUrlMonthly} is null or ${t.checkoutUrlMonthly} like 'https://%')
+        and (${t.checkoutUrlQuarterly} is null or ${t.checkoutUrlQuarterly} like 'https://%')
         and (${t.checkoutUrlYearly} is null or ${t.checkoutUrlYearly} like 'https://%')`,
     ),
   ],

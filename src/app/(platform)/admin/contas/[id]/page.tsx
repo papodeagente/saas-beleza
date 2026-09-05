@@ -25,7 +25,7 @@ const STATUS: Record<string, { label: string; tone: "positive" | "attention" | "
     canceled: { label: "Cancelada", tone: "neutral" },
   };
 
-const CYCLE: Record<string, string> = { monthly: "Mensal", yearly: "Anual" };
+const CYCLE: Record<string, string> = { monthly: "Mensal", quarterly: "Trimestral", yearly: "Anual" };
 
 const ROLE: Record<string, string> = {
   owner: "Dona da conta",
@@ -129,6 +129,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
               id: plan.id,
               name: plan.name,
               monthlyPriceCents: plan.monthlyPriceCents,
+              quarterlyPriceCents: plan.quarterlyPriceCents,
               yearlyPriceCents: plan.yearlyPriceCents,
               active: plan.active,
             }))}
@@ -180,7 +181,11 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
                   <DataRow label="Preço travado">
                     <span className="tabular">{formatBRL(subscription.priceCents)}</span>
                     <span className="text-ink-tertiary">
-                      {subscription.cycle === "yearly" ? " por ano" : " por mês"}
+                      {subscription.cycle === "yearly"
+                        ? " por ano"
+                        : subscription.cycle === "quarterly"
+                          ? " por trimestre"
+                          : " por mês"}
                     </span>
                   </DataRow>
                   <DataRow label="MRR normalizado">

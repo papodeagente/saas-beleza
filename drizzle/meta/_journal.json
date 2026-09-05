@@ -225,6 +225,20 @@
       "when": 1787771550116,
       "tag": "0031_municipios_ibge",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788466285946,
+      "tag": "0032_perpetual_richard_fisk",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788469160229,
+      "tag": "0033_warm_salo",
+      "breakpoints": true
     }
   ]
 }
