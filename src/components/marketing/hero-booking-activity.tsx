@@ -42,7 +42,10 @@ const CARTOES: Cartao[] = [
   {
     icon: CalendarCheck2,
     texto: "Horário confirmado",
-    className: "-right-4 top-[6%] sm:-right-9",
+    // Precisa ficar abaixo do selo "Agente de IA ativo" (fixo em
+    // `sm:right-4 sm:top-4`, ver mais abaixo) — os dois disputavam o mesmo
+    // canto superior direito e o texto saía sobreposto/cortado.
+    className: "-right-4 top-[30%] sm:-right-9",
     atraso: "900ms",
     duracao: "7.2s",
     minWidth: "sm",
@@ -95,7 +98,7 @@ export function HeroBookingActivity() {
             strokeDasharray="1 2.4"
           />
           <path
-            d="M92 12 Q 78 20 64 30"
+            d="M92 34 Q 78 32 64 30"
             stroke="var(--color-accent-lift)"
             strokeWidth="0.3"
             strokeDasharray="1 2.4"
