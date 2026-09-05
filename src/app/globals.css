@@ -718,22 +718,44 @@
 /**
  * ATIVIDADE AMBIENTE DO HERO — os cartõezinhos flutuando ao redor do print.
  *
- * Um `@keyframes` só, reaproveitado por todos os cartões: cada um recebe seu
- * próprio atraso e duração por variável (`--atraso-flutuar`/`--duracao-flutuar`),
- * do mesmo jeito que `dia-entrada` já faz com `--atraso`. Assim o movimento de
- * cada cartão parece independente sem precisar de uma classe por cartão.
+ * Duas animações por cartão, encadeadas, cada uma reaproveitada por todos
+ * eles via variável (`--atraso-flutuar`/`--duracao-flutuar`), do mesmo jeito
+ * que `dia-entrada` já faz com `--atraso`:
  *
- * Só `transform` — nunca `top`/`left` — para o navegador animar isso na GPU
- * sem recalcular layout a cada frame.
+ * 1. `subir-mensagem` — entrada única, como uma notificação chegando: nasce
+ *    um pouco abaixo e transparente, sobe e assenta. `--atraso-flutuar`
+ *    escalona a ordem (mesma sequência que já existia).
+ * 2. `flutuar` — depois de assentado, um balanço contínuo bem discreto, só
+ *    3px de curso. `alternate` em vez de um `50%` no meio do próprio
+ *    `@keyframes`: com três paradas (0/50/100%) o `ease-in-out` reinicia a
+ *    curva a cada metade e cria uma pausa/solavanco bem no topo do
+ *    movimento — o "tremido" que se via antes. Com só `from`/`to` e
+ *    `alternate`, o navegador espelha a curva ao inverter, então a subida e
+ *    a descida ficam uma continuação suave da outra.
+ *
+ * A segunda começa exatamente quando a primeira termina (delay somado à
+ * duração dela), para não haver salto entre "assentar" e "começar a
+ * balançar". Só `transform`/`opacity` — nunca `top`/`left` — para o
+ * navegador animar isso na GPU sem recalcular layout a cada frame.
  */
+@keyframes subir-mensagem {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes flutuar {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-9px); }
+  from { transform: translateY(-3px); }
+  to { transform: translateY(3px); }
 }
 
 @utility flutuar {
-  animation: flutuar var(--duracao-flutuar, 6s) ease-in-out infinite;
-  animation-delay: var(--atraso-flutuar, 0ms);
+  animation-name: subir-mensagem, flutuar;
+  animation-duration: 640ms, var(--duracao-flutuar, 9s);
+  animation-timing-function: var(--ease-out-quint), ease-in-out;
+  animation-delay: var(--atraso-flutuar, 0ms), calc(var(--atraso-flutuar, 0ms) + 640ms);
+  animation-iteration-count: 1, infinite;
+  animation-direction: normal, alternate;
+  animation-fill-mode: both, none;
 }
 
 /**
@@ -841,6 +863,13 @@
      `backwards` fica invisível os 210ms inteiros antes de aparecer de estalo —
      que é exatamente o piscar que quem desliga movimento está evitando. */
   .dia-entrada {
+    animation: none !important;
+  }
+
+  /* Mesmo motivo do `.dia-entrada` acima: a duração zera pela regra global,
+     mas o atraso da entrada (`subir-mensagem`) sobrevive a ela, então o
+     cartão ficaria invisível até 1,9s antes de aparecer de estalo. */
+  .flutuar {
     animation: none !important;
   }
 
