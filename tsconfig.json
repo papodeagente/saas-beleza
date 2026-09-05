@@ -30,5 +30,14 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // Projeto Capacitor à parte, com seu próprio package.json/lockfile
+    // (npm, não pnpm) e sem node_modules instalado aqui — não é sub-diretório
+    // do site, é outro app. O `include` genérico acima (`**/*.ts`) varria
+    // `mobile/capacitor.config.ts` para dentro do typecheck do site, e como
+    // `@capacitor/cli` nunca está instalado neste `node_modules`, TODO deploy
+    // falhava no `next build` por causa de um arquivo que o site nem usa.
+    "mobile"
+  ]
 }
