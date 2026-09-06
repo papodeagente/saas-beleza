@@ -154,13 +154,15 @@ const PERGUNTAS: Pergunta[] = [
       </>
     ),
   },
+  // Preenchida em runtime por `perguntaTeste()`, com o número de dias que
+  // vem do plano — ver o comentário ali para o motivo.
   {
-    pergunta: "Como funciona o teste de 14 dias?",
+    pergunta: "Como funciona o teste grátis?",
     resposta: (
       <>
         Você cria a conta sem cartão de crédito e usa o sistema inteiro, sem recurso bloqueado. No
-        fim dos 14 dias, se não quiser continuar, não precisa fazer nada: o acesso simplesmente
-        encerra e nada é cobrado.
+        fim do teste, se não quiser continuar, não precisa fazer nada: o acesso simplesmente encerra
+        e nada é cobrado.
       </>
     ),
   },
@@ -184,13 +186,37 @@ const PERGUNTAS: Pergunta[] = [
   },
 ];
 
+/**
+ * O número de dias do teste é decidido no plano (Configurações > Planos), e
+ * é o Bruno quem muda — já mudou de 14 para 7 uma vez, sem passar por mim.
+ * `PERGUNTAS` é uma constante estática (não tem `principal` no escopo), então
+ * esta pergunta em especial é remontada aqui, com o número de verdade, e
+ * substitui a versão sem número dentro de `PERGUNTAS` na hora de renderizar
+ * — ver `LandingPage` abaixo. Assim o texto nunca mais fica pra trás de novo.
+ */
+function perguntaTeste(trialDays: number): Pergunta {
+  return {
+    pergunta: `Como funciona o teste de ${trialDays} dias?`,
+    resposta: (
+      <>
+        Você cria a conta sem cartão de crédito e usa o sistema inteiro, sem recurso bloqueado. No
+        fim dos {trialDays} dias, se não quiser continuar, não precisa fazer nada: o acesso
+        simplesmente encerra e nada é cobrado.
+      </>
+    ),
+  };
+}
+
 export default async function LandingPage() {
   const planos = await listPublicPlans();
   const principal = planos[0];
+  const perguntas = principal
+    ? PERGUNTAS.map((p) => (p.pergunta === "Como funciona o teste grátis?" ? perguntaTeste(principal.trialDays) : p))
+    : PERGUNTAS;
 
   // O botão do topo e o do fim seguem a mesma precedência do cartão de preço:
-  // teste grátis primeiro (é o que o topo e o FAQ prometem — "14 dias, sem
-  // cartão"), checkout só quando o plano não tem teste. `preferTrial` é o que
+  // teste grátis primeiro (é o que o topo e o FAQ prometem — "X dias, sem
+  // cartão", lendo `trialDays` do plano), checkout só quando o plano não tem teste. `preferTrial` é o que
   // separa esta página de `(billing)/conta/assinatura`, onde a mesma função
   // decide o oposto — ver o comentário de `planCta`.
   const ctaTopo = principal
@@ -516,7 +542,7 @@ export default async function LandingPage() {
           <div className={CONTAINER}>
             <SectionHead eyebrow="Perguntas" title="O que costumam perguntar antes de assinar" />
             <div className="mt-12">
-              <Faq itens={PERGUNTAS} />
+              <Faq itens={perguntas} />
             </div>
           </div>
         </section>

@@ -15,7 +15,7 @@ import type { Metadata } from "next";
  */
 
 const DESCRICAO =
-  "Agenda, WhatsApp com atendimento por IA, ficha da cliente e financeiro no mesmo lugar. Um plano só, R$ 97 por mês, com 14 dias de teste.";
+  "Agenda, WhatsApp com atendimento por IA, ficha da cliente e financeiro no mesmo lugar. Um plano só, R$ 97 por mês, com 7 dias de teste.";
 
 /**
  * Na aba, o layout raiz já aplica o gabarito da Agenda de Unha. `absolute` dispensa o

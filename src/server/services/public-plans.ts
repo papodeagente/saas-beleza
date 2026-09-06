@@ -112,7 +112,7 @@ export async function getPublicPlanBySlug(slug: string): Promise<PublicPlan | nu
  *
  * - Captação (site público, `preferTrial: true`) — o teste grátis vem
  *   primeiro sempre que existir, mesmo com checkout colado: o site promete
- *   "14 dias sem cartão" no topo e no FAQ, e cobrar na hora de quem clicou
+ *   "X dias sem cartão" no topo e no FAQ (lendo `trialDays`), e cobrar na hora de quem clicou
  *   "assinar" quebraria essa promessa. O checkout só aparece aqui quando não
  *   há teste (`trialDays === 0`) — plano pago desde o primeiro dia.
  * - Reativação (`(billing)/conta/assinatura`, padrão / `preferTrial: false`)

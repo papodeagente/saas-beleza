@@ -7,6 +7,7 @@ import { getPublicPlanBySlug, listPublicPlans } from "@/server/services/public-p
 import { formStamp, signupEnabled } from "@/server/services/signup";
 import { AuthShell } from "../auth-shell";
 import { SignupForm } from "./signup-form";
+import { VideoThenForm } from "./video-then-form";
 
 export const metadata = { title: "Criar conta" };
 
@@ -65,7 +66,7 @@ export default async function CriarContaPage({
   const deal = anual ? plano.annual : trimestral ? plano.quarterly : null;
 
   return (
-    <AuthShell>
+    <VideoThenForm trialDays={plano.trialDays}>
       <h1 className="text-display text-ink">Comece o seu teste</h1>
       <p className="mt-1.5 text-body text-ink-secondary">
         {plano.trialDays} dias grátis, sem cartão. Sua clínica fica pronta para usar em um minuto.
@@ -108,6 +109,6 @@ export default async function CriarContaPage({
           Entrar
         </Link>
       </p>
-    </AuthShell>
+    </VideoThenForm>
   );
 }
