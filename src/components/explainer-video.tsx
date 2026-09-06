@@ -39,7 +39,7 @@ export function ExplainerVideo({ onFinish }: { onFinish: () => void }) {
           <button
             type="button"
             onClick={play}
-            className="group absolute inset-0 flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-accent/30 to-night text-white"
+            className="group absolute inset-0 flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-accent to-night text-white"
           >
             <span className="flex size-20 items-center justify-center rounded-pill bg-white text-accent shadow-lift transition-transform group-hover:scale-105">
               <Play className="size-9 translate-x-0.5" fill="currentColor" />
