@@ -65,7 +65,16 @@ export const AGENT_MODELS: ModelInfo[] = [
   { id: "gpt-4.1-mini", label: "OpenAI GPT-4.1 mini", provider: "openai", note: "Mais barato" },
 ];
 
-export const DEFAULT_MODEL = "claude-opus-5";
+/**
+ * Só a OPENAI_API_KEY está configurada no servidor (confirmada válida em
+ * 06/09/2026) — não existe ANTHROPIC_API_KEY. Um plano sem modelo escolhido
+ * caía no Claude por padrão e o agente nunca respondia, mesmo ligado,
+ * porque `hasApiKeyFor` olha a chave do PROVEDOR do modelo configurado, não
+ * qualquer chave presente. Sem uma ANTHROPIC_API_KEY real disponível, o
+ * padrão é o modelo cuja chave já existe e já foi testada — voltar a
+ * "claude-opus-5" depois que essa chave existir é só trocar esta linha.
+ */
+export const DEFAULT_MODEL = "gpt-4.1";
 
 export function providerOf(model: string): "anthropic" | "openai" {
   const known = AGENT_MODELS.find((m) => m.id === model);
