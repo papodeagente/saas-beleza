@@ -208,6 +208,17 @@ export const organizations = pgTable("organizations", {
   marketplaceWhatsapp: text("marketplace_whatsapp"),
   marketplaceInstagram: text("marketplace_instagram"),
 
+  /**
+   * Quando a clínica assistiu o vídeo de boas-vindas — `null` até lá.
+   *
+   * É por conta, não por usuário: o vídeo explica o produto pra quem está
+   * abrindo a clínica agora, não é conteúdo que cada funcionária nova
+   * precisa ver de novo ao ganhar acesso. Mostrado uma vez, na primeira
+   * entrada depois do cadastro (teste grátis ou conta ativada por compra
+   * direta) — ver `(app)/layout.tsx`.
+   */
+  welcomeVideoSeenAt: timestamp("welcome_video_seen_at", { withTimezone: true }),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

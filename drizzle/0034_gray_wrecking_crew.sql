@@ -1,0 +1,1 @@
+ALTER TABLE "organizations" ADD COLUMN "welcome_video_seen_at" timestamp with time zone;

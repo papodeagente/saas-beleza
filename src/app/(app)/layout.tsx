@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { WelcomeVideoModal } from "@/components/welcome-video-modal";
 import { FusoProvider } from "@/lib/fuso";
 import { getSession } from "@/server/auth";
 import { isPlatformAdmin } from "@/server/platform-auth";
 import { getAccountAccess } from "@/server/services/account-access";
 import { getAttentionSignals } from "@/server/services/today-service";
+import { getWelcomeVideoSeenAt } from "@/server/services/welcome-video";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const ctx = await getSession();
@@ -15,10 +17,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   //
   // O portão de acesso entra no MESMO Promise.all: é uma ida ao banco em toda
   // navegação do painel, e em série ela apareceria no tempo de cada tela.
-  const [signals, platformAdmin, access] = await Promise.all([
+  const [signals, platformAdmin, access, welcomeVideoSeenAt] = await Promise.all([
     getAttentionSignals(ctx),
     isPlatformAdmin(ctx.userId),
     getAccountAccess(ctx.organizationId),
+    getWelcomeVideoSeenAt(ctx.organizationId),
   ]);
 
   // O destino está em src/app/(billing)/, fora deste grupo, justamente para não
@@ -42,6 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       >
         {children}
       </AppShell>
+      <WelcomeVideoModal seen={welcomeVideoSeenAt !== null} />
     </FusoProvider>
   );
 }
