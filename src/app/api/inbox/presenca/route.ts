@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSession, requireRole } from "@/server/auth";
-import { getAccountAccess } from "@/server/services/account-access";
+import { getAccessForUser } from "@/server/services/account-access";
 import { notifyPresence } from "@/server/services/whatsapp-message-service";
 
 /**
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   } catch {
     return new NextResponse(null, { status: 403 });
   }
-  const acesso = await getAccountAccess(ctx.organizationId);
+  const acesso = await getAccessForUser(ctx.organizationId, ctx.userId);
   if (!acesso.allowed) return new NextResponse(null, { status: 402 });
 
   const dados = corpo.safeParse(await request.json().catch(() => ({})));

@@ -2,7 +2,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@/db";
-import { organizations, plans, subscriptions } from "@/db/schema";
+import { organizations, platformAdmins, plans, subscriptions } from "@/db/schema";
 
 /**
  * O portão do produto: quem pode entrar na clínica hoje.
@@ -84,4 +84,41 @@ export const getAccountAccess = cache(async function getAccountAccess(
   }
 
   return { allowed: true };
+});
+
+/**
+ * O mesmo portão, do ponto de vista de QUEM está entrando.
+ *
+ * Administrador da plataforma não é barrado. Duas razões, e as duas
+ * apareceram na prática:
+ *
+ * 1. O dono do produto perdeu o próprio painel quando o teste da conta dele
+ *    venceu (06/09/2026, conta ENTUR). Cobrança é regra para CLIENTE; aplicá-la
+ *    a quem opera o SaaS é defeito, não disciplina.
+ * 2. Suporte: a conta suspensa é justamente a que precisa ser aberta para se
+ *    descobrir por que está suspensa. Sem esta exceção, o único caminho para
+ *    diagnosticar é mexer no banco à mão.
+ *
+ * A exceção é da PESSOA, não da conta: a clínica bloqueada continua bloqueada
+ * para a equipe dela, e `/agendar/[slug]` segue fora do ar, porque lá quem
+ * decide é o estado comercial da conta e não quem está olhando.
+ *
+ * A consulta a `platform_admins` é feita aqui, com drizzle, em vez de importar
+ * `isPlatformAdmin` de `platform-auth`: aquele módulo importa `@/server/auth`,
+ * que importa este — e ciclo de import é armadilha que só aparece em runtime.
+ */
+export const getAccessForUser = cache(async function getAccessForUser(
+  organizationId: number,
+  userId: number,
+): Promise<AccountAccess> {
+  const acesso = await getAccountAccess(organizationId);
+  if (acesso.allowed || !userId) return acesso;
+
+  const [admin] = await db
+    .select({ userId: platformAdmins.userId })
+    .from(platformAdmins)
+    .where(eq(platformAdmins.userId, userId))
+    .limit(1);
+
+  return admin ? { allowed: true } : acesso;
 });

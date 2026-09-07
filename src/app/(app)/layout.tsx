@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { FusoProvider } from "@/lib/fuso";
 import { getSession } from "@/server/auth";
 import { isPlatformAdmin } from "@/server/platform-auth";
-import { getAccountAccess } from "@/server/services/account-access";
+import { getAccessForUser } from "@/server/services/account-access";
 import { getAttentionSignals } from "@/server/services/today-service";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const [signals, platformAdmin, access] = await Promise.all([
     getAttentionSignals(ctx),
     isPlatformAdmin(ctx.userId),
-    getAccountAccess(ctx.organizationId),
+    getAccessForUser(ctx.organizationId, ctx.userId),
   ]);
 
   // O destino está em src/app/(billing)/, fora deste grupo, justamente para não

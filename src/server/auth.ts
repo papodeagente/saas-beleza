@@ -6,7 +6,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
-import { getAccountAccess } from "@/server/services/account-access";
+import { getAccessForUser } from "@/server/services/account-access";
 
 export const SESSION_COOKIE = "lumina_session";
 const SESSION_DAYS = 30;
@@ -140,7 +140,9 @@ export async function requireSession(): Promise<TenantContext> {
   // falha genérica ("tente de novo"), que é conselho errado para quem precisa
   // assinar. Quem envolve a chamada em try/catch engole o redirect e mostra o
   // próprio aviso — aceitável, porque a escrita já não aconteceu.
-  const access = await getAccountAccess(ctx.organizationId);
+  // Pela PESSOA, e não só pela conta: quem administra a plataforma entra em
+  // conta bloqueada — inclusive na própria — para poder dar suporte.
+  const access = await getAccessForUser(ctx.organizationId, ctx.userId);
   if (!access.allowed) redirect("/conta/assinatura");
 
   return ctx;

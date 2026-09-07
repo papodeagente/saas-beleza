@@ -38,8 +38,11 @@ describe("portão de acesso", () => {
   it("é aplicado em requireSession, e não só no layout do painel", () => {
     const auth = semComentarios(ler("src/server/auth.ts"));
 
+    // `getAccessForUser` é o mesmo portão com a exceção do administrador da
+    // plataforma; qualquer uma das duas satisfaz a regra, contanto que o
+    // desvio para a tela de assinatura esteja aqui.
     expect(
-      /getAccountAccess/.test(auth) && /\/conta\/assinatura/.test(auth),
+      /getAccessForUser|getAccountAccess/.test(auth) && /\/conta\/assinatura/.test(auth),
       "requireSession() é a porta de entrada de TODA Server Action do painel " +
         "(docs/product-architecture.md §5). Sem o portão aqui, uma aba aberta " +
         "quando o teste vence continua criando cliente, atendimento e mensagem.",

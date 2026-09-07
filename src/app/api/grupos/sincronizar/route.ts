@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSession, requireRole } from "@/server/auth";
-import { getAccountAccess } from "@/server/services/account-access";
+import { getAccessForUser } from "@/server/services/account-access";
 import { reconcileGroupHistory, syncGroupsFromProvider } from "@/server/services/group-inbox-service";
 
 /**
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
   // A mesma porteira de `requireSession`, escrita à mão: numa rota o `redirect`
   // dele viraria um 307 para uma página HTML, e o `fetch` daqui receberia isso
   // no lugar da resposta — assinatura vencida não pode virar erro de rede.
-  const acesso = await getAccountAccess(ctx.organizationId);
+  const acesso = await getAccessForUser(ctx.organizationId, ctx.userId);
   if (!acesso.allowed) {
     return NextResponse.json({ ok: false, error: "Assinatura inativa." }, { status: 402 });
   }
