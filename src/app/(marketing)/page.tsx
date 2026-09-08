@@ -15,6 +15,7 @@ import {
 } from "@/components/marketing/primitives";
 import { Reveal } from "@/components/marketing/reveal";
 import { HeroBookingActivity } from "@/components/marketing/hero-booking-activity";
+import { HeroDemoVideo } from "@/components/marketing/hero-demo-video";
 import { ProductShowcase } from "@/components/marketing/showcase";
 import { BrandLogo } from "@/components/brand";
 import { cn } from "@/lib/utils";
@@ -319,18 +320,21 @@ export default async function LandingPage() {
                   cedo em telas pequenas (ver hero-booking-activity.tsx). */}
               <HeroBookingActivity />
               <BrowserFrame url="agendadeunha.com.br/hoje" className="borda-brilho">
-          {/* eslint-disable-next-line @next/next/no-img-element -- os sete prints
-              já saem daqui em WebP de 1600px (316KB somados). Passar por next/image
-              exigiria o sharp em runtime, que não está declarado no package.json e
-              não é rastreado para o bundle standalone do Docker: a otimização
-              falharia no contêiner, não aqui. */}
-                <img
-                  src="/landing/hoje.webp"
-                  alt="A tela Hoje da Agenda de Unha, com os atendimentos do dia e o que precisa de atenção"
-                  width={1600}
-                  height={1000}
-                  fetchPriority="high"
-                  decoding="async"
+                {/* Um resumo de ~16s em vídeo, não o print parado: três telas
+                    reais (Hoje, Agenda, Financeiro) e, no fechamento, uma
+                    cliente fictícia agendando pelo WhatsApp com a Agente de
+                    IA respondendo sozinha — a prova em movimento do que o
+                    título ao lado promete. Sem áudio e com `muted` explícito
+                    (autoplay com som é bloqueado pelo navegador de qualquer
+                    forma, e sairia tocando por cima da narração de quem usa
+                    leitor de tela) e `loop` fecha o ciclo sozinho. */}
+                <HeroDemoVideo
+                  src="/landing/hero-demo.mp4"
+                  aria-label="Demonstração do Agenda de Unha: telas de Hoje, Agenda e Financeiro, e uma cliente agendando um horário pelo WhatsApp com a Agente de IA"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
                   className="block aspect-[8/5] w-full object-cover object-top"
                 />
               </BrowserFrame>
