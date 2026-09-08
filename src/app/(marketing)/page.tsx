@@ -330,11 +330,13 @@ export default async function LandingPage() {
                     leitor de tela) e `loop` fecha o ciclo sozinho. */}
                 <HeroDemoVideo
                   src="/landing/hero-demo.mp4"
+                  poster="/landing/hero-demo-poster.webp"
                   aria-label="Demonstração do Agenda de Unha: telas de Hoje, Agenda e Financeiro, e uma cliente agendando um horário pelo WhatsApp com a Agente de IA"
                   autoPlay
                   loop
                   muted
                   playsInline
+                  preload="auto"
                   className="block aspect-[8/5] w-full object-cover object-top"
                 />
               </BrowserFrame>
