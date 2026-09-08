@@ -14,7 +14,6 @@ import {
   SectionHead,
 } from "@/components/marketing/primitives";
 import { Reveal } from "@/components/marketing/reveal";
-import { HeroBookingActivity } from "@/components/marketing/hero-booking-activity";
 import { HeroDemoVideo } from "@/components/marketing/hero-demo-video";
 import { ProductShowcase } from "@/components/marketing/showcase";
 import { BrandLogo } from "@/components/brand";
@@ -315,10 +314,12 @@ export default async function LandingPage() {
                 é o pior caso de repaint justamente onde está a maior parte do
                 tráfego. */}
             <div className="relative animate-fade-in mockup-tilt [animation-delay:200ms] lg:animate-mockup-in">
-              {/* A atividade ambiente entra por trás/na frente do painel via
-                  posicionamento absoluto — não empurra layout nenhum, e some
-                  cedo em telas pequenas (ver hero-booking-activity.tsx). */}
-              <HeroBookingActivity />
+              {/* Sem os cartões flutuantes ambiente que existiam aqui antes
+                  (Nova cliente / Horário confirmado / etc.): a demonstração
+                  abaixo já mostra a conversa real com a Agente de IA e a
+                  confirmação no painel dentro da própria imagem — sobrepor
+                  os cartões abstratos por cima só duplicava a mensagem e
+                  brigava visualmente com ela. */}
               <BrowserFrame url="agendadeunha.com.br/hoje" className="borda-brilho">
                 {/* WebP animado, não o print parado: o painel Hoje reagindo
                     ao vivo enquanto uma cliente fictícia agenda pelo
