@@ -1,39 +1,48 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
- * O vídeo de demonstração do hero — ~16s, sem som, em loop.
+ * A demonstração do hero — WebP animado, não vídeo.
  *
- * Dupla garantia de que ele começa sozinho, sem nenhum clique: o atributo
- * `autoPlay` no HTML (funciona sem JS, e o `muted` já satisfaz a política de
- * autoplay de todo navegador) MAIS uma chamada explícita a `.play()` aqui,
- * porque autoplay por atributo pode ser recusado silenciosamente em
- * combinações específicas de navegador/extensão/política do Windows — a
- * chamada por JS é o reforço para esses casos, e o `.catch()` evita erro no
- * console quando o navegador realmente bloqueia (aí ele fica parado na
- * capa, que já é a tela Hoje de verdade, nunca um quadro em branco).
+ * Foi vídeo (`<video autoPlay muted loop>`) antes disso, e o problema não
+ * era o código: navegador em modo de economia de dados (comum no Android) e
+ * algumas combinações de Windows recusam autoplay de `<video>` mesmo com
+ * `muted`, e mostram um botão de play por cima — política do navegador,
+ * nenhum atributo de HTML muda isso. Imagem animada (WebP/GIF) não passa
+ * por essa política nenhuma: todo navegador sempre anima, sempre em loop,
+ * sem exceção — é a única forma de garantir "toca sozinho, sem clicar em
+ * nada" de verdade, em qualquer aparelho.
  *
- * Quem pediu menos movimento no sistema não deveria receber 16 segundos de
- * vídeo tocando sozinho — bem acima dos ~5s que a WCAG usa como referência
- * para conteúdo que precisa de controle de pausa. Pausado na capa (a tela
- * Hoje), ainda comunica o produto parado.
+ * O preço é não dar pra pausar uma imagem animada por CSS de forma
+ * confiável entre navegadores — por isso quem pede menos movimento no
+ * sistema recebe a CAPA parada (a mesma cena, primeiro quadro) no lugar da
+ * animação, decidido aqui.
  */
-export function HeroDemoVideo(props: React.VideoHTMLAttributes<HTMLVideoElement>) {
-  const ref = useRef<HTMLVideoElement>(null);
+function subscribeReducedMotion(callback: () => void) {
+  const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+  mq.addEventListener("change", callback);
+  return () => mq.removeEventListener("change", callback);
+}
+function snapshotReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+function serverSnapshotReducedMotion() {
+  return false;
+}
 
-  useEffect(() => {
-    const video = ref.current;
-    if (!video) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      video.pause();
-      video.currentTime = 0;
-      return;
-    }
-    video.play().catch(() => {
-      // Bloqueado pelo navegador — fica na capa (poster), sem erro no console.
-    });
-  }, []);
+export function HeroDemoVideo({
+  src,
+  poster,
+  alt,
+  ...props
+}: {
+  src: string;
+  poster: string;
+  alt: string;
+} & Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "alt">) {
+  const reduced = useSyncExternalStore(subscribeReducedMotion, snapshotReducedMotion, serverSnapshotReducedMotion);
 
-  return <video ref={ref} {...props} />;
+  // eslint-disable-next-line @next/next/no-img-element -- WebP animado; next/image não reproduz o loop.
+  return <img src={reduced ? poster : src} alt={alt} {...props} />;
 }

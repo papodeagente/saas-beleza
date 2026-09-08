@@ -320,23 +320,20 @@ export default async function LandingPage() {
                   cedo em telas pequenas (ver hero-booking-activity.tsx). */}
               <HeroBookingActivity />
               <BrowserFrame url="agendadeunha.com.br/hoje" className="borda-brilho">
-                {/* Um resumo de ~16s em vídeo, não o print parado: três telas
-                    reais (Hoje, Agenda, Financeiro) e, no fechamento, uma
-                    cliente fictícia agendando pelo WhatsApp com a Agente de
-                    IA respondendo sozinha — a prova em movimento do que o
-                    título ao lado promete. Sem áudio e com `muted` explícito
-                    (autoplay com som é bloqueado pelo navegador de qualquer
-                    forma, e sairia tocando por cima da narração de quem usa
-                    leitor de tela) e `loop` fecha o ciclo sozinho. */}
+                {/* WebP animado, não o print parado: o painel Hoje reagindo
+                    ao vivo enquanto uma cliente fictícia agenda pelo
+                    WhatsApp com a Agente de IA respondendo sozinha — a
+                    prova em movimento do que o título ao lado promete, em
+                    loop infinito e tocando sozinha em qualquer navegador
+                    (ver o comentário em `HeroDemoVideo` sobre por que é
+                    imagem animada e não vídeo). */}
                 <HeroDemoVideo
-                  src="/landing/hero-demo.mp4"
+                  src="/landing/hero-demo.webp"
                   poster="/landing/hero-demo-poster.webp"
-                  aria-label="Demonstração do Agenda de Unha: telas de Hoje, Agenda e Financeiro, e uma cliente agendando um horário pelo WhatsApp com a Agente de IA"
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  preload="auto"
+                  alt="Demonstração do Agenda de Unha: o painel Hoje reagindo ao vivo enquanto uma cliente agenda um horário pelo WhatsApp com a Agente de IA"
+                  width={1400}
+                  height={875}
+                  fetchPriority="high"
                   className="block aspect-[8/5] w-full object-cover object-top"
                 />
               </BrowserFrame>
