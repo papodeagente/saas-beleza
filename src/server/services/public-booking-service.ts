@@ -29,7 +29,18 @@ import { formatTz } from "@/lib/tz";
 
 export type PublicOrganization = {
   ctx: TenantContext;
-  organization: { id: number; name: string; slug: string; timezone: string };
+  organization: {
+    id: number;
+    name: string;
+    slug: string;
+    timezone: string;
+    /** Só o que a tela pública precisa pra montar `<img src=".../logo?v=">` sem servir bytes aqui. */
+    hasLogo: boolean;
+    logoVersion: number;
+    whatsapp: string | null;
+    instagram: string | null;
+    hours: string | null;
+  };
   branches: Array<{ id: number; name: string; address: string | null; phone: string | null }>;
   services: Array<{
     id: number;
@@ -131,10 +142,37 @@ export async function getPublicOrganization(slug: string): Promise<PublicOrganiz
 
   return {
     ctx: publicContext(org),
-    organization: { id: org.id, name: org.name, slug: org.slug, timezone: org.timezone },
+    organization: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      timezone: org.timezone,
+      hasLogo: Boolean(org.logoDataBase64),
+      logoVersion: org.logoVersion,
+      whatsapp: org.marketplaceWhatsapp,
+      instagram: org.marketplaceInstagram,
+      hours: org.marketplaceHours,
+    },
     branches: branchRows,
     services: serviceRows,
   };
+}
+
+/** Bytes da foto do estabelecimento, para a rota pública que a serve. */
+export async function getPublicLogo(
+  slug: string,
+): Promise<{ mime: string; bytes: Buffer; version: number } | null> {
+  const [row] = await db
+    .select({
+      mime: organizations.logoMime,
+      dataBase64: organizations.logoDataBase64,
+      version: organizations.logoVersion,
+    })
+    .from(organizations)
+    .where(eq(organizations.slug, slug))
+    .limit(1);
+  if (!row?.dataBase64 || !row.mime) return null;
+  return { mime: row.mime, bytes: Buffer.from(row.dataBase64, "base64"), version: row.version };
 }
 
 export async function getPublicProfessionals(ctx: TenantContext, serviceId: number) {

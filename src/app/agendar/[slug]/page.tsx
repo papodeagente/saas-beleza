@@ -31,10 +31,17 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
     notFound();
   }
 
+  const primeiraUnidadeComEndereco = org.branches.find((b) => b.address)?.address ?? null;
+
   return (
     <BookingFlow
       slug={slug}
       organizationName={org.organization.name}
+      logoUrl={org.organization.hasLogo ? `/agendar/${slug}/logo?v=${org.organization.logoVersion}` : null}
+      whatsapp={org.organization.whatsapp}
+      instagram={org.organization.instagram}
+      hours={org.organization.hours}
+      address={primeiraUnidadeComEndereco}
       /* O relógio da tela é o do SALÃO. Sem isto, quem abre a página de outro
          fuso vê o dia da semana do próprio relógio ao lado de uma hora que veio
          pronta do servidor — "quarta às 21:00" para um horário que no salão é

@@ -1,7 +1,19 @@
 "use client";
 
 import { parseISO } from "date-fns";
-import { ArrowLeft, CalendarCheck, CalendarPlus, Check, ChevronRight, Clock, MapPin, ShieldCheck } from "lucide-react";
+import {
+  ArrowLeft,
+  AtSign,
+  CalendarCheck,
+  CalendarPlus,
+  Check,
+  ChevronRight,
+  Clock,
+  MapPin,
+  MessageCircle,
+  ShieldCheck,
+  Store,
+} from "lucide-react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -41,12 +53,22 @@ const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 export function BookingFlow({
   slug,
   organizationName,
+  logoUrl,
+  whatsapp,
+  instagram,
+  hours,
+  address,
   fuso,
   branches,
   services,
 }: {
   slug: string;
   organizationName: string;
+  logoUrl: string | null;
+  whatsapp: string | null;
+  instagram: string | null;
+  hours: string | null;
+  address: string | null;
   /**
    * O relógio da tela é o do SALÃO.
    *
@@ -269,6 +291,11 @@ export function BookingFlow({
       <div className="mx-auto grid min-h-dvh max-w-[1120px] overflow-hidden bg-surface-raised shadow-[0_30px_90px_rgb(67_35_88/0.14)] lg:min-h-[calc(100dvh-48px)] lg:grid-cols-[360px_minmax(0,1fr)] lg:rounded-overlay">
         <BookingAside
           organizationName={organizationName}
+          logoUrl={logoUrl}
+          whatsapp={whatsapp}
+          instagram={instagram}
+          hours={hours}
+          address={address}
           step={step}
           service={service}
           branch={branch}
@@ -581,17 +608,43 @@ export function BookingFlow({
 
 function BookingAside({
   organizationName,
+  logoUrl,
+  whatsapp,
+  instagram,
+  hours,
+  address,
   step,
   service,
   branch,
   slot,
 }: {
   organizationName: string;
+  logoUrl: string | null;
+  whatsapp: string | null;
+  instagram: string | null;
+  hours: string | null;
+  address: string | null;
   step: Step;
   service: Service | null;
   branch: Branch | null;
   slot: PublicSlot | null;
 }) {
+  const links = [
+    whatsapp
+      ? { key: "whatsapp", label: "WhatsApp", href: `https://wa.me/55${whatsapp}`, Icon: MessageCircle }
+      : null,
+    instagram
+      ? { key: "instagram", label: "Instagram", href: `https://instagram.com/${instagram}`, Icon: AtSign }
+      : null,
+    address
+      ? {
+          key: "mapa",
+          label: "Como chegar",
+          href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`,
+          Icon: MapPin,
+        }
+      : null,
+  ].filter((v): v is { key: string; label: string; href: string; Icon: typeof MessageCircle } => v !== null);
   const steps: Array<{ key: Step; label: string }> = [
     { key: "service", label: "Serviço" },
     { key: "time", label: "Data e hora" },
@@ -619,10 +672,42 @@ function BookingAside({
       <div aria-hidden className="absolute -bottom-24 -left-20 size-72 rounded-pill bg-white/5" />
       <div className="relative">
         <BrandLogo compact variant="white" />
-        <div className="mt-4 min-w-0 lg:mt-6">
-          <p className="truncate text-label font-semibold text-white">{organizationName}</p>
-          <p className="mt-0.5 text-caption text-white">Cuidado no seu tempo</p>
+        <div className="mt-4 flex min-w-0 items-center gap-3 lg:mt-6">
+          {/* A foto é do ESTABELECIMENTO, não da plataforma — por isso vem
+              maior e junto do nome, enquanto a marca Agenda de Unha (acima)
+              fica pequena. Sem foto cadastrada, um ícone genérico no lugar:
+              nunca um `<img>` quebrado. */}
+          <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-pill border border-white/25 bg-night/18">
+            {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element -- vem de outra origem (rota própria por slug), next/image exigiria configurar domínio para algo que já é servido com cache correto.
+              <img src={logoUrl} alt="" className="size-full object-cover" />
+            ) : (
+              <Store aria-hidden className="size-5 text-white" />
+            )}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-label font-semibold text-white">{organizationName}</p>
+            <p className="mt-0.5 truncate text-caption text-white">{hours || "Cuidado no seu tempo"}</p>
+          </div>
         </div>
+
+        {links.length > 0 ? (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {links.map(({ key, label, href, Icon }) => (
+              <li key={key}>
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 rounded-pill bg-night/18 px-2.5 py-1.5 text-meta font-semibold text-white transition-colors hover:bg-night/28"
+                >
+                  <Icon aria-hidden className="size-3.5" />
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       <div className="relative mt-6 hidden lg:block">

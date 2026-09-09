@@ -1,16 +1,16 @@
 "use client";
 
-import { AlertTriangle, ExternalLink, MapPin, Store } from "lucide-react";
+import { AlertTriangle, Camera, ExternalLink, MapPin, Store, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { formatBRL } from "@/lib/money";
-import { type CadastroResult, salvarVitrineAction } from "./actions";
+import { type CadastroResult, removerLogoAction, salvarLogoAction, salvarVitrineAction } from "./actions";
 import { BranchSheet, type BranchParaEditar } from "./branch-sheet";
 
 export type EstadoDaVitrine = {
@@ -18,12 +18,39 @@ export type EstadoDaVitrine = {
   bio: string | null;
   whatsapp: string | null;
   instagram: string | null;
+  hours: string | null;
   nome: string;
   slug: string;
+  logoUrl: string | null;
   servicosPublicados: number;
   precoMinCents: number | null;
   unidades: Array<BranchParaEditar & { active: boolean; pronta: boolean }>;
 };
+
+/**
+ * Comprime no NAVEGADOR antes de subir.
+ *
+ * O servidor ainda recusa o que passar do teto (ver `LOGO_MAX_BASE64_CHARS`
+ * em `actions.ts`) — isto aqui é o caminho feliz, não a garantia de segurança.
+ * 640px de lado maior é generoso para um avatar circular de até uns 100px na
+ * tela; qualidade 0.82 em JPEG fica bem abaixo do teto do servidor até para
+ * fotos tiradas direto do celular.
+ */
+async function comprimirImagem(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const lado = Math.min(640, Math.max(bitmap.width, bitmap.height));
+  const escala = lado / Math.max(bitmap.width, bitmap.height);
+  const w = Math.round(bitmap.width * escala);
+  const h = Math.round(bitmap.height * escala);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas não suportado neste navegador.");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
 
 /**
  * A vitrine pública — onde o salão decide se aparece no diretório de manicures.
@@ -39,24 +66,65 @@ export type EstadoDaVitrine = {
 export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
   const router = useRouter();
   const [listed, setListed] = useState(estado.listed);
+  const [nome, setNome] = useState(estado.nome);
   const [bio, setBio] = useState(estado.bio ?? "");
   const [whatsapp, setWhatsapp] = useState(estado.whatsapp ?? "");
   const [instagram, setInstagram] = useState(estado.instagram ?? "");
+  const [hours, setHours] = useState(estado.hours ?? "");
+  const [logoUrl, setLogoUrl] = useState(estado.logoUrl);
   const [pending, startTransition] = useTransition();
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<CadastroResult | null>(null);
   const [editando, setEditando] = useState<BranchParaEditar | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const prontas = estado.unidades.filter((u) => u.active && u.pronta);
   const podeAparecer = prontas.length > 0 && estado.servicosPublicados > 0;
+
+  async function escolherFoto(file: File) {
+    setUploadingLogo(true);
+    try {
+      const dataUrl = await comprimirImagem(file);
+      const r = await salvarLogoAction({ dataUrl });
+      if (r.ok) {
+        setLogoUrl(dataUrl);
+        toast.success("Foto atualizada");
+        router.refresh();
+      } else {
+        toast.error(r.error);
+      }
+    } catch {
+      toast.error("Não consegui processar essa imagem. Tente outro arquivo.");
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
+  function removerFoto() {
+    setUploadingLogo(true);
+    startTransition(async () => {
+      const r = await removerLogoAction();
+      setUploadingLogo(false);
+      if (r.ok) {
+        setLogoUrl(null);
+        toast.success("Foto removida");
+        router.refresh();
+      } else {
+        toast.error(r.error);
+      }
+    });
+  }
 
   function salvar(proximoListed = listed) {
     setError(null);
     startTransition(async () => {
       const r = await salvarVitrineAction({
         listed: proximoListed,
+        name: nome,
         bio,
         whatsapp,
         instagram,
+        hours,
       });
       if (r.ok) {
         setListed(proximoListed);
@@ -131,6 +199,57 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
 
         {/* Como o salão se apresenta */}
         <div className="space-y-4 px-4 py-4">
+          <div className="flex items-center gap-4">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void escolherFoto(file);
+              }}
+            />
+            <span className="relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-pill border border-line bg-surface-sunken">
+              {logoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- prévia de um data URL / rota própria; next/image não serve nenhum dos dois bem aqui.
+                <img src={logoUrl} alt="" className="size-full object-cover" />
+              ) : (
+                <Store aria-hidden className="size-6 text-ink-tertiary" />
+              )}
+            </span>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={uploadingLogo}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Camera aria-hidden />
+                  {logoUrl ? "Trocar foto" : "Adicionar foto"}
+                </Button>
+                {logoUrl ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={removerFoto} disabled={uploadingLogo}>
+                    <X aria-hidden />
+                    Remover
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-caption text-ink-secondary">Aparece na sua página de agendamento. PNG, JPEG ou WebP.</p>
+            </div>
+          </div>
+
+          <Field
+            label="Nome do estabelecimento"
+            htmlFor="vitrine-nome"
+            hint="Aparece no topo da sua página de agendamento e em toda a plataforma."
+          >
+            <Input id="vitrine-nome" value={nome} maxLength={80} onChange={(e) => setNome(e.target.value)} />
+          </Field>
+
           <Field
             label="Sobre o seu trabalho"
             htmlFor="vitrine-bio"
@@ -153,6 +272,15 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
                 value={whatsapp}
                 onChange={(e) => setWhatsapp(e.target.value)}
                 placeholder="(84) 99999-0000"
+              />
+            </Field>
+            <Field label="Horário de atendimento" htmlFor="vitrine-horario" optional>
+              <Input
+                id="vitrine-horario"
+                value={hours}
+                maxLength={80}
+                onChange={(e) => setHours(e.target.value)}
+                placeholder="Seg a sáb, 9h às 19h"
               />
             </Field>
             <Field label="Instagram" htmlFor="vitrine-insta" optional>

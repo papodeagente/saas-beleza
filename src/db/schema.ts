@@ -207,6 +207,25 @@ export const organizations = pgTable("organizations", {
    *  salão atende no mesmo número que divulga. */
   marketplaceWhatsapp: text("marketplace_whatsapp"),
   marketplaceInstagram: text("marketplace_instagram"),
+  /**
+   * Dica curta de horário para a página de agendamento — texto livre
+   * ("Seg a sáb, 9h às 19h"), não uma grade estruturada. A agenda real de
+   * cada profissional já existe em outro lugar; isto é só o que aparece
+   * para a cliente antes mesmo de escolher o serviço.
+   */
+  marketplaceHours: text("marketplace_hours"),
+  /**
+   * Foto do estabelecimento na página pública de agendamento — mesmo padrão
+   * de `whatsapp_profile_pictures`: bytes guardados no banco, nunca um link,
+   * porque não existe serviço de arquivos neste projeto e um link expira ou
+   * aponta pra fora. O arquivo já chega comprimido do navegador (ver
+   * `gestao/actions.ts`), então o teto aqui é generoso de propósito.
+   */
+  logoMime: text("logo_mime"),
+  logoDataBase64: text("logo_data_base64"),
+  /** Sobe a cada troca de foto — vira `?v=` no `<img>` público para não
+   *  prender a cliente numa capa antiga por causa de cache do navegador. */
+  logoVersion: integer("logo_version").notNull().default(0),
 
   /**
    * Quando a clínica assistiu o vídeo de boas-vindas — `null` até lá.

@@ -135,6 +135,11 @@ export default async function ManagementPage() {
         bio: organizations.marketplaceBio,
         whatsapp: organizations.marketplaceWhatsapp,
         instagram: organizations.marketplaceInstagram,
+        hours: organizations.marketplaceHours,
+        // Só se HÁ foto e em que versão — nunca os bytes aqui, que servem só
+        // à rota própria (`/agendar/[slug]/logo`) que a serve de fato.
+        hasLogo: sql<boolean>`${organizations.logoDataBase64} is not null`,
+        logoVersion: organizations.logoVersion,
       })
       .from(organizations)
       .where(eq(organizations.id, ctx.organizationId))
@@ -227,6 +232,10 @@ export default async function ManagementPage() {
               bio: contaRows[0]?.bio ?? null,
               whatsapp: contaRows[0]?.whatsapp ?? null,
               instagram: contaRows[0]?.instagram ?? null,
+              hours: contaRows[0]?.hours ?? null,
+              logoUrl: contaRows[0]?.hasLogo
+                ? `/agendar/${ctx.organizationSlug}/logo?v=${contaRows[0].logoVersion}`
+                : null,
               nome: ctx.organizationName,
               slug: ctx.organizationSlug,
               servicosPublicados: catalogoRows[0]?.publicados ?? 0,

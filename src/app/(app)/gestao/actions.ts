@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { validateDayRanges } from "@/domain/working-hours";
@@ -348,6 +348,13 @@ export async function createMemberAction(input: unknown): Promise<CadastroResult
 const vitrineSchema = z.object({
   /** O interruptor. Nasce desligado e só a clínica liga. */
   listed: z.boolean(),
+  /**
+   * Nome do estabelecimento — o mesmo `organizations.name` usado em toda a
+   * plataforma (recibos, automações, esta própria tela). Editável aqui
+   * porque é aqui que a dona do salão pensa em "como as clientes me veem",
+   * mas o efeito vale em todo lugar que mostra o nome.
+   */
+  name: z.string().trim().min(2, "Informe o nome do estabelecimento.").max(80, "Máximo de 80 caracteres."),
   bio: z.string().trim().max(280, "Máximo de 280 caracteres.").transform((v) => v || null),
   whatsapp: z.string().trim().transform((v) => (v ? normalizePhone(v) : null)),
   instagram: z
@@ -358,6 +365,20 @@ const vitrineSchema = z.object({
     // de onde estiver, e recusar por causa do formato é atrito à toa.
     .transform((v) => v.replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/^@/, "").replace(/\/$/, ""))
     .transform((v) => v || null),
+  /** Frase livre — "Seg a sáb, 9h às 19h" — não uma grade estruturada. */
+  hours: z.string().trim().max(80, "Máximo de 80 caracteres.").transform((v) => v || null),
+});
+
+/**
+ * A foto do estabelecimento chega já comprimida pelo navegador (canvas, no
+ * cliente) como data URL — o teto aqui é para o que sobra depois de um
+ * cliente hostil ignorar essa compressão, não o caminho normal.
+ */
+const LOGO_MAX_BASE64_CHARS = 900_000; // ~650KB de imagem de verdade
+const logoSchema = z.object({
+  dataUrl: z
+    .string()
+    .regex(/^data:image\/(png|jpeg|webp);base64,/, "Envie uma imagem PNG, JPEG ou WebP."),
 });
 
 /**
@@ -373,7 +394,7 @@ export async function salvarVitrineAction(input: unknown): Promise<CadastroResul
   try {
     const ctx = await requireSession();
     requireRole(ctx, "admin");
-    const { listed, bio, whatsapp, instagram } = parsed.data;
+    const { listed, name, bio, whatsapp, instagram, hours } = parsed.data;
 
     const [antes] = await db
       .select({ listed: organizations.marketplaceListed })
@@ -385,9 +406,11 @@ export async function salvarVitrineAction(input: unknown): Promise<CadastroResul
       .update(organizations)
       .set({
         marketplaceListed: listed,
+        name,
         marketplaceBio: bio,
         marketplaceWhatsapp: whatsapp,
         marketplaceInstagram: instagram,
+        marketplaceHours: hours,
         // Carimba só na virada de desligado para ligado: é a data de entrada no
         // diretório, não a de qualquer salvamento.
         ...(listed && !antes?.listed ? { marketplaceListedAt: new Date() } : {}),
@@ -396,6 +419,62 @@ export async function salvarVitrineAction(input: unknown): Promise<CadastroResul
 
     revalidatePath("/gestao");
     revalidatePath("/manicures");
+    revalidatePath("/agendar/[slug]", "page");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * A foto que aparece no topo da página pública de agendamento.
+ *
+ * Guardada como bytes no próprio banco — mesmo padrão de
+ * `whatsapp_profile_pictures` — porque este projeto não tem serviço de
+ * arquivos, e um link de CDN expira ou aponta pra fora da nossa conta.
+ * `logoVersion` sobe a cada troca: é o `?v=` que a página pública usa para
+ * não prender ninguém numa capa antiga por causa de cache do navegador.
+ */
+export async function salvarLogoAction(input: unknown): Promise<CadastroResult> {
+  const parsed = logoSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed);
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+
+    const [, mime, base64] = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(parsed.data.dataUrl) ?? [];
+    if (!mime || !base64) return { ok: false, error: "Envie uma imagem PNG, JPEG ou WebP." };
+    if (base64.length > LOGO_MAX_BASE64_CHARS) {
+      return { ok: false, error: "Imagem muito grande. Escolha uma foto menor." };
+    }
+
+    await db
+      .update(organizations)
+      .set({ logoMime: mime, logoDataBase64: base64, logoVersion: sql`${organizations.logoVersion} + 1` })
+      .where(eq(organizations.id, ctx.organizationId));
+
+    revalidatePath("/gestao");
+    revalidatePath("/manicures");
+    revalidatePath("/agendar/[slug]", "page");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function removerLogoAction(): Promise<CadastroResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+
+    await db
+      .update(organizations)
+      .set({ logoMime: null, logoDataBase64: null, logoVersion: sql`${organizations.logoVersion} + 1` })
+      .where(eq(organizations.id, ctx.organizationId));
+
+    revalidatePath("/gestao");
+    revalidatePath("/manicures");
+    revalidatePath("/agendar/[slug]", "page");
     return { ok: true };
   } catch (error) {
     return failure(error);
