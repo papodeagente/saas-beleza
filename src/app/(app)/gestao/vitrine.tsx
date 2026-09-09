@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Camera, ExternalLink, MapPin, Store, X } from "lucide-react";
+import { AlertTriangle, Camera, ExternalLink, MapPin, Store } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
@@ -18,6 +18,9 @@ export type EstadoDaVitrine = {
   bio: string | null;
   whatsapp: string | null;
   instagram: string | null;
+  facebook: string | null;
+  tiktok: string | null;
+  mapsUrl: string | null;
   hours: string | null;
   nome: string;
   slug: string;
@@ -70,6 +73,9 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
   const [bio, setBio] = useState(estado.bio ?? "");
   const [whatsapp, setWhatsapp] = useState(estado.whatsapp ?? "");
   const [instagram, setInstagram] = useState(estado.instagram ?? "");
+  const [facebook, setFacebook] = useState(estado.facebook ?? "");
+  const [tiktok, setTiktok] = useState(estado.tiktok ?? "");
+  const [mapsUrl, setMapsUrl] = useState(estado.mapsUrl ?? "");
   const [hours, setHours] = useState(estado.hours ?? "");
   const [logoUrl, setLogoUrl] = useState(estado.logoUrl);
   const [pending, startTransition] = useTransition();
@@ -124,6 +130,9 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
         bio,
         whatsapp,
         instagram,
+        facebook,
+        tiktok,
+        mapsUrl,
         hours,
       });
       if (r.ok) {
@@ -211,33 +220,45 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
                 if (file) void escolherFoto(file);
               }}
             />
-            <span className="relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-pill border border-line bg-surface-sunken">
+            {/* Avatar grande + o "menu" de ações ao lado — enviar ou remover
+                a foto — em vez de um botãozinho solto ao lado de um círculo
+                pequeno, do jeito que a dona do salão pediu. */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingLogo}
+              className="group relative flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-pill border border-line bg-surface-sunken"
+              aria-label={logoUrl ? "Trocar foto" : "Adicionar foto"}
+            >
               {logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- prévia de um data URL / rota própria; next/image não serve nenhum dos dois bem aqui.
                 <img src={logoUrl} alt="" className="size-full object-cover" />
               ) : (
-                <Store aria-hidden className="size-6 text-ink-tertiary" />
+                <Store aria-hidden className="size-8 text-ink-tertiary" />
               )}
-            </span>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex flex-wrap gap-2">
-                <Button
+              <span className="absolute inset-0 flex items-center justify-center bg-ink/0 opacity-0 transition-all group-hover:bg-ink/40 group-hover:opacity-100">
+                <Camera aria-hidden className="size-6 text-white" />
+              </span>
+            </button>
+            <div className="flex flex-col items-start gap-1 text-label">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingLogo}
+                className="font-semibold text-accent hover:underline"
+              >
+                {uploadingLogo ? "Enviando…" : logoUrl ? "Trocar foto" : "Enviar uma foto"}
+              </button>
+              {logoUrl ? (
+                <button
                   type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={uploadingLogo}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={removerFoto}
+                  disabled={uploadingLogo}
+                  className="font-semibold text-ink-secondary hover:text-danger hover:underline"
                 >
-                  <Camera aria-hidden />
-                  {logoUrl ? "Trocar foto" : "Adicionar foto"}
-                </Button>
-                {logoUrl ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={removerFoto} disabled={uploadingLogo}>
-                    <X aria-hidden />
-                    Remover
-                  </Button>
-                ) : null}
-              </div>
+                  Remover foto
+                </button>
+              ) : null}
               <p className="text-caption text-ink-secondary">Aparece na sua página de agendamento. PNG, JPEG ou WebP.</p>
             </div>
           </div>
@@ -283,12 +304,41 @@ export function Vitrine({ estado }: { estado: EstadoDaVitrine }) {
                 placeholder="Seg a sáb, 9h às 19h"
               />
             </Field>
-            <Field label="Instagram" htmlFor="vitrine-insta" optional>
+            <Field label="Instagram" htmlFor="vitrine-insta" optional hint="Link do perfil ou só o @.">
               <Input
                 id="vitrine-insta"
                 value={instagram}
                 onChange={(e) => setInstagram(e.target.value)}
-                placeholder="@seusalao"
+                placeholder="https://instagram.com/seusalao"
+              />
+            </Field>
+            <Field label="Facebook" htmlFor="vitrine-face" optional hint="Link da página ou só o nome.">
+              <Input
+                id="vitrine-face"
+                value={facebook}
+                onChange={(e) => setFacebook(e.target.value)}
+                placeholder="https://facebook.com/seusalao"
+              />
+            </Field>
+            <Field label="TikTok" htmlFor="vitrine-tiktok" optional hint="Link do perfil ou só o @.">
+              <Input
+                id="vitrine-tiktok"
+                value={tiktok}
+                onChange={(e) => setTiktok(e.target.value)}
+                placeholder="https://tiktok.com/@seusalao"
+              />
+            </Field>
+            <Field
+              label="Localização no Google Maps"
+              htmlFor="vitrine-maps"
+              optional
+              hint='No Google Maps: "Compartilhar" → "Copiar link".'
+            >
+              <Input
+                id="vitrine-maps"
+                value={mapsUrl}
+                onChange={(e) => setMapsUrl(e.target.value)}
+                placeholder="https://maps.app.goo.gl/…"
               />
             </Field>
           </div>

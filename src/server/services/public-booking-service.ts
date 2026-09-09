@@ -39,6 +39,9 @@ export type PublicOrganization = {
     logoVersion: number;
     whatsapp: string | null;
     instagram: string | null;
+    facebook: string | null;
+    tiktok: string | null;
+    mapsUrl: string | null;
     hours: string | null;
   };
   branches: Array<{ id: number; name: string; address: string | null; phone: string | null }>;
@@ -151,6 +154,9 @@ export async function getPublicOrganization(slug: string): Promise<PublicOrganiz
       logoVersion: org.logoVersion,
       whatsapp: org.marketplaceWhatsapp,
       instagram: org.marketplaceInstagram,
+      facebook: org.marketplaceFacebook,
+      tiktok: org.marketplaceTiktok,
+      mapsUrl: org.marketplaceMapsUrl,
       hours: org.marketplaceHours,
     },
     branches: branchRows,

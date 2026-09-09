@@ -206,7 +206,18 @@ export const organizations = pgTable("organizations", {
   /** WhatsApp público, só dígitos. Separado do telefone da unidade: nem todo
    *  salão atende no mesmo número que divulga. */
   marketplaceWhatsapp: text("marketplace_whatsapp"),
+  /**
+   * Instagram, Facebook e TikTok guardam o que a dona colar: o perfil
+   * completo (`https://instagram.com/...`) ou só o @ do jeito que ela
+   * copiar de qualquer lugar. Quem monta o link final decide, na leitura,
+   * se já é uma URL ou se falta completar — texto livre aqui de propósito.
+   */
   marketplaceInstagram: text("marketplace_instagram"),
+  marketplaceFacebook: text("marketplace_facebook"),
+  marketplaceTiktok: text("marketplace_tiktok"),
+  /** Link do Google Maps colado pela própria dona — o pino que ELA escolhe,
+   *  não uma busca por endereço que pode achar outro lugar com nome parecido. */
+  marketplaceMapsUrl: text("marketplace_maps_url"),
   /**
    * Dica curta de horário para a página de agendamento — texto livre
    * ("Seg a sáb, 9h às 19h"), não uma grade estruturada. A agenda real de

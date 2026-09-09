@@ -86,7 +86,14 @@ export default async function ManagementPage() {
         active: professionals.active,
         serviceCount: sql<number>`count(distinct ${professionalServices.serviceId})`.mapWith(Number),
         weekdays: sql<number[]>`coalesce(array_agg(distinct ${professionalWorkingHours.weekday}) filter (where ${professionalWorkingHours.weekday} is not null), '{}')`,
-        serviceIds: sql<number[]>`coalesce(array_agg(distinct ${professionalServices.serviceId}) filter (where ${professionalServices.serviceId} is not null), '{}')`,
+        // `array_agg` de bigint volta do Postgres como TEXTO — o `sql<number[]>`
+        // é anotação de tipo, não conversão (mesmo bug já corrigido em
+        // catalogo/page.tsx). Sem o `Number` no map abaixo, salvar o profissional
+        // reenvia essas strings pro schema que exige `number` e a tela mostra
+        // "Invalid input: expected number, received string".
+        serviceIds: sql<
+          number[]
+        >`coalesce(array_agg(distinct ${professionalServices.serviceId}) filter (where ${professionalServices.serviceId} is not null), '{}')`,
       })
       .from(professionals)
       .leftJoin(professionalServices, eq(professionalServices.professionalId, professionals.id))
@@ -135,6 +142,9 @@ export default async function ManagementPage() {
         bio: organizations.marketplaceBio,
         whatsapp: organizations.marketplaceWhatsapp,
         instagram: organizations.marketplaceInstagram,
+        facebook: organizations.marketplaceFacebook,
+        tiktok: organizations.marketplaceTiktok,
+        mapsUrl: organizations.marketplaceMapsUrl,
         hours: organizations.marketplaceHours,
         // Só se HÁ foto e em que versão — nunca os bytes aqui, que servem só
         // à rota própria (`/agendar/[slug]/logo`) que a serve de fato.
@@ -232,6 +242,9 @@ export default async function ManagementPage() {
               bio: contaRows[0]?.bio ?? null,
               whatsapp: contaRows[0]?.whatsapp ?? null,
               instagram: contaRows[0]?.instagram ?? null,
+              facebook: contaRows[0]?.facebook ?? null,
+              tiktok: contaRows[0]?.tiktok ?? null,
+              mapsUrl: contaRows[0]?.mapsUrl ?? null,
               hours: contaRows[0]?.hours ?? null,
               logoUrl: contaRows[0]?.hasLogo
                 ? `/agendar/${ctx.organizationSlug}/logo?v=${contaRows[0].logoVersion}`
@@ -315,7 +328,11 @@ export default async function ManagementPage() {
                         color: professional.color,
                         commissionBps: professional.commissionBps,
                         active: professional.active,
-                        serviceIds: professional.serviceIds,
+                        // Ver o comentário na consulta acima: `array_agg` de
+                        // bigint volta como texto, e sem este `Number` o
+                        // formulário reenviava strings pro schema que exige
+                        // number ao salvar.
+                        serviceIds: professional.serviceIds.map(Number),
                       }}
                       services={serviceOptions}
                     />

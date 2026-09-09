@@ -40,6 +40,9 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
       logoUrl={org.organization.hasLogo ? `/agendar/${slug}/logo?v=${org.organization.logoVersion}` : null}
       whatsapp={org.organization.whatsapp}
       instagram={org.organization.instagram}
+      facebook={org.organization.facebook}
+      tiktok={org.organization.tiktok}
+      mapsUrl={org.organization.mapsUrl}
       hours={org.organization.hours}
       address={primeiraUnidadeComEndereco}
       /* O relógio da tela é o do SALÃO. Sem isto, quem abre a página de outro

@@ -253,6 +253,13 @@
       "when": 1788983048497,
       "tag": "0035_wide_layla_miller",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788990879619,
+      "tag": "0036_smooth_cyclops",
+      "breakpoints": true
     }
   ]
 }

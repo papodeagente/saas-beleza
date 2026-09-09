@@ -3,14 +3,12 @@
 import { parseISO } from "date-fns";
 import {
   ArrowLeft,
-  AtSign,
   CalendarCheck,
   CalendarPlus,
   Check,
   ChevronRight,
   Clock,
   MapPin,
-  MessageCircle,
   ShieldCheck,
   Store,
 } from "lucide-react";
@@ -23,6 +21,7 @@ import { formatBRL } from "@/lib/money";
 import { dateISOInTz, formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand";
+import { FacebookIcon, InstagramIcon, MapsIcon, TiktokIcon, WhatsappIcon } from "@/components/brand-icons";
 import { somarDias } from "./calendario";
 import { baixarICS, montarICS } from "./ics";
 import {
@@ -56,6 +55,9 @@ export function BookingFlow({
   logoUrl,
   whatsapp,
   instagram,
+  facebook,
+  tiktok,
+  mapsUrl,
   hours,
   address,
   fuso,
@@ -67,6 +69,9 @@ export function BookingFlow({
   logoUrl: string | null;
   whatsapp: string | null;
   instagram: string | null;
+  facebook: string | null;
+  tiktok: string | null;
+  mapsUrl: string | null;
   hours: string | null;
   address: string | null;
   /**
@@ -294,6 +299,9 @@ export function BookingFlow({
           logoUrl={logoUrl}
           whatsapp={whatsapp}
           instagram={instagram}
+          facebook={facebook}
+          tiktok={tiktok}
+          mapsUrl={mapsUrl}
           hours={hours}
           address={address}
           step={step}
@@ -611,6 +619,9 @@ function BookingAside({
   logoUrl,
   whatsapp,
   instagram,
+  facebook,
+  tiktok,
+  mapsUrl,
   hours,
   address,
   step,
@@ -622,6 +633,9 @@ function BookingAside({
   logoUrl: string | null;
   whatsapp: string | null;
   instagram: string | null;
+  facebook: string | null;
+  tiktok: string | null;
+  mapsUrl: string | null;
   hours: string | null;
   address: string | null;
   step: Step;
@@ -629,22 +643,26 @@ function BookingAside({
   branch: Branch | null;
   slot: PublicSlot | null;
 }) {
+  /** Já é link? usa como está. Senão, monta o link padrão a partir do @/nome colado. */
+  const comoLink = (valor: string, montarPadrao: (v: string) => string) =>
+    /^https?:\/\//i.test(valor) ? valor : montarPadrao(valor.replace(/^@/, ""));
+
+  const localizacao =
+    mapsUrl || (address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : null);
+
   const links = [
-    whatsapp
-      ? { key: "whatsapp", label: "WhatsApp", href: `https://wa.me/55${whatsapp}`, Icon: MessageCircle }
-      : null,
+    whatsapp ? { key: "whatsapp", label: "WhatsApp", href: `https://wa.me/55${whatsapp}`, Icon: WhatsappIcon } : null,
     instagram
-      ? { key: "instagram", label: "Instagram", href: `https://instagram.com/${instagram}`, Icon: AtSign }
+      ? { key: "instagram", label: "Instagram", href: comoLink(instagram, (v) => `https://instagram.com/${v}`), Icon: InstagramIcon }
       : null,
-    address
-      ? {
-          key: "mapa",
-          label: "Como chegar",
-          href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`,
-          Icon: MapPin,
-        }
+    facebook
+      ? { key: "facebook", label: "Facebook", href: comoLink(facebook, (v) => `https://facebook.com/${v}`), Icon: FacebookIcon }
       : null,
-  ].filter((v): v is { key: string; label: string; href: string; Icon: typeof MessageCircle } => v !== null);
+    tiktok
+      ? { key: "tiktok", label: "TikTok", href: comoLink(tiktok, (v) => `https://tiktok.com/@${v}`), Icon: TiktokIcon }
+      : null,
+    localizacao ? { key: "mapa", label: "Como chegar", href: localizacao, Icon: MapsIcon } : null,
+  ].filter((v): v is { key: string; label: string; href: string; Icon: typeof WhatsappIcon } => v !== null);
   const steps: Array<{ key: Step; label: string }> = [
     { key: "service", label: "Serviço" },
     { key: "time", label: "Data e hora" },
@@ -691,18 +709,18 @@ function BookingAside({
           </div>
         </div>
 
+        {/* Selo (ícone da marca) em cima, legenda embaixo — mesmo layout da
+            referência que a dona do salão mandou, em vez do selo com texto
+            ao lado que existia antes aqui. */}
         {links.length > 0 ? (
-          <ul className="mt-3 flex flex-wrap gap-2">
+          <ul className="mt-4 flex flex-wrap gap-4">
             {links.map(({ key, label, href, Icon }) => (
               <li key={key}>
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1.5 rounded-pill bg-night/18 px-2.5 py-1.5 text-meta font-semibold text-white transition-colors hover:bg-night/28"
-                >
-                  <Icon aria-hidden className="size-3.5" />
-                  {label}
+                <a href={href} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 text-center">
+                  <span className="flex size-9 shrink-0 overflow-hidden rounded-pill shadow-[0_4px_10px_rgba(0,0,0,.25)] transition-transform hover:scale-105">
+                    <Icon className="size-full" />
+                  </span>
+                  <span className="text-meta font-semibold text-white">{label}</span>
                 </a>
               </li>
             ))}

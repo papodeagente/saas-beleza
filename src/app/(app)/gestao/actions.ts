@@ -357,14 +357,18 @@ const vitrineSchema = z.object({
   name: z.string().trim().min(2, "Informe o nome do estabelecimento.").max(80, "Máximo de 80 caracteres."),
   bio: z.string().trim().max(280, "Máximo de 280 caracteres.").transform((v) => v || null),
   whatsapp: z.string().trim().transform((v) => (v ? normalizePhone(v) : null)),
-  instagram: z
-    .string()
-    .trim()
-    .max(60)
-    // Aceita "@nome", "nome" ou a URL colada do navegador — quem cadastra copia
-    // de onde estiver, e recusar por causa do formato é atrito à toa.
-    .transform((v) => v.replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/^@/, "").replace(/\/$/, ""))
-    .transform((v) => v || null),
+  /**
+   * Instagram, Facebook e TikTok: aceita o link inteiro colado do navegador
+   * OU só o @, e o mesmo texto que o cliente digitou é o que fica guardado
+   * — quem monta o `href` na página pública decide se já é uma URL. Recusar
+   * por causa do formato aqui seria atrito à toa: cada rede cola de um jeito
+   * diferente (perfil, "compartilhar", @usuário).
+   */
+  instagram: z.string().trim().max(200).transform((v) => v || null),
+  facebook: z.string().trim().max(200).transform((v) => v || null),
+  tiktok: z.string().trim().max(200).transform((v) => v || null),
+  /** Colado pela própria dona no Google Maps ("Compartilhar" → "Copiar link"). */
+  mapsUrl: z.string().trim().max(500).transform((v) => v || null),
   /** Frase livre — "Seg a sáb, 9h às 19h" — não uma grade estruturada. */
   hours: z.string().trim().max(80, "Máximo de 80 caracteres.").transform((v) => v || null),
 });
@@ -394,7 +398,7 @@ export async function salvarVitrineAction(input: unknown): Promise<CadastroResul
   try {
     const ctx = await requireSession();
     requireRole(ctx, "admin");
-    const { listed, name, bio, whatsapp, instagram, hours } = parsed.data;
+    const { listed, name, bio, whatsapp, instagram, facebook, tiktok, mapsUrl, hours } = parsed.data;
 
     const [antes] = await db
       .select({ listed: organizations.marketplaceListed })
@@ -410,6 +414,9 @@ export async function salvarVitrineAction(input: unknown): Promise<CadastroResul
         marketplaceBio: bio,
         marketplaceWhatsapp: whatsapp,
         marketplaceInstagram: instagram,
+        marketplaceFacebook: facebook,
+        marketplaceTiktok: tiktok,
+        marketplaceMapsUrl: mapsUrl,
         marketplaceHours: hours,
         // Carimba só na virada de desligado para ligado: é a data de entrada no
         // diretório, não a de qualquer salvamento.
