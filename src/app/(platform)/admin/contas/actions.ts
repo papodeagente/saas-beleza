@@ -6,9 +6,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/db";
 import { organizations, plans, subscriptionEvents, subscriptions } from "@/db/schema";
+import type { TenantContext } from "@/server/auth";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import { CreateAccountError, createAccount } from "@/server/services/platform-account-create";
 import { normalizedMrrCents } from "@/server/services/platform-metrics";
+import { saveConnection } from "@/server/services/whatsapp-connection-service";
 
 /**
  * Mutações de assinatura feitas à mão pelo painel da plataforma.
@@ -497,5 +499,65 @@ export async function createAccountAction(input: unknown): Promise<CreateAccount
     if (error instanceof CreateAccountError) return { ok: false, error: error.message };
     const resultado = fail(error, "Não foi possível cadastrar a conta. Tente de novo.");
     return resultado as CreateAccountActionResult;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conectar o WhatsApp de uma cliente pelo painel da plataforma
+// ---------------------------------------------------------------------------
+
+/**
+ * A dona do salão não sabe o que é "URL do servidor uazapi" nem "token da
+ * instância" — e não precisa saber. Isso aqui reusa exatamente
+ * `saveConnection` (o mesmo caminho que a própria clínica usaria em
+ * `/whatsapp`), só que quem cola a URL e o token é a plataforma: depois
+ * disso a cliente só vê "Conectar o aparelho" e escaneia o QR code, do
+ * jeito que já funciona hoje em `PairingCard`.
+ *
+ * `TenantContext` monta na hora, com os dados da CONTA DA CLIENTE (não do
+ * administrador) — é essa organização que a conexão precisa pertencer.
+ */
+const whatsappConnectSchema = z.object({
+  organizationId: orgId,
+  baseUrl: z.string().trim().min(1, "Informe a URL do servidor uazapi."),
+  instanceToken: z.string().trim().min(1, "Informe o token da instância."),
+});
+
+export async function adminConnectWhatsappAction(input: unknown): Promise<ActionResult> {
+  const parsed = whatsappConnectSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0].message };
+  const { organizationId, baseUrl, instanceToken } = parsed.data;
+
+  try {
+    await requirePlatformAdmin();
+
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1);
+    if (!org) return { ok: false, error: "Conta não encontrada." };
+
+    const ctx: TenantContext = {
+      organizationId: org.id,
+      organizationName: org.name,
+      organizationSlug: org.slug,
+      organizationCode: org.publicId,
+      timezone: org.timezone,
+      userId: 0,
+      userName: "Administração da plataforma",
+      userEmail: "",
+      role: "owner",
+    };
+
+    await saveConnection(ctx, { baseUrl, instanceToken });
+    revalidate(organizationId);
+    return { ok: true, message: "Conectado. A cliente já pode entrar e escanear o QR code." };
+  } catch (error) {
+    if (error instanceof Error && error.message === "NOT_PLATFORM_ADMIN") {
+      return { ok: false, error: "Sessão sem permissão de plataforma." };
+    }
+    // Ao contrário de `fail()`, aqui a mensagem de verdade importa: "token
+    // errado" e "este número já está conectado em outra conta" são erros
+    // acionáveis, não um genérico "tente de novo".
+    if (error instanceof Error) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "Não foi possível conectar. Confira a URL e o token." };
   }
 }

@@ -10,7 +10,9 @@ import { formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import { requirePlatformAdmin } from "@/server/platform-auth";
 import { getAccount, listPlans } from "@/server/services/platform-accounts";
+import { getConnectionRow } from "@/server/services/whatsapp-connection-service";
 import { AccountActions } from "./account-actions";
+import { type ConexaoAtual, WhatsappConnectPanel } from "./whatsapp-connect-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -90,15 +92,27 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
   const organizationId = Number((await params).id);
   if (!Number.isInteger(organizationId) || organizationId <= 0) notFound();
 
-  const [account, availablePlans] = await Promise.all([
+  const [account, availablePlans, connectionRow] = await Promise.all([
     getAccount(ctx, organizationId),
     listPlans(),
+    getConnectionRow(organizationId),
   ]);
   if (!account) notFound();
 
   const { organization, subscription, mrrCents, members, usage, timeline } = account;
   const status = subscription ? STATUS[subscription.status] : null;
   const suspended = Boolean(organization.suspendedAt);
+  // O token NUNCA sai daqui — o componente cliente só recebe o que é seguro
+  // de mostrar (status, número pareado), nunca `instanceToken`.
+  const conexao: ConexaoAtual = connectionRow
+    ? {
+        status: connectionRow.status,
+        statusDetail: connectionRow.statusDetail,
+        baseUrl: connectionRow.baseUrl,
+        phoneNumber: connectionRow.phoneNumber,
+        profileName: connectionRow.profileName,
+      }
+    : null;
 
   return (
     <div>
@@ -254,6 +268,8 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
                 </dl>
               </div>
             </Card>
+
+            <WhatsappConnectPanel organizationId={organization.id} conexao={conexao} />
 
             {/* Pessoas com acesso */}
             <Card>
