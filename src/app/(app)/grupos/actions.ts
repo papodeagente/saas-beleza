@@ -287,12 +287,21 @@ export type GroupThread = {
     id: number;
     body: string;
     senderName: string | null;
+    /** Quem falou, já traduzido: nome, ou telefone formatado. */
+    senderLabel: string | null;
+    /** A mesma pessoa em mensagens seguidas — agrupa a fala e fixa a cor. */
+    senderKey: string | null;
     direction: "inbound" | "outbound";
     messageType: string;
     mediaUrl: string | null;
+    mediaMimeType: string | null;
+    mediaFileName: string | null;
     audioTranscription: string | null;
     createdAt: string;
+    citada: { autor: string | null; trecho: string } | null;
   }>;
+  /** Identificador marcado com @ → nome de quem é. */
+  mencoes: Record<string, string>;
 };
 
 export async function groupThreadAction(jid: unknown): Promise<GroupResult<GroupThread>> {
@@ -306,6 +315,7 @@ export async function groupThreadAction(jid: unknown): Promise<GroupResult<Group
       data: {
         conversationId: thread.conversationId,
         messages: thread.messages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+        mencoes: thread.mencoes,
       },
     };
   } catch (error) {

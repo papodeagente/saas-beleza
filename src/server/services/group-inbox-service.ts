@@ -17,6 +17,7 @@ import { syncConversationHistory } from "@/server/services/whatsapp-message-serv
 import { syncProviderChats } from "@/server/services/provider-chat-sync";
 import { aconteceuEm } from "@/server/services/inbox-service";
 import { getRedis } from "@/server/queues/redis";
+import { formatPhone } from "@/lib/phone";
 import { canonicalBrPhone, digitsOnly, phoneFromJid } from "@/server/whatsapp/phone";
 import { findChats, listAddressBook, type UazapiCredentials } from "@/server/whatsapp/uazapi-client";
 import { listGroups, type Group, type GroupParticipant } from "@/server/whatsapp/uazapi-groups";
@@ -769,6 +770,17 @@ export type GroupThreadMessage = {
   id: number;
   body: string;
   senderName: string | null;
+  /**
+   * Quem falou, do jeito que a tela escreve: nome quando existe, telefone
+   * formatado quando não. Nunca um identificador interno — `@194570625273889`
+   * não diz nada a ninguém.
+   */
+  senderLabel: string | null;
+  /**
+   * Identidade estável de quem falou, para agrupar mensagens seguidas da mesma
+   * pessoa e dar a ela sempre a mesma cor. Telefone quando há; senão o nome.
+   */
+  senderKey: string | null;
   direction: "inbound" | "outbound";
   messageType: string;
   mediaUrl: string | null;
@@ -776,7 +788,26 @@ export type GroupThreadMessage = {
   mediaFileName: string | null;
   audioTranscription: string | null;
   createdAt: Date;
+  /** A mensagem à qual esta responde, como o WhatsApp mostra em cima da bolha. */
+  citada: { autor: string | null; trecho: string } | null;
 };
+
+export type GroupThread = {
+  conversationId: number | null;
+  messages: GroupThreadMessage[];
+  /**
+   * Menção → nome. O WhatsApp manda `@194570625273889` no texto e a lista de
+   * quem foi marcado em `contextInfo.mentionedJID`; quem traduz isso para gente
+   * é o aplicativo. Sem este mapa, a conversa fica cheia de números de quinze
+   * dígitos no meio das frases.
+   */
+  mencoes: Record<string, string>;
+};
+
+/** Os dígitos marcados com @ dentro de um texto. */
+function mencoesDoTexto(texto: string): string[] {
+  return [...texto.matchAll(/@(\d{8,})/g)].map((m) => m[1]);
+}
 
 /** Cria o fio local antes da primeira mensagem para que o grupo já seja respondível. */
 export async function ensureGroupConversation(ctx: TenantContext, jid: string): Promise<number> {
@@ -820,12 +851,82 @@ export async function reconcileGroupHistory(ctx: TenantContext, jid: string): Pr
   });
 }
 
+/**
+ * Nome de quem fala, a partir do telefone ou do identificador interno.
+ *
+ * Duas fontes, na mesma ordem da lista de membros: a ficha da clínica primeiro
+ * (é assim que a atendente chama a pessoa) e depois o nome que ela usa no
+ * WhatsApp, aprendido de quem já falou em algum grupo. O telefone casa por
+ * TODAS as formas — o provedor entrega o mesmo aparelho ora com o nono dígito,
+ * ora sem.
+ */
+async function nomesDeQuemFala(
+  organizationId: number,
+  fones: string[],
+  identificadores: string[],
+): Promise<{ porFone: Map<string, string>; porId: Map<string, string> }> {
+  const variantes = [...new Set(fones.flatMap((f) => brPhoneVariants(f)).filter(Boolean))];
+  // Um identificador de menção tanto pode ser LID quanto telefone: procura-se
+  // pelas duas formas, porque o texto não diz qual é qual.
+  const jids = [
+    ...new Set(identificadores.flatMap((id) => [`${id}@lid`, `${id}@s.whatsapp.net`])),
+  ];
+  const fonesDeMencao = [...new Set(identificadores.flatMap((id) => brPhoneVariants(id)).filter(Boolean))];
+  const todosOsFones = [...new Set([...variantes, ...fonesDeMencao])];
+
+  const porFone = new Map<string, string>();
+  const porId = new Map<string, string>();
+  if (todosOsFones.length === 0 && jids.length === 0) return { porFone, porId };
+
+  const [identidades, clientes] = await Promise.all([
+    db
+      .select({ jid: whatsappIdentities.jid, phone: whatsappIdentities.phone, name: whatsappIdentities.name })
+      .from(whatsappIdentities)
+      .where(
+        and(
+          eq(whatsappIdentities.organizationId, organizationId),
+          or(
+            jids.length ? inArray(whatsappIdentities.jid, jids) : sql`false`,
+            todosOsFones.length ? inArray(whatsappIdentities.phone, todosOsFones) : sql`false`,
+          ),
+        ),
+      ),
+    todosOsFones.length
+      ? db
+          .select({ phone: customers.phone, name: customers.name })
+          .from(customers)
+          .where(and(eq(customers.organizationId, organizationId), inArray(customers.phone, todosOsFones)))
+      : Promise.resolve([]),
+  ]);
+
+  // O WhatsApp entra primeiro e a ficha da clínica sobrescreve: quando as duas
+  // sabem o nome, vale o que a atendente escreveu.
+  // `canonicalBrPhone` devolve nulo em LID de propósito: identificador interno
+  // não é telefone, e tratá-lo como se fosse já trocou pessoas de lugar aqui.
+  for (const i of identidades) {
+    const chave = canonicalBrPhone(i.phone);
+    if (chave) porFone.set(chave, i.name);
+    porId.set(identidadeBase(i.jid), i.name);
+  }
+  for (const c of clientes) {
+    const chave = canonicalBrPhone(c.phone);
+    if (chave && c.name) porFone.set(chave, c.name);
+  }
+  // Telefone conhecido também responde por menção escrita com o número.
+  for (const id of identificadores) {
+    const chave = canonicalBrPhone(id);
+    const pelo = chave ? porFone.get(chave) : undefined;
+    if (pelo && !porId.has(id)) porId.set(id, pelo);
+  }
+  return { porFone, porId };
+}
+
 /** Mensagens do grupo que já estão aqui. Não fala com o WhatsApp. */
 export async function getGroupThread(
   ctx: TenantContext,
   jid: string,
   opts: { reconcile?: boolean } = {},
-): Promise<{ conversationId: number | null; messages: GroupThreadMessage[] }> {
+): Promise<GroupThread> {
   const conversationId = await ensureGroupConversation(ctx, jid);
   if (opts.reconcile) await reconcileGroupHistory(ctx, jid);
 
@@ -834,6 +935,9 @@ export async function getGroupThread(
       id: messages.id,
       body: messages.body,
       senderName: messages.senderName,
+      senderPhone: messages.senderPhone,
+      externalId: messages.externalId,
+      quotedExternalId: messages.quotedExternalId,
       direction: messages.direction,
       messageType: messages.messageType,
       mediaUrl: messages.mediaUrl,
@@ -860,12 +964,97 @@ export async function getGroupThread(
    * reconciliada hoje é toda gravada nos mesmos segundos: por `createdAt`, uma
    * mensagem de 21/08 aparecia carimbada com a hora do clique que a importou.
    */
-  const comHoraReal = linhas.map(({ sentAt, createdAt, ...resto }) => ({
-    ...resto,
-    createdAt: sentAt ?? createdAt,
-  }));
+  const cruas = linhas
+    .map(({ sentAt, createdAt, ...resto }) => ({ ...resto, createdAt: sentAt ?? createdAt }))
+    .reverse();
 
-  return { conversationId, messages: comHoraReal.reverse() };
+  // ── Quem falou, quem foi marcado, e o que cada resposta responde ─────────
+
+  const fones = cruas.map((m) => m.senderPhone).filter((f): f is string => Boolean(f));
+  const marcados = [...new Set(cruas.flatMap((m) => mencoesDoTexto(m.body ?? "")))];
+  const { porFone, porId } = await nomesDeQuemFala(ctx.organizationId, fones, marcados);
+
+  const mencoes: Record<string, string> = {};
+  for (const id of marcados) {
+    const nome = porId.get(id);
+    if (nome) mencoes[id] = nome;
+  }
+
+  /** O nome que vai na bolha. Nossa mensagem não leva nome, como no WhatsApp. */
+  function rotularAutor(m: { senderName: string | null; senderPhone: string | null; direction: string }) {
+    if (m.direction === "outbound") return null;
+    if (m.senderName) return m.senderName;
+    if (!m.senderPhone) return null;
+    const chave = canonicalBrPhone(m.senderPhone);
+    return (chave ? porFone.get(chave) : undefined) ?? formatPhone(m.senderPhone);
+  }
+
+  /**
+   * A mensagem citada pode estar fora da janela de 120 — responder a algo de
+   * duas semanas atrás é comum. Sem esta busca, a citação apareceria vazia
+   * justamente nas conversas longas, que são as que mais precisam dela.
+   */
+  const idsCitados = [...new Set(cruas.map((m) => m.quotedExternalId).filter((id): id is string => Boolean(id)))];
+  const naJanela = new Map(
+    cruas.filter((m) => m.externalId).map((m) => [m.externalId as string, m] as const),
+  );
+  const forasteiras = idsCitados.filter((id) => !naJanela.has(id)).length
+    ? await db
+        .select({
+          externalId: messages.externalId,
+          body: messages.body,
+          senderName: messages.senderName,
+          senderPhone: messages.senderPhone,
+          direction: messages.direction,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.organizationId, ctx.organizationId),
+            eq(messages.conversationId, conversationId),
+            inArray(
+              messages.externalId,
+              idsCitados.filter((id) => !naJanela.has(id)),
+            ),
+          ),
+        )
+    : [];
+  const porExternalId = new Map<string, { senderName: string | null; senderPhone: string | null; direction: string; body: string }>();
+  for (const m of cruas) if (m.externalId) porExternalId.set(m.externalId, m);
+  for (const m of forasteiras) if (m.externalId) porExternalId.set(m.externalId, m);
+
+  const mensagens: GroupThreadMessage[] = cruas.map(
+    ({ senderPhone, externalId: _externalId, quotedExternalId, ...resto }) => {
+      const original = quotedExternalId ? porExternalId.get(quotedExternalId) : undefined;
+      return {
+        ...resto,
+        senderLabel: rotularAutor({ ...resto, senderPhone }),
+        // Telefone como chave porque o nome muda de grafia entre a agenda e o
+        // perfil; o aparelho é o mesmo.
+        senderKey:
+          resto.direction === "outbound"
+            ? null
+            : senderPhone
+              ? (canonicalBrPhone(senderPhone) ?? senderPhone)
+              : (resto.senderName ?? null),
+        citada: original
+          ? {
+              autor:
+                original.direction === "outbound"
+                  ? "Você"
+                  : rotularAutor({
+                      senderName: original.senderName,
+                      senderPhone: original.senderPhone,
+                      direction: original.direction,
+                    }),
+              trecho: achatar(original.body) || "Mensagem",
+            }
+          : null,
+      };
+    },
+  );
+
+  return { conversationId, messages: mensagens, mencoes };
 }
 
 

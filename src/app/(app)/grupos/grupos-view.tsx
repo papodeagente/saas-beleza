@@ -46,6 +46,7 @@ import { Field, Input, Textarea } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatPhone } from "@/lib/phone";
+import { identityTint } from "@/lib/color";
 import { useFuso } from "@/lib/fuso";
 import { formatTz } from "@/lib/tz";
 import { cn } from "@/lib/utils";
@@ -140,6 +141,12 @@ type ThreadMessage = {
   id: number;
   body: string;
   senderName: string | null;
+  /** Quem falou, pronto para a tela: nome ou telefone, nunca um número interno. */
+  senderLabel: string | null;
+  /** Mesma pessoa em mensagens seguidas: agrupa a fala e fixa a cor do nome. */
+  senderKey: string | null;
+  /** A mensagem que esta responde, como o WhatsApp mostra acima da bolha. */
+  citada: { autor: string | null; trecho: string } | null;
   direction: "inbound" | "outbound";
   messageType: string;
   mediaUrl: string | null;
@@ -736,6 +743,7 @@ function GroupWorkspace({
   const [aba, setAba] = useState<Aba>("conversa");
   const [detalhe, setDetalhe] = useState<GroupDetail | null>(null);
   const [thread, setThread] = useState<ThreadMessage[]>([]);
+  const [mencoes, setMencoes] = useState<Record<string, string>>({});
   const [conversationId, setConversationId] = useState<number | null>(group.conversationId);
   const [resumo, setResumo] = useState<string | null>(null);
   const [carregandoDetalhe, setCarregandoDetalhe] = useState(true);
@@ -749,6 +757,7 @@ function GroupWorkspace({
     if (!conversa.ok) return;
     setConversationId(conversa.data.conversationId);
     setThread(conversa.data.messages as ThreadMessage[]);
+    setMencoes(conversa.data.mencoes ?? {});
   }, [group.jid]);
 
   /**
@@ -773,6 +782,7 @@ function GroupWorkspace({
       if (conversa.ok) {
         setConversationId(conversa.data.conversationId);
         setThread(conversa.data.messages as ThreadMessage[]);
+        setMencoes(conversa.data.mencoes ?? {});
       }
     });
     void getGroupAction(group.jid).then((info) => {
@@ -974,6 +984,7 @@ function GroupWorkspace({
             jid={group.jid}
             conversationId={conversationId}
             messages={thread}
+            mencoes={mencoes}
             carregando={carregandoConversa}
             ultimaConhecida={group}
             onSent={() => void carregarThread()}
@@ -1006,11 +1017,52 @@ function GroupWorkspace({
   );
 }
 
+/**
+ * Uma cor por pessoa, como no WhatsApp.
+ *
+ * Em grupo de 683 membros, o nome sozinho não separa as vozes: o olho encontra
+ * a cor antes de ler. A escolha é determinística (mesma pessoa, mesma cor em
+ * toda sessão e em todo aparelho) e passa por `identityTint`, que escurece a
+ * tinta até cruzar 4,5:1 no fundo do cartão — cor de identidade não pode custar
+ * legibilidade.
+ */
+const TINTAS_DE_AUTOR = ["#7437b7", "#1f7a55", "#b23a48", "#1d5f9e", "#8a5a12", "#116b6b", "#8e2f6b", "#3f5c1f"];
+
+function corDoAutor(chave: string | null): string {
+  if (!chave) return "var(--color-accent)";
+  let soma = 0;
+  for (let i = 0; i < chave.length; i++) soma = (soma * 31 + chave.charCodeAt(i)) >>> 0;
+  return identityTint(TINTAS_DE_AUTOR[soma % TINTAS_DE_AUTOR.length], 0.9).foreground;
+}
+
+/**
+ * Troca `@194570625273889` pelo nome de quem foi marcado.
+ *
+ * O WhatsApp manda a menção como identificador e resolve o nome no aplicativo;
+ * aqui chegava crua, e uma frase com quinze dígitos no meio não se lê. Quem não
+ * está no mapa continua aparecendo pelo número — inventar nome seria pior.
+ */
+function comMencoes(texto: string, mencoes: Record<string, string>): React.ReactNode {
+  if (!texto.includes("@")) return texto;
+  const partes = texto.split(/(@\d{8,})/g);
+  return partes.map((parte, i) => {
+    const marcado = /^@(\d{8,})$/.exec(parte);
+    if (!marcado) return parte;
+    const nome = mencoes[marcado[1]];
+    return (
+      <span key={i} className="font-semibold text-accent">
+        @{nome ?? marcado[1]}
+      </span>
+    );
+  });
+}
+
 /** Conversa do grupo: quem falou aparece porque em grupo isso é metade da mensagem. */
 function GroupThread({
   jid,
   conversationId,
   messages,
+  mencoes,
   carregando,
   ultimaConhecida,
   onSent,
@@ -1018,6 +1070,8 @@ function GroupThread({
   jid: string;
   conversationId: number | null;
   messages: ThreadMessage[];
+  /** Quem foi marcado com @ no texto, por identificador. */
+  mencoes: Record<string, string>;
   carregando: boolean;
   /** O que a lista já sabe do grupo, para o vazio não contradizer a linha. */
   ultimaConhecida: Pick<GroupItem, "lastMessagePreview" | "lastMessageSender" | "lastMessageAt">;
@@ -1082,20 +1136,62 @@ function GroupThread({
             Nenhuma mensagem deste grupo chegou por aqui ainda. Elas aparecem conforme o grupo se movimenta.
           </p>
         ) : (
-          <div className="mx-auto flex max-w-[680px] flex-col gap-2">
-            {messages.map((mensagem) => {
+          <div className="mx-auto flex max-w-[680px] flex-col gap-0.5">
+            {messages.map((mensagem, indice) => {
               const nossa = mensagem.direction === "outbound";
+              const anterior = messages[indice - 1];
+              /*
+                Mensagens seguidas da mesma pessoa formam um bloco, e o nome
+                aparece uma vez só — é o que o WhatsApp faz, e é o que separa
+                uma conversa de uma lista de avisos. Meia hora de silêncio
+                recomeça o bloco: quem volta a falar depois disso se
+                reapresenta.
+              */
+              const mesmaPessoa =
+                anterior !== undefined &&
+                anterior.direction === mensagem.direction &&
+                anterior.senderKey === mensagem.senderKey &&
+                new Date(mensagem.createdAt).getTime() - new Date(anterior.createdAt).getTime() < 30 * 60_000;
+              const abreBloco = !mesmaPessoa;
+              const corpo = mensagem.audioTranscription || mensagem.body;
+
               return (
-                <div key={mensagem.id} className={cn("flex flex-col", nossa ? "items-end" : "items-start")}>
+                <div
+                  key={mensagem.id}
+                  className={cn(
+                    "flex flex-col",
+                    nossa ? "items-end" : "items-start",
+                    abreBloco && indice > 0 && "mt-3",
+                  )}
+                >
                   <div
                     className={cn(
                       "max-w-[85%] rounded-card border px-3 py-2 text-body text-ink [overflow-wrap:anywhere]",
                       nossa ? "border-line-strong bg-surface-sunken" : "border-line bg-surface-raised",
                     )}
                   >
-                    {!nossa && mensagem.senderName ? (
-                      <span className="mb-0.5 block text-caption font-medium text-accent">{mensagem.senderName}</span>
+                    {!nossa && abreBloco && mensagem.senderLabel ? (
+                      <span
+                        className="mb-1 block text-caption font-semibold"
+                        style={{ color: corDoAutor(mensagem.senderKey) }}
+                      >
+                        {mensagem.senderLabel}
+                      </span>
                     ) : null}
+
+                    {/* A citação vem antes do texto, como no aplicativo: sem ela
+                        a resposta chega sem a pergunta e o fio fica solto. */}
+                    {mensagem.citada ? (
+                      <span className="mb-1.5 block rounded-[8px] border-l-[3px] border-accent/60 bg-surface-sunken px-2 py-1">
+                        <span className="block text-meta font-semibold text-accent">
+                          {mensagem.citada.autor ?? "Mensagem"}
+                        </span>
+                        <span className="line-clamp-2 block text-caption text-ink-secondary">
+                          {comMencoes(mensagem.citada.trecho, mencoes)}
+                        </span>
+                      </span>
+                    ) : null}
+
                     {mensagem.messageType !== "text" && conversationId ? (
                       <GroupMessageMedia
                         key={mensagem.mediaUrl ?? "sem-url"}
@@ -1104,10 +1200,8 @@ function GroupThread({
                         onLoaded={onSent}
                       />
                     ) : null}
-                    {mensagem.audioTranscription || (mensagem.body && !/^\[[^\]]+\]$/.test(mensagem.body)) ? (
-                      <span className="block whitespace-pre-wrap">
-                        {mensagem.audioTranscription || mensagem.body}
-                      </span>
+                    {corpo && !/^\[[^\]]+\]$/.test(corpo) ? (
+                      <span className="block whitespace-pre-wrap">{comMencoes(corpo, mencoes)}</span>
                     ) : null}
                   </div>
                   <span className="mt-0.5 px-1 text-meta text-ink-secondary">
