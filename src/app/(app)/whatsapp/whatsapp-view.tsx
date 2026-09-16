@@ -498,7 +498,17 @@ function PairingCard({
   connection: ConnectionData;
   onChange: (next: ConnectionData) => void;
 }) {
-  const [mode, setMode] = useState<"idle" | "qr" | "code">("idle");
+  /**
+   * Já existe QR esperando? Então a tela abre NELE.
+   *
+   * Pedir "clique aqui para ver o código" logo depois de a pessoa ter clicado
+   * em conectar é cobrar um clique para mostrar o que ela acabou de pedir — e
+   * o código tem validade, então cada segundo parado é um QR mais perto de
+   * expirar. Vale também para quem recarrega a página no meio do pareamento.
+   */
+  const [mode, setMode] = useState<"idle" | "qr" | "code">(
+    connection.pairingQrCode && connection.status !== "connected" ? "qr" : "idle",
+  );
   const [phone, setPhone] = useState("");
   const [starting, startPairingTransition] = useTransition();
   const [disconnecting, startDisconnecting] = useTransition();
