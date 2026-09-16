@@ -4,13 +4,17 @@ import { asArray, asNumber, asString, firstString, get, type Json } from "@/serv
 /**
  * Cliente da uazapi.
  *
- * Só o que uma instância já conectada precisa: status, envio e leitura. Não há
- * nada de administração (criar, cobrar, cancelar instância) porque a conexão
- * aqui é manual — o usuário cola URL e token de uma instância que já existe.
+ * Duas camadas, com chaves diferentes:
  *
- * Autenticação é o header `token` com o token da instância. O tratamento de
- * erro segue o do entur-os-crm: erro tipado por status, retry só no que é
- * transitório, e nunca retry em 4xx que não seja 429.
+ * - A da INSTÂNCIA (header `token`): status, envio e leitura. É quase tudo
+ *   neste arquivo.
+ * - A da PLATAFORMA (header `admintoken`): criar e apagar instância no
+ *   servidor que é nosso. Vive isolada no fim do arquivo, e o token de
+ *   administração só é lido ali, a partir do ambiente — nenhuma conta tem
+ *   como alcançá-lo.
+ *
+ * O tratamento de erro segue o do entur-os-crm: erro tipado por status, retry
+ * só no que é transitório, e nunca retry em 4xx que não seja 429.
  */
 
 export type UazapiCredentials = { baseUrl: string; token: string };
@@ -687,4 +691,109 @@ export async function getChatDetails(
     lid: texto(get(data, "wa_chatlid")),
     imagePreviewUrl: texto(get(data, "imagePreview")),
   };
+}
+
+// ── Servidor da plataforma ────────────────────────────────────────────────
+//
+// Daqui para baixo é a camada de administração: o que permite a conta ter
+// WhatsApp sem saber o que é instância, token ou webhook.
+
+/**
+ * O servidor de WhatsApp da plataforma, quando existe.
+ *
+ * Sem as duas variáveis de ambiente o produto volta ao modelo antigo, em que a
+ * instância é do cliente e ele cola URL e token. É por isso que isto devolve
+ * `null` em vez de lançar: um ambiente sem servidor próprio não está quebrado,
+ * está em outro modo.
+ */
+export function servidorDaPlataforma(): { baseUrl: string; adminToken: string } | null {
+  const baseUrl = normalizeBaseUrl(process.env.UAZAPI_SERVER_URL || "");
+  const adminToken = (process.env.UAZAPI_ADMIN_TOKEN || "").trim();
+  return baseUrl && adminToken ? { baseUrl, adminToken } : null;
+}
+
+/** A instância pertence ao servidor da plataforma? */
+export function ehDaPlataforma(baseUrl: string): boolean {
+  const plataforma = servidorDaPlataforma();
+  return plataforma !== null && normalizeBaseUrl(baseUrl) === plataforma.baseUrl;
+}
+
+export type InstanciaCriada = { baseUrl: string; token: string; instanceId: string | null };
+
+/**
+ * Cria uma instância no servidor da plataforma.
+ *
+ * O `admintoken` só existe nesta função: nenhuma rota, action ou tela recebe
+ * esse valor, e o que volta para o resto do sistema é apenas o token DAQUELA
+ * instância — que só enxerga o próprio aparelho.
+ */
+export async function criarInstancia(
+  nome: string,
+  systemName = "agenda-de-unha",
+): Promise<InstanciaCriada> {
+  const plataforma = servidorDaPlataforma();
+  if (!plataforma) {
+    throw new UazapiError("Servidor de WhatsApp da plataforma não configurado.", 0, "");
+  }
+
+  const res = await fetch(`${plataforma.baseUrl}/instance/init`, {
+    method: "POST",
+    headers: { admintoken: plataforma.adminToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: nome.slice(0, 60), systemName }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+
+  const texto = await res.text().catch(() => "");
+  if (!res.ok) {
+    throw new UazapiError(`uazapi POST /instance/init → ${res.status}`, res.status, texto.slice(0, 500));
+  }
+
+  // O token vem em dois lugares na resposta; ler os dois evita depender de
+  // qual versão da uazapi está do outro lado.
+  const dados = JSON.parse(texto || "{}") as {
+    token?: string;
+    instance?: { id?: string; token?: string };
+  };
+  const token = (dados.token || dados.instance?.token || "").trim();
+  if (!token) {
+    throw new UazapiError("A uazapi criou a instância sem devolver o token.", 500, texto.slice(0, 300));
+  }
+
+  return { baseUrl: plataforma.baseUrl, token, instanceId: dados.instance?.id ?? null };
+}
+
+/**
+ * Aponta o webhook da instância para cá.
+ *
+ * Configurar por API, e não colando a URL no painel, é o que garante os três
+ * campos que fazem a diferença entre "chega mensagem" e "não chega nada": o
+ * webhook nasce DESLIGADO e com a lista de eventos VAZIA, e sem
+ * `excludeMessages: ["wasSentByApi"]` cada mensagem que o próprio sistema
+ * envia volta como se fosse da cliente — o eco que duplica conversa.
+ */
+export async function configurarWebhook(creds: UazapiCredentials, url: string): Promise<void> {
+  await request(creds, "POST", "/webhook", {
+    enabled: true,
+    url,
+    events: ["messages", "messages_update", "connection"],
+    excludeMessages: ["wasSentByApi"],
+  });
+}
+
+/**
+ * Apaga a instância no servidor da plataforma.
+ *
+ * É o que devolve a cota da conta (uma instância por conta). Só faz sentido em
+ * instância nossa: a do cliente não é nossa para apagar.
+ */
+export async function apagarInstancia(creds: UazapiCredentials): Promise<void> {
+  const base = normalizeBaseUrl(creds.baseUrl);
+  if (!base || !creds.token) return;
+  await fetch(`${base}/instance`, {
+    method: "DELETE",
+    headers: { token: creds.token },
+    cache: "no-store",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
 }

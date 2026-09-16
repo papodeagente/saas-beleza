@@ -22,6 +22,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { useFuso } from "@/lib/fuso";
 import { formatTz } from "@/lib/tz";
 import {
+  conectarWhatsappAction,
   disconnectAction,
   disconnectDeviceAction,
   refreshStatusAction,
@@ -47,6 +48,7 @@ type ConnectionData = {
   webhookSeenAt: string | null;
   lastCheckedAt: string | null;
   connectedAt: string | null;
+  gerenciadaPelaPlataforma: boolean;
 };
 
 const STATUS: Record<ConnectionData["status"], { label: string; tone: "positive" | "attention" | "danger" | "neutral" }> = {
@@ -57,20 +59,25 @@ const STATUS: Record<ConnectionData["status"], { label: string; tone: "positive"
 };
 
 /**
- * Conexão manual com a uazapi.
+ * Conectar o WhatsApp da conta.
  *
- * O fluxo é deliberadamente de duas mãos: aqui você informa onde a instância
- * está e qual é o token dela; lá no painel da uazapi você aponta o webhook
- * para a URL que esta tela mostra. Nada é provisionado automaticamente, então
- * a instância continua sendo sua e nenhuma credencial de administração passa
- * por este sistema.
+ * Com servidor próprio (`provisionamento`), a tela tem UM botão: o sistema cria
+ * a instância, aponta o webhook e mostra o QR. A cliente não vê URL, token nem
+ * endereço de webhook — são dados internos, e pedir que ela os administre era
+ * transformar um passo de dois minutos numa consulta ao suporte.
+ *
+ * Sem servidor próprio, cai no modelo antigo: a instância é do cliente e ele
+ * informa onde ela está. É o que continua valendo para quem já estava assim.
  */
 export function WhatsappView({
   connection,
   appUrlConfigured,
+  provisionamento,
 }: {
   connection: ConnectionData | null;
   appUrlConfigured: boolean;
+  /** Existe servidor de WhatsApp da plataforma para criar a instância. */
+  provisionamento: boolean;
 }) {
   const fuso = useFuso();
   const [current, setCurrent] = useState<ConnectionData | null>(connection);
@@ -90,6 +97,30 @@ export function WhatsappView({
   }, [copied]);
 
   const status = current ? STATUS[current.status] : null;
+
+  /**
+   * Fluxo automático: existe servidor da plataforma E, se já houver conexão,
+   * ela é de lá.
+   *
+   * Conta que veio do modelo antigo, com instância própria, continua vendo o
+   * formulário: trocar o chão debaixo de um WhatsApp que está funcionando, sem
+   * ela pedir, derrubaria o atendimento dela para arrumar a nossa tela.
+   */
+  const automatico = provisionamento && (!current || current.gerenciadaPelaPlataforma);
+
+  const [conectando, startConectando] = useTransition();
+
+  function conectar() {
+    startConectando(async () => {
+      const result = await conectarWhatsappAction();
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      setCurrent(serialize(result.connection));
+      toast.success("Tudo pronto. Escaneie o código com o celular.");
+    });
+  }
 
   function save() {
     startSaving(async () => {
@@ -147,12 +178,97 @@ export function WhatsappView({
       <header className="mb-6">
         <h1 className="text-title text-ink">WhatsApp</h1>
         <p className="mt-1 text-body text-ink-secondary">
-          Conecte a instância da uazapi que você já usa. Os dados são seus: informe onde ela está e qual é o token,
-          e aponte o webhook dela para o endereço que aparece abaixo.
+          {automatico
+            ? "Escaneie o código com o celular que atende a clientela. É o mesmo gesto do WhatsApp Web, e leva menos de um minuto."
+            : "Conecte a instância da uazapi que você já usa. Os dados são seus: informe onde ela está e qual é o token, e aponte o webhook dela para o endereço que aparece abaixo."}
         </p>
       </header>
 
-      <Card className="mb-4">
+      {automatico ? (
+        <Card className="mb-4">
+          <CardHeader
+            title="Aparelho"
+            action={
+              status ? (
+                <Badge tone={status.tone}>
+                  {current?.status === "connected" ? <CheckCircle2 className="size-3" aria-hidden /> : null}
+                  {status.label}
+                </Badge>
+              ) : null
+            }
+          />
+          <div className="flex flex-col gap-3 p-4 pt-0">
+            {current ? (
+              <>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-caption">
+                  <Row label="Número" value={current.phoneNumber ?? "—"} />
+                  <Row label="Perfil" value={current.profileName ?? "—"} />
+                  <Row
+                    label="Conectado desde"
+                    value={current.connectedAt ? formatTz(new Date(current.connectedAt), fuso, "dd/MM HH:mm") : "—"}
+                  />
+                  <Row
+                    label="Última verificação"
+                    value={current.lastCheckedAt ? formatTz(new Date(current.lastCheckedAt), fuso, "dd/MM HH:mm") : "—"}
+                  />
+                </dl>
+
+                {current.status === "error" && current.statusDetail ? (
+                  <p className="flex items-start gap-1.5 rounded-control bg-danger-soft px-2.5 py-2 text-caption text-danger">
+                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                    {current.statusDetail}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2 border-t border-line pt-3">
+                  <Button variant="secondary" size="md" onClick={refresh} loading={refreshing}>
+                    <RefreshCw aria-hidden />
+                    Verificar agora
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    onClick={async () => {
+                      if (
+                        !confirm(
+                          "Desconectar este WhatsApp? As conversas continuam guardadas, mas o sistema para de enviar e receber mensagens até você conectar de novo.",
+                        )
+                      )
+                        return;
+                      const result = await disconnectAction();
+                      if (result.ok) {
+                        setCurrent(null);
+                        toast.success("WhatsApp desconectado.");
+                      } else {
+                        toast.error(result.error ?? "Não foi possível desconectar.");
+                      }
+                    }}
+                  >
+                    <Unplug aria-hidden />
+                    Desconectar
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-body text-ink-secondary">
+                  Um número por conta. Use o celular da recepção, não o pessoal: quem conectar vai ter as conversas
+                  das clientes aparecendo aqui dentro.
+                </p>
+                <div>
+                  <Button variant="primary" size="md" onClick={conectar} loading={conectando}>
+                    <QrCode aria-hidden />
+                    Conectar meu WhatsApp
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
+      ) : null}
+
+      {!automatico ? (
+        <Card className="mb-4">
         <CardHeader
           title="Instância"
           action={
@@ -240,11 +356,12 @@ export function WhatsappView({
             </dl>
           ) : null}
         </div>
-      </Card>
+        </Card>
+      ) : null}
 
       {current ? <PairingCard connection={current} onChange={setCurrent} /> : null}
 
-      {current ? (
+      {current && !automatico ? (
         <Card>
           <CardHeader title="Webhook" />
           <div className="flex flex-col gap-3 p-4 pt-0">
@@ -348,6 +465,7 @@ function serialize(connection: {
   webhookSeenAt: Date | null;
   lastCheckedAt: Date | null;
   connectedAt: Date | null;
+  gerenciadaPelaPlataforma: boolean;
 }): ConnectionData {
   return {
     ...connection,

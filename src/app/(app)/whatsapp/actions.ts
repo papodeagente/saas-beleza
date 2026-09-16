@@ -8,6 +8,7 @@ import {
   disconnectConnection,
   disconnectDevice,
   getConnection,
+  provisionarConexao,
   refreshConnectionStatus,
   rotateWebhookToken,
   saveConnection,
@@ -37,6 +38,26 @@ export async function saveConnectionAction(input: unknown): Promise<ConnectionRe
     requireRole(ctx, "admin");
     const data = saveSchema.parse(input);
     const connection = await saveConnection(ctx, data);
+    revalidatePath("/whatsapp");
+    return { ok: true, connection };
+  } catch (error) {
+    console.error(error);
+    return { ok: false, error: describe(error) };
+  }
+}
+
+/**
+ * Conecta o WhatsApp da conta em um clique.
+ *
+ * Cria a instância no servidor da plataforma, aponta o webhook e devolve o QR.
+ * Chamar de novo não cria outra instância: a conta tem direito a uma, e a
+ * segunda chamada apenas renova o código.
+ */
+export async function conectarWhatsappAction(): Promise<ConnectionResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const connection = await provisionarConexao(ctx);
     revalidatePath("/whatsapp");
     return { ok: true, connection };
   } catch (error) {

@@ -1,7 +1,11 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { requireSession } from "@/server/auth";
-import { getConnection, publicBaseUrl } from "@/server/services/whatsapp-connection-service";
+import {
+  getConnection,
+  provisionamentoDisponivel,
+  publicBaseUrl,
+} from "@/server/services/whatsapp-connection-service";
 import { WhatsappView } from "./whatsapp-view";
 
 export const metadata = { title: "WhatsApp" };
@@ -43,6 +47,7 @@ export default async function WhatsappPage() {
           : null
       }
       appUrlConfigured={Boolean(configured)}
+      provisionamento={provisionamentoDisponivel()}
     />
   );
 }

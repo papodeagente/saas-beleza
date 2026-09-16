@@ -5,21 +5,33 @@ import { db } from "@/db";
 import { organizations, whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
 import {
+  apagarInstancia,
+  configurarWebhook,
   connectInstance,
+  criarInstancia,
   disconnectInstance,
+  ehDaPlataforma,
   getStatus,
   normalizeBaseUrl,
+  servidorDaPlataforma,
   type UazapiCredentials,
 } from "@/server/whatsapp/uazapi-client";
 
 /**
  * Conexão com o WhatsApp.
  *
- * O modelo aqui é deliberadamente manual: a instância da uazapi já existe e é
- * do cliente. Nós guardamos URL e token, validamos contra `/instance/status` e
- * mostramos a URL de webhook para ele colar no painel da uazapi. Nenhum token
- * de administração passa por este sistema, então não há como criar, cobrar ou
- * derrubar instância a partir daqui.
+ * Dois modelos convivem, e qual vale depende do ambiente ter, ou não, um
+ * servidor de WhatsApp próprio (`UAZAPI_SERVER_URL` + `UAZAPI_ADMIN_TOKEN`):
+ *
+ * - **Plataforma (padrão hoje):** o sistema cria a instância da conta, aponta o
+ *   webhook sozinho e mostra o QR. A cliente não digita nada — ela escaneia. É
+ *   uma instância por conta, e apagar a conexão devolve essa cota.
+ * - **Instância do cliente (legado):** ele cola URL e token de uma instância
+ *   que já é dele. Segue funcionando para quem já estava assim, e é o que vale
+ *   num ambiente sem servidor próprio configurado.
+ *
+ * O token de administração nunca chega aqui: quem fala com ele é o cliente da
+ * uazapi, e o que volta é só o token da instância daquela conta.
  */
 
 export type ConnectionView = {
@@ -39,6 +51,14 @@ export type ConnectionView = {
   webhookSeenAt: Date | null;
   lastCheckedAt: Date | null;
   connectedAt: Date | null;
+  /**
+   * A instância é nossa (criada pela plataforma) ou do cliente?
+   *
+   * A tela usa isto para decidir o que mostrar: quem está no servidor da
+   * plataforma não precisa ver URL, token nem endereço de webhook — são dados
+   * internos que só teriam como efeito assustar.
+   */
+  gerenciadaPelaPlataforma: boolean;
 };
 
 /** Só os últimos caracteres — o token nunca volta inteiro para o navegador. */
@@ -75,7 +95,13 @@ function toView(row: typeof whatsappConnections.$inferSelect): ConnectionView {
     webhookSeenAt: row.webhookSeenAt,
     lastCheckedAt: row.lastCheckedAt,
     connectedAt: row.connectedAt,
+    gerenciadaPelaPlataforma: ehDaPlataforma(row.baseUrl),
   };
+}
+
+/** Existe servidor próprio para criar instância? */
+export function provisionamentoDisponivel(): boolean {
+  return servidorDaPlataforma() !== null;
 }
 
 export async function getConnectionRow(organizationId: number) {
@@ -232,6 +258,60 @@ export async function refreshConnectionStatus(ctx: TenantContext): Promise<Conne
 }
 
 /**
+ * Cria a instância da conta no servidor da plataforma e já devolve o QR.
+ *
+ * É o caminho inteiro num clique: instância criada, webhook apontado para cá e
+ * pareamento iniciado. A cliente não vê nem precisa saber de nenhuma das três
+ * coisas — ela abre a tela, escaneia e está conectada.
+ *
+ * **Uma conta, uma instância.** Se já existe conexão ativa, esta função não
+ * cria outra: ela renova o QR da que existe. Sem essa guarda, cada clique
+ * criaria uma instância órfã no servidor, e a conta acumularia aparelhos que
+ * ninguém desligaria depois.
+ */
+export async function provisionarConexao(ctx: TenantContext): Promise<ConnectionView> {
+  const existente = await getConnectionRow(ctx.organizationId);
+  if (existente) return startPairing(ctx);
+
+  const plataforma = servidorDaPlataforma();
+  if (!plataforma) {
+    throw new Error("O servidor de WhatsApp da plataforma não está configurado.");
+  }
+  // Sem endereço público não há webhook possível, e uma instância que ninguém
+  // escuta é pior que nenhuma: a cliente conecta, manda mensagem e o silêncio
+  // parece defeito do produto.
+  if (!publicBaseUrl()) {
+    throw new Error("Falta configurar o endereço público do sistema (APP_URL) antes de conectar o WhatsApp.");
+  }
+
+  // O nome carrega conta e id: no painel do servidor, saber de quem é cada
+  // aparelho é o que permite responder a um chamado de suporte.
+  const instancia = await criarInstancia(`${ctx.organizationSlug}-${ctx.organizationId}`);
+  const webhookToken = randomBytes(24).toString("hex");
+
+  const [row] = await db
+    .insert(whatsappConnections)
+    .values({
+      organizationId: ctx.organizationId,
+      name: "WhatsApp",
+      baseUrl: instancia.baseUrl,
+      instanceToken: instancia.token,
+      instanceId: instancia.instanceId,
+      webhookToken,
+      status: "disconnected",
+      statusDetail: "instância criada",
+      active: true,
+    })
+    .returning();
+
+  // O webhook vai ANTES do QR: se a cliente escanear rápido e a primeira
+  // mensagem chegar em seguida, o caminho já está aberto.
+  await configurarWebhook(credentialsOf(row), webhookUrlFor(webhookToken));
+
+  return startPairing(ctx);
+}
+
+/**
  * Inicia o pareamento do aparelho.
  *
  * Sem número, devolve o QR para escanear; com número, um código de oito dígitos
@@ -245,6 +325,19 @@ export async function startPairing(
 ): Promise<ConnectionView> {
   const existing = await getConnectionRow(ctx.organizationId);
   if (!existing) throw new Error("Configure a URL e o token da instância antes de parear.");
+
+  // Reaponta o webhook a cada pareamento da instância nossa. É barato e cobre
+  // o caso que já custou caro antes: instância reconectada com o webhook
+  // apagado do outro lado, aparelho no ar e nenhuma mensagem chegando.
+  if (ehDaPlataforma(existing.baseUrl) && publicBaseUrl()) {
+    try {
+      await configurarWebhook(credentialsOf(existing), webhookUrlFor(existing.webhookToken));
+    } catch (error) {
+      // Não impede o QR: sem webhook a conexão ainda se estabelece, e insistir
+      // aqui tiraria da cliente a única ação que ela veio fazer.
+      console.warn("[whatsapp] não foi possível reapontar o webhook:", error);
+    }
+  }
 
   const result = await connectInstance(credentialsOf(existing), opts);
 
@@ -310,8 +403,21 @@ export async function rotateWebhookToken(ctx: TenantContext): Promise<Connection
 export async function disconnectConnection(ctx: TenantContext): Promise<void> {
   const existing = await getConnectionRow(ctx.organizationId);
   if (!existing) return;
-  // Desativa o registro local; a instância na uazapi continua intacta, porque
-  // ela não é nossa para desligar.
+
+  // Instância nossa é apagada de verdade: é o que devolve a cota da conta (uma
+  // por conta) e evita um parque de aparelhos mortos no servidor. A do cliente
+  // fica intacta — ela não é nossa para desligar.
+  if (ehDaPlataforma(existing.baseUrl)) {
+    try {
+      await apagarInstancia(credentialsOf(existing));
+    } catch (error) {
+      // O registro local sai de qualquer forma: deixar a conta presa a uma
+      // conexão que ela mandou remover é pior do que uma instância órfã, que o
+      // painel do servidor mostra e alguém limpa.
+      console.warn("[whatsapp] não foi possível apagar a instância:", error);
+    }
+  }
+
   await db
     .update(whatsappConnections)
     .set({ active: false, status: "disconnected", updatedAt: new Date() })
