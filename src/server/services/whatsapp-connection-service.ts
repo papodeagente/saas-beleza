@@ -1,8 +1,8 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, ne, or } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { organizations, whatsappConnections } from "@/db/schema";
+import { whatsappConnections } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
 import {
   apagarInstancia,
@@ -12,7 +12,6 @@ import {
   disconnectInstance,
   ehDaPlataforma,
   getStatus,
-  normalizeBaseUrl,
   servidorDaPlataforma,
   type UazapiCredentials,
 } from "@/server/whatsapp/uazapi-client";
@@ -20,18 +19,20 @@ import {
 /**
  * Conexão com o WhatsApp.
  *
- * Dois modelos convivem, e qual vale depende do ambiente ter, ou não, um
- * servidor de WhatsApp próprio (`UAZAPI_SERVER_URL` + `UAZAPI_ADMIN_TOKEN`):
+ * Há um caminho só: o sistema cria a instância da conta no servidor da
+ * plataforma (`UAZAPI_SERVER_URL` + `UAZAPI_ADMIN_TOKEN`), aponta o webhook e
+ * mostra o QR. Uma instância por conta; remover a conexão apaga a instância e
+ * devolve a cota.
  *
- * - **Plataforma (padrão hoje):** o sistema cria a instância da conta, aponta o
- *   webhook sozinho e mostra o QR. A cliente não digita nada — ela escaneia. É
- *   uma instância por conta, e apagar a conexão devolve essa cota.
- * - **Instância do cliente (legado):** ele cola URL e token de uma instância
- *   que já é dele. Segue funcionando para quem já estava assim, e é o que vale
- *   num ambiente sem servidor próprio configurado.
+ * O cadastro manual — colar URL e token de uma instância do cliente — foi
+ * removido. Ele existia de quando a instância era dele, e pedia da manicure
+ * dois dados que ela não tem como responder. Conexão antiga de instância
+ * própria continua no banco e continua RECEBENDO mensagem enquanto estiver
+ * ativa; o que não existe mais é criar ou editar uma dessas por aqui, e
+ * conectar pelo servidor da plataforma aposenta a antiga.
  *
- * O token de administração nunca chega aqui: quem fala com ele é o cliente da
- * uazapi, e o que volta é só o token da instância daquela conta.
+ * O token de administração nunca chega a este módulo: quem fala com ele é o
+ * cliente da uazapi, e o que volta é só o token da instância daquela conta.
  */
 
 export type ConnectionView = {
@@ -123,140 +124,6 @@ export function credentialsOf(row: typeof whatsappConnections.$inferSelect): Uaz
   return { baseUrl: row.baseUrl, token: row.instanceToken };
 }
 
-export type SaveConnectionInput = {
-  name?: string;
-  baseUrl: string;
-  /** Ausente numa edição significa "manter o token atual". */
-  instanceToken?: string;
-};
-
-/**
- * Nome da outra conta que já usa esta instância, ou nulo se estiver livre.
- *
- * Devolve o NOME e não um booleano porque quem cola o token precisa saber onde
- * o número está preso para poder soltá-lo — "já está em uso" sem dizer onde é
- * um beco sem saída para o suporte.
- */
-async function donoDaInstancia(
-  organizationId: number,
-  token: string,
-  instanceId: string | null,
-): Promise<string | null> {
-  const mesmaInstancia = instanceId
-    ? or(eq(whatsappConnections.instanceToken, token), eq(whatsappConnections.instanceId, instanceId))
-    : eq(whatsappConnections.instanceToken, token);
-  const [outra] = await db
-    .select({ nome: organizations.name })
-    .from(whatsappConnections)
-    .innerJoin(organizations, eq(organizations.id, whatsappConnections.organizationId))
-    .where(
-      and(
-        mesmaInstancia,
-        ne(whatsappConnections.organizationId, organizationId),
-        // Conexão desligada não segura o número: é assim que uma clínica que
-        // trocou de plataforma consegue levar o próprio aparelho embora.
-        eq(whatsappConnections.active, true),
-      ),
-    )
-    .limit(1);
-  return outra?.nome ?? null;
-}
-
-export async function saveConnection(ctx: TenantContext, input: SaveConnectionInput): Promise<ConnectionView> {
-  const baseUrl = normalizeBaseUrl(input.baseUrl);
-  if (!baseUrl) throw new Error("Informe a URL do servidor uazapi.");
-
-  const existing = await getConnectionRow(ctx.organizationId);
-  const token = (input.instanceToken || "").trim() || existing?.instanceToken || "";
-  if (!token) throw new Error("Informe o token da instância.");
-
-  // Valida antes de gravar: token errado é o erro mais comum, e descobrir isso
-  // só quando a primeira mensagem não chega custa caro.
-  const status = await getStatus({ baseUrl, token });
-
-  // Um número de WhatsApp atende UMA conta.
-  //
-  // Sem esta trava, duas contas apontando para a mesma instância recebem o
-  // mesmo webhook e gravam a mesma conversa duas vezes — cada atendente
-  // enxergando as clientes da outra. Está acontecendo hoje entre duas contas
-  // desta base (mesmo token, mesmo número, 3.300 mensagens espelhadas), e o
-  // banco não tinha como impedir. A comparação é pela instância, não pelo
-  // token: emitir um token novo para o mesmo aparelho não o torna outro.
-  const jaEmUso = await donoDaInstancia(ctx.organizationId, token, status.instanceId);
-  if (jaEmUso) {
-    throw new Error(
-      `Este WhatsApp já está conectado na conta ${jaEmUso}. Um número atende uma conta por vez: desconecte-o de lá antes de conectar aqui.`,
-    );
-  }
-
-  const values = {
-    organizationId: ctx.organizationId,
-    name: input.name?.trim() || existing?.name || "WhatsApp",
-    baseUrl,
-    instanceToken: token,
-    instanceId: status.instanceId,
-    instanceName: status.instanceName,
-    phoneNumber: status.phoneNumber,
-    profileName: status.profileName,
-    status: status.connected ? ("connected" as const) : ("disconnected" as const),
-    statusDetail: status.status,
-    lastCheckedAt: new Date(),
-    connectedAt: status.connected ? (existing?.connectedAt ?? new Date()) : existing?.connectedAt,
-    updatedAt: new Date(),
-  };
-
-  if (existing) {
-    const [row] = await db
-      .update(whatsappConnections)
-      .set(values)
-      .where(and(eq(whatsappConnections.id, existing.id), eq(whatsappConnections.organizationId, ctx.organizationId)))
-      .returning();
-    return toView(row);
-  }
-
-  const [row] = await db
-    .insert(whatsappConnections)
-    .values({ ...values, webhookToken: randomBytes(24).toString("hex"), active: true })
-    .returning();
-  return toView(row);
-}
-
-/** Reconsulta o status na uazapi e grava o resultado. */
-export async function refreshConnectionStatus(ctx: TenantContext): Promise<ConnectionView> {
-  const existing = await getConnectionRow(ctx.organizationId);
-  if (!existing) throw new Error("Nenhuma conexão configurada.");
-
-  try {
-    const status = await getStatus(credentialsOf(existing));
-    const [row] = await db
-      .update(whatsappConnections)
-      .set({
-        status: status.connected ? "connected" : "disconnected",
-        statusDetail: status.status,
-        instanceId: status.instanceId ?? existing.instanceId,
-        instanceName: status.instanceName ?? existing.instanceName,
-        phoneNumber: status.phoneNumber ?? existing.phoneNumber,
-        profileName: status.profileName ?? existing.profileName,
-        connectedAt: status.connected ? (existing.connectedAt ?? new Date()) : existing.connectedAt,
-        // Conectou: o QR na tela virou lixo visual e precisa sumir.
-        ...(status.connected ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null } : {}),
-        lastCheckedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(whatsappConnections.id, existing.id))
-      .returning();
-    return toView(row);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "erro desconhecido";
-    const [row] = await db
-      .update(whatsappConnections)
-      .set({ status: "error", statusDetail: detail.slice(0, 300), lastCheckedAt: new Date(), updatedAt: new Date() })
-      .where(eq(whatsappConnections.id, existing.id))
-      .returning();
-    return toView(row);
-  }
-}
-
 /**
  * Cria a instância da conta no servidor da plataforma e já devolve o QR.
  *
@@ -271,7 +138,23 @@ export async function refreshConnectionStatus(ctx: TenantContext): Promise<Conne
  */
 export async function provisionarConexao(ctx: TenantContext): Promise<ConnectionView> {
   const existente = await getConnectionRow(ctx.organizationId);
-  if (existente) return startPairing(ctx);
+  if (existente && ehDaPlataforma(existente.baseUrl)) return startPairing(ctx);
+
+  if (existente) {
+    /**
+     * Conexão do tempo em que a instância era do cliente.
+     *
+     * Ela sai do sistema, mas NÃO é desligada do outro lado: o aparelho é
+     * dele, e derrubá-lo seria interromper o atendimento de alguém para
+     * arrumar o nosso cadastro. O que acontece aqui é uma troca — a conta
+     * passa a usar a instância da plataforma, e por isso o número precisa ser
+     * pareado de novo.
+     */
+    await db
+      .update(whatsappConnections)
+      .set({ active: false, status: "disconnected", updatedAt: new Date() })
+      .where(eq(whatsappConnections.id, existente.id));
+  }
 
   const plataforma = servidorDaPlataforma();
   if (!plataforma) {
@@ -309,6 +192,42 @@ export async function provisionarConexao(ctx: TenantContext): Promise<Connection
   await configurarWebhook(credentialsOf(row), webhookUrlFor(webhookToken));
 
   return startPairing(ctx);
+}
+
+/** Reconsulta o status na uazapi e grava o resultado. */
+export async function refreshConnectionStatus(ctx: TenantContext): Promise<ConnectionView> {
+  const existing = await getConnectionRow(ctx.organizationId);
+  if (!existing) throw new Error("Nenhuma conexão configurada.");
+
+  try {
+    const status = await getStatus(credentialsOf(existing));
+    const [row] = await db
+      .update(whatsappConnections)
+      .set({
+        status: status.connected ? "connected" : "disconnected",
+        statusDetail: status.status,
+        instanceId: status.instanceId ?? existing.instanceId,
+        instanceName: status.instanceName ?? existing.instanceName,
+        phoneNumber: status.phoneNumber ?? existing.phoneNumber,
+        profileName: status.profileName ?? existing.profileName,
+        connectedAt: status.connected ? (existing.connectedAt ?? new Date()) : existing.connectedAt,
+        // Conectou: o QR na tela virou lixo visual e precisa sumir.
+        ...(status.connected ? { pairingQrCode: null, pairingCode: null, pairingUpdatedAt: null } : {}),
+        lastCheckedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(whatsappConnections.id, existing.id))
+      .returning();
+    return toView(row);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "erro desconhecido";
+    const [row] = await db
+      .update(whatsappConnections)
+      .set({ status: "error", statusDetail: detail.slice(0, 300), lastCheckedAt: new Date(), updatedAt: new Date() })
+      .where(eq(whatsappConnections.id, existing.id))
+      .returning();
+    return toView(row);
+  }
 }
 
 /**
@@ -383,18 +302,6 @@ export async function disconnectDevice(ctx: TenantContext): Promise<ConnectionVi
       lastCheckedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(whatsappConnections.id, existing.id))
-    .returning();
-  return toView(row);
-}
-
-/** Troca o segredo da URL do webhook. A URL antiga para de ser aceita na hora. */
-export async function rotateWebhookToken(ctx: TenantContext): Promise<ConnectionView> {
-  const existing = await getConnectionRow(ctx.organizationId);
-  if (!existing) throw new Error("Nenhuma conexão configurada.");
-  const [row] = await db
-    .update(whatsappConnections)
-    .set({ webhookToken: randomBytes(24).toString("hex"), webhookSeenAt: null, updatedAt: new Date() })
     .where(eq(whatsappConnections.id, existing.id))
     .returning();
   return toView(row);
