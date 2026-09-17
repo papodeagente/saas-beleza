@@ -3,6 +3,7 @@
 import {
   BatteryFull,
   Bot,
+  ChevronRight,
   CircleAlert,
   KeyRound,
   Pencil,
@@ -872,7 +873,7 @@ function ConfiguracaoPadrao({
           </Badge>
         </div>
         <p className="mt-1 text-body text-ink-secondary">
-          Ela já sabe atender. Estes ajustes são só para ela parecer com você.
+          Ela já sabe atender. É só ligar.
         </p>
       </header>
 
@@ -906,7 +907,83 @@ function ConfiguracaoPadrao({
         </Card>
       ) : null}
 
-      <Card className="mb-4">
+      {/*
+        O cartão da AÇÃO, e só ele acima da dobra.
+        A tela existe para um clique; a versão anterior pedia que a dona lesse
+        três cartões de formulário antes de achar o botão. O que ela precisa
+        saber para decidir não é o tom de voz, é o que a agente vai fazer com as
+        clientes dela — e essa lista sai das permissões que a ativação concede,
+        não de promessa solta.
+      */}
+      <Card className="mb-3 p-5">
+        <div className="flex items-start gap-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-pill bg-accent-soft text-accent">
+            <Sparkles className="size-5" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-card text-ink">
+              {noAr ? `${config.name} está atendendo` : `${config.name} vai atender por você`}
+            </h2>
+            <ul className="mt-2 space-y-1 text-body text-ink-secondary">
+              <li>Responde preço, duração e o que está incluído em cada serviço.</li>
+              <li>Consulta a agenda e oferece de dois a quatro horários livres.</li>
+              <li>Marca e remarca atendimentos, confirmando antes com a cliente.</li>
+              <li>Chama você quando o assunto sai do agendamento.</li>
+            </ul>
+            <p className="mt-2 text-caption text-ink-tertiary">
+              Para cancelar um atendimento, ela passa para você.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button
+            disabled={!prontidao.prontaParaAtender}
+            loading={salvando}
+            onClick={() => aplicar("ativo")}
+            size="lg"
+            variant="primary"
+          >
+            {noAr ? "Salvar e continuar atendendo" : "Ativar agente"}
+          </Button>
+          {noAr ? (
+            <Button loading={salvando} onClick={() => aplicar("desligado")} variant="secondary">
+              Desligar
+            </Button>
+          ) : (
+            <Button loading={salvando} onClick={() => aplicar("teste")} variant="ghost">
+              Só testar antes
+            </Button>
+          )}
+          {noAr ? (
+            <Button loading={salvando} onClick={() => setTestando((antes) => !antes)} variant="ghost">
+              {testando ? "Fechar o teste" : "Testar"}
+            </Button>
+          ) : null}
+        </div>
+      </Card>
+
+      {/*
+        Os ajustes ficam FECHADOS. São opcionais de verdade: o preset já traz
+        tom, emoji e objetivo prontos, e nada aqui precisa ser tocado para a
+        agente funcionar. `details` e não estado próprio porque abrir e fechar
+        uma gaveta é exatamente o que o elemento faz, com teclado incluído.
+      */}
+      <details className="group mb-3 rounded-card border border-line bg-surface-raised">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-4 text-label font-medium text-ink [&::-webkit-details-marker]:hidden">
+          <ChevronRight
+            aria-hidden
+            className="size-4 text-ink-secondary transition-transform group-open:rotate-90"
+          />
+          Ajustes opcionais
+          <span className="text-caption font-normal text-ink-secondary">
+            nome, tom de conversa, emojis e quando chamar você
+          </span>
+        </summary>
+
+        <div className="border-t border-line p-1">
+
+      <Card className="mb-4 border-0 shadow-none">
         <CardHeader title="Como ela se apresenta" />
         <div className="flex flex-col gap-4 p-4 pt-0">
           <Field hint="É o nome que a cliente vê no WhatsApp." label="Nome da agente">
@@ -939,7 +1016,7 @@ function ConfiguracaoPadrao({
         </div>
       </Card>
 
-      <Card className="mb-4">
+      <Card className="border-0 shadow-none">
         <CardHeader title="Quando chamar você" />
         <div className="flex flex-col gap-2 p-4 pt-0">
           <p className="text-caption text-ink-secondary">
@@ -968,35 +1045,16 @@ function ConfiguracaoPadrao({
         </div>
       </Card>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          disabled={!prontidao.prontaParaAtender}
-          loading={salvando}
-          onClick={() => aplicar("ativo")}
-          variant="primary"
-        >
-          {noAr ? "Salvar ajustes" : "Ativar agente"}
-        </Button>
-        {noAr ? (
-          <Button loading={salvando} onClick={() => aplicar("desligado")} variant="secondary">
-            Desligar agente
-          </Button>
-        ) : (
-          <Button loading={salvando} onClick={() => aplicar("teste")} variant="secondary">
-            Só preparar e testar
-          </Button>
-        )}
-        <Button loading={salvando} onClick={() => setTestando((antes) => !antes)} variant="ghost">
-          {testando ? "Fechar o teste" : "Testar"}
-        </Button>
-        <button
-          className="ml-auto min-h-11 text-caption text-ink-secondary hover:text-ink"
-          onClick={irParaPersonalizado}
-          type="button"
-        >
-          Prefiro configurar do zero
-        </button>
-      </div>
+        </div>
+      </details>
+
+      <button
+        className="min-h-11 text-caption text-ink-secondary hover:text-ink"
+        onClick={irParaPersonalizado}
+        type="button"
+      >
+        Prefiro escrever o comportamento eu mesma
+      </button>
 
       {testando ? (
         <div className="mt-4">
