@@ -397,6 +397,10 @@ export async function simulateAgentAction(input: unknown): Promise<SimulationRes
       rounds: result.debug.rounds,
     };
   } catch (error) {
+    // Zod nunca deveria vazar cru pra tela: o campo `history` já é truncado no
+    // cliente antes de enviar, mas se algo escapar disso, o admin não pode ver
+    // um JSON de validação em vez de uma frase legível.
+    if (error instanceof z.ZodError) return { ok: false, error: error.issues[0]?.message ?? "Dados inválidos." };
     console.error(error);
     const message = error instanceof Error ? error.message : "Falha ao simular.";
     return { ok: false, error: message.includes("API_KEY") ? "Falta a chave do provedor no servidor." : message };
