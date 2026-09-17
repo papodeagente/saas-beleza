@@ -43,11 +43,35 @@ export function stripAgentDashes(text: string): string {
   return out.replace(new RegExp(`${OPEN}(\\d+)${CLOSE}`, "g"), (_, i) => parts[Number(i)] ?? "");
 }
 
+/**
+ * Tira todo emoji do texto.
+ *
+ * Existe pelo mesmo motivo de `stripAgentDashes`: o prompt pede, e o modelo
+ * ignora pedido de estilo com frequência. Quando a dona escolhe "não usar
+ * emoji", isso é uma decisão dela sobre como a marca dela fala, não uma
+ * sugestão ao modelo, então a garantia é determinística e no ponto de saída.
+ *
+ * Cobre sequências inteiras, não símbolos soltos: a família de quatro pessoas é
+ * um emoji unido por ZWJ, e apagar só o primeiro membro deixaria os outros três
+ * na tela. O seletor de variação e os indicadores regionais de bandeira entram
+ * pelo mesmo motivo.
+ */
+export function stripEmoji(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/\p{RI}\p{RI}/gu, "")
+    .replace(/\p{Extended_Pictographic}(\uFE0F|\u200D\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}])*/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.!?])/g, "$1")
+    .replace(/^[ \t]+/gm, "")
+    .replace(/[ \t]+$/gm, "");
+}
+
 /** Saída final para o WhatsApp: sem travessão, sem markdown de título, sem sobra de espaço. */
-export function formatForWhatsApp(text: string): string {
-  return stripAgentDashes(text)
+export function formatForWhatsApp(text: string, opcoes?: { semEmoji?: boolean }): string {
+  const semTravessao = stripAgentDashes(text)
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/\*\*(.+?)\*\*/g, "*$1*")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+  return (opcoes?.semEmoji ? stripEmoji(semTravessao) : semTravessao).trim();
 }

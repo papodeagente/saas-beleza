@@ -3,12 +3,15 @@
 import {
   BatteryFull,
   Bot,
+  CircleAlert,
   KeyRound,
   Pencil,
   Play,
   Plus,
   Send,
   Signal,
+  SlidersHorizontal,
+  Sparkles,
   Trash2,
   TriangleAlert,
   Wifi,
@@ -21,8 +24,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Field, Input, Textarea } from "@/components/ui/input";
+import {
+  apenasSituacoesConhecidas,
+  montarPresetPadrao,
+  PADRAO,
+  PERMISSOES_DO_PADRAO,
+  type Prontidao,
+  ROTULO_DO_EMOJI,
+  ROTULO_DO_TOM,
+  SITUACOES_DE_TRANSFERENCIA,
+  type SituacaoDeTransferencia,
+  TONS,
+  type Tom,
+  USOS_DE_EMOJI,
+  type UsoDeEmoji,
+} from "@/domain/agente";
 import { cn } from "@/lib/utils";
 import {
+  ativarAgentePadraoAction,
   deleteKnowledgeAction,
   saveAgentAction,
   saveKnowledgeAction,
@@ -30,11 +49,18 @@ import {
   simulateAgentAction,
 } from "./actions";
 
+type Modo = "padrao" | "personalizado";
+
 type Config = {
   name: string;
   status: "off" | "testing" | "active";
   enabled: boolean;
   instructions: string;
+  mode: Modo;
+  tone: string;
+  emojiUse: string;
+  goal: string | null;
+  handoffWhen: string[] | null;
   model: string;
   temperature: number;
   maxOutputTokens: number;
@@ -113,6 +139,8 @@ export function AgentView({
   models,
   apiKeyPresent,
   whatsappConnected,
+  agentExists,
+  prontidao,
   config: initialConfig,
   permissions: initialPermissions,
   knowledge: initialKnowledge,
@@ -121,6 +149,8 @@ export function AgentView({
   models: ModelInfo[];
   apiKeyPresent: boolean;
   whatsappConnected: boolean;
+  agentExists: boolean;
+  prontidao: Prontidao;
   config: Config;
   permissions: Permissions;
   knowledge: Knowledge[];
@@ -130,6 +160,17 @@ export function AgentView({
   const [permissions, setPermissions] = useState(initialPermissions);
   const [knowledge, setKnowledge] = useState(initialKnowledge);
   const [saving, startSaving] = useTransition();
+
+  /**
+   * `null` é a tela de escolha. Conta que nunca configurou começa nela; conta
+   * que já tem agente entra direto no modo dela e só volta aqui se pedir.
+   *
+   * Sem isto, quem chega pela primeira vez cai num formulário cheio, idêntico
+   * ao de um agente já montado e desligado — que é exatamente o que fez
+   * ninguém em produção conseguir ligar a agente até hoje.
+   */
+  const [modo, setModo] = useState<Modo | null>(agentExists ? initialConfig.mode : null);
+  const [ativada, setAtivada] = useState(false);
 
   function set<K extends keyof Config>(key: K, value: Config[K]) {
     setConfig((prev) => ({ ...prev, [key]: value }));
@@ -154,6 +195,37 @@ export function AgentView({
     });
   }
 
+  if (modo === null) {
+    return (
+      <EscolhaDeModo
+        organizationName={organizationName}
+        onEscolher={(escolhido) => {
+          setModo(escolhido);
+          setAtivada(false);
+        }}
+      />
+    );
+  }
+
+  if (modo === "padrao") {
+    return (
+      <ConfiguracaoPadrao
+        ativada={ativada}
+        config={config}
+        onAplicado={(ligou) => {
+          // A aba de ferramentas precisa passar a mostrar o que a ativação
+          // concedeu; senão o primeiro toque ali revoga tudo de volta.
+          setPermissions({ ...PERMISSOES_DO_PADRAO });
+          if (ligou) setAtivada(true);
+        }}
+        onPersonalizar={() => setModo("personalizado")}
+        organizationName={organizationName}
+        prontidao={prontidao}
+        set={set}
+      />
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
       <header className="mb-5">
@@ -163,6 +235,15 @@ export function AgentView({
             <Bot className="size-3" aria-hidden />
             {config.status === "active" && config.enabled ? "Atendendo" : config.status === "testing" ? "Em teste" : "Desligado"}
           </Badge>
+          {/* O caminho de volta. Sem ele, escolher "configurar do zero" uma vez
+              tranca a conta no modo avançado para sempre. */}
+          <button
+            className="ml-auto min-h-11 text-caption text-ink-secondary hover:text-ink"
+            onClick={() => setModo("padrao")}
+            type="button"
+          >
+            Usar a configuração padrão
+          </button>
         </div>
         <p className="mt-1 text-body text-ink-secondary">
           Um atendente que responde no WhatsApp de {organizationName}: consulta a agenda, informa preço e marca horário,
@@ -553,6 +634,375 @@ function KnowledgeTab({
           <p className="line-clamp-3 whitespace-pre-wrap px-4 pb-4 text-caption text-ink-secondary">{item.content}</p>
         </Card>
       ))}
+    </div>
+  );
+}
+
+/**
+ * A porta de entrada. Duas escolhas, e uma delas é claramente a recomendada.
+ *
+ * O ponto inteiro desta tela é que a manicure não precise entender de IA para
+ * usar IA: a coluna da esquerda não pede nada dela, e a da direita avisa, sem
+ * assustar, para quem ela serve.
+ */
+function EscolhaDeModo({
+  organizationName,
+  onEscolher,
+}: {
+  organizationName: string;
+  onEscolher: (modo: Modo) => void;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
+      <header className="mb-6">
+        <h1 className="text-title text-ink">Agente de IA</h1>
+        <p className="mt-1 text-body text-ink-secondary">
+          Uma atendente que responde no WhatsApp de {organizationName}: informa preço, consulta a agenda e marca
+          horário.
+        </p>
+      </header>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card className="flex flex-col border-accent/40 p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="flex size-9 items-center justify-center rounded-pill bg-accent-soft text-accent">
+              <Sparkles className="size-5" aria-hidden />
+            </span>
+            <Badge tone="positive">Recomendado</Badge>
+          </div>
+          <h2 className="text-card text-ink">Configuração padrão</h2>
+          <p className="mt-1.5 flex-1 text-body text-ink-secondary">
+            Ative uma agente pronta para atender suas clientes, consultar horários, fazer e remarcar agendamentos,
+            tirar dúvidas e apresentar seus serviços. Você não escreve nada.
+          </p>
+          <Button className="mt-4" onClick={() => onEscolher("padrao")} variant="primary">
+            Usar a configuração padrão
+          </Button>
+        </Card>
+
+        <Card className="flex flex-col p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="flex size-9 items-center justify-center rounded-pill bg-surface-sunken text-ink-secondary">
+              <SlidersHorizontal className="size-5" aria-hidden />
+            </span>
+          </div>
+          <h2 className="text-card text-ink">Configuração personalizada</h2>
+          <p className="mt-1.5 flex-1 text-body text-ink-secondary">
+            Escreva o comportamento, a personalidade, a linguagem e as regras da sua agente, e escolha uma a uma as
+            ações que ela pode executar.
+          </p>
+          <p className="mt-3 rounded-control bg-surface-sunken px-3 py-2 text-caption text-ink-secondary">
+            Indicada para quem quer um comportamento específico. Se você quer uma agente pronta para atender e
+            agendar, use a configuração padrão.
+          </p>
+          <Button className="mt-4" onClick={() => onEscolher("personalizado")} variant="secondary">
+            Configurar do zero
+          </Button>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/** Um seletor de três opções, do tamanho de um dedo. */
+function Escolha<T extends string>({
+  opcoes,
+  rotulos,
+  valor,
+  onChange,
+}: {
+  opcoes: readonly T[];
+  rotulos: Record<T, string>;
+  valor: T;
+  onChange: (valor: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {opcoes.map((opcao) => (
+        <button
+          aria-pressed={valor === opcao}
+          className={cn(
+            "min-h-11 rounded-control px-3 text-label font-medium transition-colors",
+            valor === opcao
+              ? "bg-accent-soft text-accent ring-1 ring-accent/40"
+              : "bg-surface-sunken text-ink-secondary hover:text-ink",
+          )}
+          key={opcao}
+          onClick={() => onChange(opcao)}
+          type="button"
+        >
+          {rotulos[opcao]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ConfiguracaoPadrao({
+  ativada,
+  config,
+  onAplicado,
+  onPersonalizar,
+  organizationName,
+  prontidao,
+  set,
+}: {
+  ativada: boolean;
+  config: Config;
+  onAplicado: (ligou: boolean) => void;
+  onPersonalizar: () => void;
+  organizationName: string;
+  prontidao: Prontidao;
+  set: <K extends keyof Config>(key: K, value: Config[K]) => void;
+}) {
+  const [salvando, startSalvando] = useTransition();
+  const [testando, setTestando] = useState(false);
+
+  // Filtra chave que uma versão anterior da tela gravou e que não existe mais,
+  // para a caixa de marcar não guardar um valor que ninguém mostra.
+  const transferir = apenasSituacoesConhecidas(config.handoffWhen ?? PADRAO.transferirQuando);
+  const faltando = prontidao.itens.filter((item) => !item.ok);
+
+  /** O que o BANCO diz, não o que a tela lembra de ter clicado. */
+  const noAr = config.status === "active" && config.enabled;
+
+  function aplicar(estado: "ativo" | "teste" | "desligado") {
+    startSalvando(async () => {
+      const resultado = await ativarAgentePadraoAction({
+        name: config.name,
+        tone: config.tone,
+        emojiUse: config.emojiUse,
+        goal: config.goal,
+        handoffWhen: transferir,
+        estado,
+      });
+      if (!resultado.ok) {
+        toast.error(resultado.error);
+        return;
+      }
+      /**
+       * A tela precisa passar a acreditar no que acabou de gravar.
+       *
+       * Sem isto, `config` continua com o estado anterior e o próximo Salvar
+       * dos ajustes avançados regrava status "off" por cima da agente recém
+       * ativada — desligando, em silêncio, o que a dona acabou de ligar.
+       */
+      set("mode", "padrao");
+      set("status", estado === "ativo" ? "active" : estado === "teste" ? "testing" : "off");
+      set("enabled", estado === "ativo");
+
+      onAplicado(estado === "ativo");
+
+      if (estado === "teste") {
+        setTestando(true);
+        toast.success("Pronta para testar. Ela ainda não responde suas clientes.");
+      } else {
+        toast.success("Agente desligada. Ela não responde mais suas clientes.");
+      }
+    });
+  }
+
+  /**
+   * Sair do padrão sem perder o comportamento.
+   *
+   * No modo padrão o campo de instruções fica vazio, porque o comportamento vem
+   * do preset em código. Mandar a dona para a tela avançada assim entregaria
+   * uma caixa em branco e, no primeiro Salvar, uma agente sem preset e sem
+   * instruções: sem comportamento nenhum. O preset é materializado no texto,
+   * para ela editar a partir do que já existia.
+   */
+  function irParaPersonalizado() {
+    if (!config.instructions.trim()) {
+      set(
+        "instructions",
+        montarPresetPadrao({
+          tom: config.tone as Tom,
+          emoji: config.emojiUse as UsoDeEmoji,
+          objetivo: config.goal,
+          transferirQuando: transferir,
+        }),
+      );
+    }
+    onPersonalizar();
+  }
+
+  if (ativada) {
+    return (
+      <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
+        <Card className="p-6 text-center">
+          <span className="mx-auto mb-3 flex size-12 items-center justify-center rounded-pill bg-accent-soft text-accent">
+            <Sparkles className="size-6" aria-hidden />
+          </span>
+          <h1 className="text-title text-ink">Sua agente está pronta</h1>
+          <p className="mx-auto mt-2 max-w-[460px] text-body text-ink-secondary">
+            {config.name} já consulta seus serviços, seus preços e sua agenda para atender suas clientes e marcar
+            horário no WhatsApp de {organizationName}.
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <Button onClick={() => setTestando((antes) => !antes)} variant="primary">
+              {testando ? "Fechar o teste" : "Testar minha agente"}
+            </Button>
+            <Button onClick={irParaPersonalizado} variant="secondary">
+              Ver ajustes avançados
+            </Button>
+          </div>
+          {!prontidao.prontaParaResponder ? (
+            <p className="mt-4 text-caption text-attention">
+              Falta conectar o WhatsApp para ela falar com suas clientes.
+            </p>
+          ) : null}
+        </Card>
+        {testando ? (
+          <div className="mt-4">
+            <SimulatorTab agentName={config.name} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
+      <header className="mb-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-title text-ink">Configuração padrão</h1>
+          <Badge tone={noAr ? "positive" : config.status === "testing" ? "info" : "neutral"}>
+            <Bot className="size-3" aria-hidden />
+            {noAr ? "Atendendo" : config.status === "testing" ? "Em teste" : "Desligada"}
+          </Badge>
+        </div>
+        <p className="mt-1 text-body text-ink-secondary">
+          Ela já sabe atender. Estes ajustes são só para ela parecer com você.
+        </p>
+      </header>
+
+      {/*
+        A prontidão vem antes dos ajustes de propósito. A promessa "ative e ela
+        já consulta seus serviços e sua agenda" é falsa numa conta vazia, e conta
+        vazia é o caso comum: medido em produção, há contas reais com zero
+        serviço, zero profissional e zero jornada. Ativar ali entregaria uma
+        agente que não sabe nenhum preço e nunca acha horário.
+      */}
+      {faltando.length > 0 ? (
+        <Card className="mb-4 border-attention/40 p-4">
+          <h2 className="text-card text-ink">Falta pouco para ela atender</h2>
+          <p className="mt-1 text-caption text-ink-secondary">
+            Ela nunca inventa informação, então precisa do seu cadastro para responder.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {faltando.map((item) => (
+              <li className="flex items-start gap-2.5" key={item.chave}>
+                <CircleAlert className="mt-0.5 size-4 shrink-0 text-attention" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-label text-ink">{item.rotulo}</span>
+                  <span className="block text-caption text-ink-secondary">{item.comoResolver}</span>
+                </span>
+                <Link className="shrink-0 text-label font-semibold text-accent hover:underline" href={item.href}>
+                  {item.acao}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
+      <Card className="mb-4">
+        <CardHeader title="Como ela se apresenta" />
+        <div className="flex flex-col gap-4 p-4 pt-0">
+          <Field hint="É o nome que a cliente vê no WhatsApp." label="Nome da agente">
+            <Input maxLength={60} onChange={(e) => set("name", e.target.value)} value={config.name} />
+          </Field>
+          <Field label="Tom de conversa">
+            <Escolha
+              onChange={(valor) => set("tone", valor)}
+              opcoes={TONS}
+              rotulos={ROTULO_DO_TOM}
+              valor={config.tone as Tom}
+            />
+          </Field>
+          <Field label="Emojis">
+            <Escolha
+              onChange={(valor) => set("emojiUse", valor)}
+              opcoes={USOS_DE_EMOJI}
+              rotulos={ROTULO_DO_EMOJI}
+              valor={config.emojiUse as UsoDeEmoji}
+            />
+          </Field>
+          <Field hint="Em uma frase, o que ela deve buscar em cada conversa." label="Objetivo principal">
+            <Input
+              maxLength={200}
+              onChange={(e) => set("goal", e.target.value || null)}
+              placeholder={PADRAO.objetivo}
+              value={config.goal ?? ""}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      <Card className="mb-4">
+        <CardHeader title="Quando chamar você" />
+        <div className="flex flex-col gap-2 p-4 pt-0">
+          <p className="text-caption text-ink-secondary">
+            Quando a cliente pedir para falar com uma pessoa, ela sempre passa para você. Estas são as outras
+            situações.
+          </p>
+          {(Object.keys(SITUACOES_DE_TRANSFERENCIA) as SituacaoDeTransferencia[]).map((chave) => {
+            const marcada = transferir.includes(chave);
+            return (
+              <label className="flex min-h-11 items-center gap-2.5 text-body text-ink" key={chave}>
+                <input
+                  checked={marcada}
+                  className="size-4 accent-[var(--color-accent)]"
+                  onChange={() =>
+                    set(
+                      "handoffWhen",
+                      marcada ? transferir.filter((item) => item !== chave) : [...transferir, chave],
+                    )
+                  }
+                  type="checkbox"
+                />
+                {SITUACOES_DE_TRANSFERENCIA[chave].rotulo}
+              </label>
+            );
+          })}
+        </div>
+      </Card>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          disabled={!prontidao.prontaParaAtender}
+          loading={salvando}
+          onClick={() => aplicar("ativo")}
+          variant="primary"
+        >
+          {noAr ? "Salvar ajustes" : "Ativar agente"}
+        </Button>
+        {noAr ? (
+          <Button loading={salvando} onClick={() => aplicar("desligado")} variant="secondary">
+            Desligar agente
+          </Button>
+        ) : (
+          <Button loading={salvando} onClick={() => aplicar("teste")} variant="secondary">
+            Só preparar e testar
+          </Button>
+        )}
+        <Button loading={salvando} onClick={() => setTestando((antes) => !antes)} variant="ghost">
+          {testando ? "Fechar o teste" : "Testar"}
+        </Button>
+        <button
+          className="ml-auto min-h-11 text-caption text-ink-secondary hover:text-ink"
+          onClick={irParaPersonalizado}
+          type="button"
+        >
+          Prefiro configurar do zero
+        </button>
+      </div>
+
+      {testando ? (
+        <div className="mt-4">
+          <SimulatorTab agentName={config.name} />
+        </div>
+      ) : null}
     </div>
   );
 }

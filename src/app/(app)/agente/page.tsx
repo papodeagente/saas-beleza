@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { aiAgentKnowledge, aiAgentPermissions, aiAgents } from "@/db/schema";
 import { AGENT_MODELS, DEFAULT_MODEL, hasApiKeyFor } from "@/server/ai/llm";
 import { requireSession } from "@/server/auth";
+import { verificarProntidao } from "@/server/services/agent-readiness-service";
 import { getConnection } from "@/server/services/whatsapp-connection-service";
 import { AgentView } from "./agente-view";
 
@@ -38,9 +39,18 @@ export default async function AgentePage() {
 
   const connection = await getConnection(ctx);
   const model = agent?.model ?? DEFAULT_MODEL;
+  const prontidao = await verificarProntidao(ctx);
 
   return (
     <AgentView
+      /**
+       * Sem esta flag a tela não distingue "nunca configurou" de "configurou e
+       * desligou": `page.tsx` monta os mesmos valores padrão nos dois casos, e
+       * quem chega pela primeira vez via um formulário cheio, idêntico ao de um
+       * agente já montado.
+       */
+      agentExists={Boolean(agent)}
+      prontidao={prontidao}
       organizationName={ctx.organizationName}
       models={AGENT_MODELS}
       apiKeyPresent={hasApiKeyFor(model)}
@@ -51,6 +61,11 @@ export default async function AgentePage() {
         status: agent?.status ?? "off",
         enabled: agent?.enabled ?? false,
         instructions: agent?.instructions ?? "",
+        mode: agent?.mode === "padrao" ? "padrao" : "personalizado",
+        tone: agent?.tone ?? "equilibrado",
+        emojiUse: agent?.emojiUse ?? "poucos",
+        goal: agent?.goal ?? null,
+        handoffWhen: Array.isArray(agent?.handoffWhen) ? (agent.handoffWhen as string[]) : null,
         model,
         temperature: agent?.temperature ?? 70,
         maxOutputTokens: agent?.maxOutputTokens ?? 600,

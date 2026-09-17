@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatForWhatsApp, stripAgentDashes } from "./text-style";
+import { formatForWhatsApp, stripAgentDashes, stripEmoji } from "./text-style";
 
 /**
  * Regra de estilo do agente: nada de travessão no texto que vai para o cliente.
@@ -38,5 +38,52 @@ describe("stripAgentDashes", () => {
 describe("formatForWhatsApp", () => {
   it("remove formatação de documento e ajusta negrito", () => {
     expect(formatForWhatsApp("## Serviços\n\n**Corte** custa R$ 80")).toBe("Serviços\n\n*Corte* custa R$ 80");
+  });
+});
+
+describe("stripEmoji", () => {
+  it("tira emoji simples e não deixa espaço sobrando", () => {
+    expect(stripEmoji("Oi! 😊 Tudo bem?")).toBe("Oi! Tudo bem?");
+    expect(stripEmoji("Perfeito 👍")).toBe("Perfeito");
+  });
+
+  it("tira a sequência inteira, não só o primeiro símbolo", () => {
+    // Família unida por ZWJ: apagar só o primeiro membro deixaria os outros
+    // três na tela.
+    expect(stripEmoji("familia 👨‍👩‍👧‍👦 aqui")).toBe("familia aqui");
+    // Tom de pele é modificador, não emoji separado.
+    expect(stripEmoji("oi 👋🏽")).toBe("oi");
+    // Bandeira são dois indicadores regionais.
+    expect(stripEmoji("Brasil 🇧🇷 sim")).toBe("Brasil sim");
+  });
+
+  it("não mexe em texto sem emoji", () => {
+    const texto = "Limpeza de Pele Profunda, R$ 180, 1h10.";
+    expect(stripEmoji(texto)).toBe(texto);
+  });
+
+  it("encosta a pontuação na palavra em vez de deixar o espaço do emoji", () => {
+    expect(stripEmoji("Combinado 😊 !")).toBe("Combinado!");
+  });
+
+  it("não come pontuação nem número", () => {
+    expect(stripEmoji("São R$ 80,00 😊, quer ver os horários?")).toBe(
+      "São R$ 80,00, quer ver os horários?",
+    );
+  });
+
+  it("preserva a quebra de linha entre as opções", () => {
+    expect(stripEmoji("Tenho:\n• 10h 😊\n• 14h30")).toBe("Tenho:\n• 10h\n• 14h30");
+  });
+});
+
+describe("formatForWhatsApp com semEmoji", () => {
+  it("só tira emoji quando pedido", () => {
+    expect(formatForWhatsApp("Oi 😊")).toBe("Oi 😊");
+    expect(formatForWhatsApp("Oi 😊", { semEmoji: true })).toBe("Oi");
+  });
+
+  it("continua tirando travessão nos dois casos", () => {
+    expect(formatForWhatsApp("Oi — tudo bem 😊", { semEmoji: true })).toBe("Oi, tudo bem");
   });
 });

@@ -15,6 +15,13 @@ import {
 import type { TenantContext } from "@/server/auth";
 import { aconteceuEm } from "@/server/services/inbox-service";
 import { complete, DEFAULT_MODEL, normalizeModel, type LlmItem } from "@/server/ai/llm";
+import {
+  PADRAO,
+  type SituacaoDeTransferencia,
+  type Tom,
+  type UsoDeEmoji,
+} from "@/domain/agente";
+import { montarPresetPadrao } from "@/server/ai/preset-padrao";
 import { formatForWhatsApp } from "@/server/ai/text-style";
 import { findTool, toolsFor, type ToolOutcome, type ToolPermissions, type ToolRuntime } from "@/server/ai/tools";
 import { formatTzCapitalized } from "@/lib/tz";
@@ -167,7 +174,14 @@ function buildSystemPrompt(args: {
     `Agora é ${formatTzCapitalized(now, args.ctx.timezone, "EEEE, dd 'de' MMMM 'de' yyyy, HH:mm")} (fuso ${args.ctx.timezone}).`,
   );
 
-  if (args.agent.instructions?.trim()) {
+  /**
+   * No modo personalizado o texto da dona entra aqui, antes das regras fixas,
+   * como sempre entrou. No modo padrão ele nem é lido: o comportamento vem do
+   * preset, que entra DEPOIS das regras fixas e declara isso em voz alta.
+   */
+  const noPadrao = args.agent.mode === "padrao";
+
+  if (!noPadrao && args.agent.instructions?.trim()) {
     parts.push("", "Instruções do negócio:", args.agent.instructions.trim());
   }
 
@@ -186,6 +200,20 @@ function buildSystemPrompt(args: {
     "- Se não souber, ou se o cliente pedir uma pessoa, transfira para uma atendente.",
     "- Nunca prometa o que não puder confirmar por ferramenta.",
   );
+
+  if (noPadrao) {
+    parts.push(
+      "",
+      montarPresetPadrao({
+        tom: (args.agent.tone as Tom) ?? PADRAO.tom,
+        emoji: (args.agent.emojiUse as UsoDeEmoji) ?? PADRAO.emoji,
+        objetivo: args.agent.goal,
+        transferirQuando: Array.isArray(args.agent.handoffWhen)
+          ? (args.agent.handoffWhen as SituacaoDeTransferencia[])
+          : PADRAO.transferirQuando,
+      }),
+    );
+  }
 
   if (args.customerName) {
     parts.push("", `Cliente desta conversa: ${args.customerName}.`);
@@ -353,7 +381,11 @@ export async function executeAgentTurn(input: TurnInput): Promise<TurnResult> {
     .catch(() => {});
 
   return {
-    reply: formatForWhatsApp(reply),
+    // "Sem emoji" é decisão da dona sobre como a marca dela fala, e por isso
+    // vira garantia no ponto de saída, e não só um pedido no prompt.
+    reply: formatForWhatsApp(reply, {
+      semEmoji: agent.mode === "padrao" && agent.emojiUse === "nenhum",
+    }),
     toolsUsed,
     effect,
     usage,

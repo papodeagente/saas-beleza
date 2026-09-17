@@ -12,7 +12,7 @@ import {
   services,
 } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
-import { getAvailableSlots } from "@/server/services/availability-service";
+import { getAvailableSlots, getAvailableSlotsByDay } from "@/server/services/availability-service";
 import {
   changeStatus,
   createAppointment,
@@ -77,6 +77,40 @@ function requireCustomer(runtime: ToolRuntime): number {
     throw new Error("Ainda não sei quem é este cliente. Pergunte o nome antes de continuar.");
   }
   return runtime.customerId;
+}
+
+/**
+ * O agendamento é DESTA cliente, ou a ferramenta não mexe nele.
+ *
+ * Remarcar e cancelar recebem um `appointmentId` cru vindo do modelo, e o
+ * domínio filtra só por organização — o suficiente para não atravessar a
+ * fronteira entre clínicas, e insuficiente dentro de uma. Os ids são
+ * sequenciais e pequenos: um número alucinado, ou ditado pela própria cliente,
+ * cancelava o atendimento de OUTRA pessoa do mesmo salão, e ainda somava uma
+ * falta no histórico da vítima.
+ *
+ * Não era exposição teórica: sem esta guarda, ligar "remarcar" e "cancelar" na
+ * configuração padrão abriria o buraco em todas as contas de uma vez.
+ *
+ * A mensagem de erro é escrita para o modelo repassar: ela não revela que o
+ * agendamento existe e é de outra pessoa.
+ */
+async function assertAgendamentoDaCliente(runtime: ToolRuntime, appointmentId: number): Promise<void> {
+  const customerId = requireCustomer(runtime);
+  const [linha] = await db
+    .select({ customerId: appointments.customerId })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.id, appointmentId),
+        eq(appointments.organizationId, runtime.ctx.organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!linha || linha.customerId !== customerId) {
+    throw new Error("Não encontrei esse atendimento no cadastro desta cliente.");
+  }
 }
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -207,6 +241,130 @@ const checkAvailability: AgentTool = {
         total: slots.length,
       },
     };
+  },
+};
+
+/**
+ * Os próximos dias com vaga, de uma vez.
+ *
+ * Existe porque `check_availability` exige UMA data, e a cliente não fala por
+ * data: fala "tem essa semana?", "tem alguma coisa de manhã?". Sem varredura, o
+ * modelo chuta data por data e queima as seis rodadas de ferramenta do turno —
+ * e quando a última rodada só chama ferramenta, a resposta sai VAZIA e a
+ * cliente fica sem retorno nenhum.
+ *
+ * Devolve poucas opções de propósito. Despejar trinta horários num WhatsApp é
+ * o contrário de atender: quem escolhe bem escolhe entre três.
+ *
+ * Reusa `getAvailableSlotsByDay`, a mesma varredura do calendário público, que
+ * carrega serviço, profissionais, jornada, agendamentos e bloqueios UMA vez
+ * para o intervalo inteiro. Consultar dez dias custa o mesmo que consultar um.
+ */
+const proximosHorarios: AgentTool = {
+  permission: "readAvailability",
+  definition: {
+    name: "next_available_slots",
+    description:
+      "Próximos horários livres de um serviço, varrendo vários dias. Use quando o cliente não disser uma data exata (esta semana, amanhã de manhã, depois das 18h).",
+    parameters: {
+      type: "object",
+      properties: {
+        serviceId: { type: "number", description: "Id do serviço, vindo de list_services." },
+        diasAFrente: { type: "number", description: "Quantos dias varrer a partir de hoje. Padrão 14, máximo 30." },
+        periodo: {
+          type: "string",
+          enum: ["manha", "tarde", "noite", "qualquer"],
+          description: "Recorte do dia pedido pelo cliente.",
+        },
+        professionalId: { type: "number", description: "Profissional específico, opcional." },
+      },
+      required: ["serviceId"],
+      additionalProperties: false,
+    },
+  },
+  async execute(input, runtime) {
+    const serviceId = num(input, "serviceId");
+    if (!serviceId) return { ok: false, data: { erro: "Informe serviceId." } };
+
+    const pedido = num(input, "diasAFrente") ?? 14;
+    const dias = Math.max(1, Math.min(30, pedido));
+    const hoje = dateISOInTz(new Date(), runtime.ctx.timezone);
+    const datas = Array.from({ length: dias }, (_, i) => {
+      const d = new Date(`${hoje}T12:00:00.000Z`);
+      d.setUTCDate(d.getUTCDate() + i);
+      return d.toISOString().slice(0, 10);
+    });
+
+    const porDia = await getAvailableSlotsByDay(runtime.ctx, {
+      serviceId,
+      dateISOs: datas,
+      professionalId: num(input, "professionalId") ?? undefined,
+    });
+
+    const periodo = str(input, "periodo") || "qualquer";
+    const dentroDoPeriodo = (hora: string) => {
+      const h = Number(hora.slice(0, 2));
+      if (periodo === "manha") return h < 12;
+      if (periodo === "tarde") return h >= 12 && h < 18;
+      if (periodo === "noite") return h >= 18;
+      return true;
+    };
+
+    const nomes = new Map<number, string>();
+    const linhas = await db
+      .select({ id: professionals.id, name: professionals.name })
+      .from(professionals)
+      .where(eq(professionals.organizationId, runtime.ctx.organizationId));
+    for (const linha of linhas) nomes.set(linha.id, linha.name);
+
+    /**
+     * No máximo dois horários por dia e quatro no total: o objetivo é uma
+     * escolha fácil, não um inventário. O `total` vai junto para o agente poder
+     * dizer "tenho mais opções" sem listar todas.
+     */
+    const opcoes: Array<{ data: string; hora: string; professionalId: number; profissional: string | null }> = [];
+    let total = 0;
+    for (const data of datas) {
+      const doDia = (porDia.get(data) ?? []).filter((slot) =>
+        dentroDoPeriodo(formatTz(slot.start, runtime.ctx.timezone, "HH:mm")),
+      );
+      /**
+       * Um horário por vez, mesmo com várias profissionais livres nele.
+       *
+       * A varredura emite um slot por profissional, então um salão com três
+       * manicures devolve "10:00" três vezes. Sem juntar, as quatro opções
+       * viram o mesmo horário repetido e o total mente sobre quantas escolhas
+       * a cliente realmente tem.
+       */
+      const porHora = new Map<string, (typeof doDia)[number]>();
+      for (const slot of doDia) {
+        const hora = formatTz(slot.start, runtime.ctx.timezone, "HH:mm");
+        if (!porHora.has(hora)) porHora.set(hora, slot);
+      }
+      total += porHora.size;
+      for (const [hora, slot] of [...porHora.entries()].slice(0, 2)) {
+        if (opcoes.length >= 4) break;
+        opcoes.push({
+          data,
+          hora,
+          professionalId: slot.professionalId,
+          profissional: nomes.get(slot.professionalId) ?? null,
+        });
+      }
+    }
+
+    if (opcoes.length === 0) {
+      return {
+        ok: true,
+        data: {
+          opcoes: [],
+          total: 0,
+          aviso: `Nenhum horário livre nos próximos ${dias} dias para este serviço. Não invente outra data: ofereça avisar quando abrir vaga, ou transfira para uma atendente.`,
+        },
+      };
+    }
+
+    return { ok: true, data: { opcoes, total, periodo } };
   },
 };
 
@@ -444,10 +602,18 @@ const rescheduleTool: AgentTool = {
     }
     const startsAt = localDateTimeToUtc(date, time, runtime.ctx.timezone);
     try {
-      await rescheduleAppointment(runtime.ctx, appointmentId, startsAt, num(input, "professionalId") ?? undefined, {
-        type: "ai",
-        id: null,
-      });
+      await assertAgendamentoDaCliente(runtime, appointmentId);
+      await rescheduleAppointment(
+        runtime.ctx,
+        appointmentId,
+        startsAt,
+        num(input, "professionalId") ?? undefined,
+        { type: "ai", id: null },
+        // Origem "ai": remarcar pelo agente respeita a grade da clínica, como
+        // criar já respeitava. Encaixe fora do expediente continua sendo
+        // privilégio de quem está na tela.
+        "ai",
+      );
       return { ok: true, data: { remarcado: formatTz(startsAt, runtime.ctx.timezone, "dd/MM/yyyy 'às' HH:mm") } };
     } catch (error) {
       return { ok: false, data: { erro: error instanceof Error ? error.message : "Não consegui remarcar." } };
@@ -474,6 +640,7 @@ const cancelTool: AgentTool = {
     const appointmentId = num(input, "appointmentId");
     if (!appointmentId) return { ok: false, data: { erro: "Informe appointmentId." } };
     try {
+      await assertAgendamentoDaCliente(runtime, appointmentId);
       await changeStatus(runtime.ctx, appointmentId, "cancelled", {
         cancelReason: str(input, "motivo") || "Cancelado pelo cliente no WhatsApp",
         actor: { type: "ai", id: null },
@@ -584,6 +751,7 @@ const ALL_TOOLS: AgentTool[] = [
   listServices,
   listProfessionals,
   checkAvailability,
+  proximosHorarios,
   getCustomerTool,
   listCustomerAppointments,
   searchKnowledge,

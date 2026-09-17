@@ -251,6 +251,12 @@ export async function rescheduleAppointment(
   startsAt: Date,
   professionalId?: number,
   actor?: Actor,
+  /**
+   * Quem está remarcando. "admin" é a tela, onde encaixe fora da grade é
+   * recurso e não defeito; os caminhos anônimos passam a própria origem e
+   * caem na checagem da grade, como já acontece ao criar.
+   */
+  source: CreateAppointmentInput["source"] = "admin",
 ) {
   const [current] = await db
     .select()
@@ -261,7 +267,59 @@ export async function rescheduleAppointment(
   if (["completed", "cancelled", "no_show"].includes(current.status))
     throw new DomainError("Esse atendimento já foi encerrado e não pode ser remarcado.", "CLOSED");
 
+  /**
+   * A profissional nova é DESTA clínica, ou não há remarcação.
+   *
+   * `createAppointment` já cobrava isso por `assertPertenceAoTenant`; remarcar
+   * não cobrava, e o `professionalId` chegava cru até o UPDATE. As chaves
+   * estrangeiras de `appointments` são simples, sem `organization_id`, então o
+   * banco aceitava: o atendimento passava para uma profissional de OUTRA conta.
+   *
+   * Duas consequências reais, e nenhuma delas aparece na tela de quem sofreu:
+   * o índice de sobreposição é global por `professional_id`, então o horário
+   * passava a travar a agenda da outra clínica; e as listagens juntam
+   * `professionals` só por id, então o NOME de alguém de fora apareceria na
+   * agenda e na boca do agente.
+   *
+   * Vale para todo caminho, não só o da IA: a tela de agenda tinha o mesmo furo.
+   */
+  if (professionalId != null && professionalId !== current.professionalId) {
+    const [profissional] = await db
+      .select({ id: professionals.id })
+      .from(professionals)
+      .where(
+        and(
+          eq(professionals.id, professionalId),
+          eq(professionals.organizationId, ctx.organizationId),
+        ),
+      )
+      .limit(1);
+    if (!profissional) throw new DomainError("Profissional não encontrado.", "PROFESSIONAL_NOT_FOUND");
+  }
+
   const durationMin = Math.round((current.endsAt.getTime() - current.startsAt.getTime()) / 60000);
+
+  /**
+   * Remarcar também respeita a grade da clínica.
+   *
+   * `createAppointment` chama `assertHorarioAberto` justamente porque o caminho
+   * anônimo — link público, WhatsApp, agente de IA — não pode inventar horário.
+   * Remarcar não chamava, e ligar a ferramenta de remarcar no modo padrão dava
+   * ao agente um poder que criar não tem: mover atendimento para domingo, para
+   * a madrugada ou para o passado, barrado só pelo choque de sobreposição.
+   */
+  await assertHorarioAberto(
+    ctx,
+    {
+      customerId: current.customerId,
+      serviceId: current.serviceId,
+      professionalId: professionalId ?? current.professionalId,
+      branchId: current.branchId,
+      startsAt,
+      source,
+    },
+    current.serviceId,
+  );
 
   try {
     return await db.transaction(async (tx) => {

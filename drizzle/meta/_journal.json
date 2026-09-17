@@ -260,6 +260,13 @@
       "when": 1788990879619,
       "tag": "0036_smooth_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789648096681,
+      "tag": "0037_nifty_king_bedlam",
+      "breakpoints": true
     }
   ]
 }

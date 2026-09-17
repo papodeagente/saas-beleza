@@ -1285,6 +1285,29 @@ export const aiAgents = pgTable(
     // Kill-switch de emergência, ortogonal ao status.
     enabled: boolean("enabled").notNull().default(false),
     instructions: text("instructions"),
+    /**
+     * `padrao` = o comportamento vem do preset do PRODUTO, montado em código a
+     * cada turno; `personalizado` = vem de `instructions`, escrito pela dona.
+     *
+     * O preset NÃO é copiado para `instructions` de propósito. Copiado, cada
+     * conta congelaria a versão do dia em que clicou, melhorar o texto viraria
+     * migração de texto alheio, e a dona apagaria o comportamento sem querer ao
+     * editar um campo que ela nem sabia que era o motor.
+     *
+     * Coluna, e não chave no jsonb `config`, porque `config` é sobrescrito
+     * inteiro a cada Salvar da aba Comportamento — o próprio seed já perde
+     * chaves assim.
+     *
+     * O padrão é `personalizado` para que toda conta que JÁ existe continue
+     * exatamente como está.
+     */
+    mode: text("mode").notNull().default("personalizado"),
+    /** Botões simples do modo padrão. Viram texto no prompt, não temperatura. */
+    tone: text("tone").notNull().default("equilibrado"),
+    emojiUse: text("emoji_use").notNull().default("poucos"),
+    goal: text("goal"),
+    /** Situações em que o agente entrega a conversa para uma pessoa. */
+    handoffWhen: jsonb("handoff_when"),
     model: text("model").notNull().default("gpt-5-chat-latest"),
     temperature: integer("temperature").notNull().default(70), // centésimos: 70 = 0.7
     maxOutputTokens: integer("max_output_tokens").notNull().default(600),
