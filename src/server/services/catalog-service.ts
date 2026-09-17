@@ -464,6 +464,85 @@ export async function setProductActive(
 }
 
 /**
+ * Excluir de verdade só quando não há o que perder.
+ *
+ * Mesma regra do `deleteProfessional`: `appointments.service_id` é chave
+ * estrangeira, e a mesma consulta que decide "desativar em vez de excluir" no
+ * comentário lá em cima precisa valer para TODO o histórico, não só o futuro —
+ * `futurosDoServico` conta o que ainda vai acontecer (pergunta certa antes de
+ * desativar); aqui a pergunta é outra: "isso já aconteceu alguma vez", e a
+ * resposta decide se apagar é seguro.
+ */
+export async function deleteService(
+  ctx: TenantContext,
+  serviceId: number,
+): Promise<{ deactivated: boolean }> {
+  const [existing] = await db
+    .select()
+    .from(services)
+    .where(and(eq(services.id, serviceId), eq(services.organizationId, ctx.organizationId)))
+    .limit(1);
+  if (!existing) throw new CatalogError("Serviço não encontrado.", "NAO_ENCONTRADO");
+
+  const [[{ count: appointmentCount }]] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(appointments)
+      .where(
+        and(eq(appointments.organizationId, ctx.organizationId), eq(appointments.serviceId, serviceId)),
+      ),
+  ]);
+
+  if (appointmentCount > 0) {
+    await db.transaction(async (tx) => {
+      await tx
+        .update(services)
+        .set({ active: false })
+        .where(and(eq(services.id, serviceId), eq(services.organizationId, ctx.organizationId)));
+      await registrar(tx, ctx, "service", serviceId, "deactivated", { active: existing.active }, {
+        active: false,
+      });
+    });
+    return { deactivated: true };
+  }
+
+  // Abaixo não é `registrar`: aquele helper pula a gravação quando o diff
+  // fica vazio, o que apagaria o próprio rastro da exclusão (não sobra
+  // "depois" nenhum para comparar). Aqui o antes/depois é sempre gravado,
+  // igual em `deleteProfessional`.
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(professionalServices)
+      .where(
+        and(
+          eq(professionalServices.organizationId, ctx.organizationId),
+          eq(professionalServices.serviceId, serviceId),
+        ),
+      );
+    await tx
+      .delete(services)
+      .where(and(eq(services.id, serviceId), eq(services.organizationId, ctx.organizationId)));
+    await tx.insert(auditLogs).values({
+      organizationId: ctx.organizationId,
+      actorType: "user",
+      actorId: ctx.userId,
+      entity: "service",
+      entityId: serviceId,
+      action: "deleted",
+      before: {
+        name: existing.name,
+        categoryId: existing.categoryId,
+        durationMin: existing.durationMin,
+        priceCents: existing.priceCents,
+        costCents: existing.costCents,
+      },
+      after: null,
+    });
+  });
+  return { deactivated: false };
+}
+
+/**
  * Quantos atendimentos futuros dependem deste serviço.
  *
  * É o que a tela precisa saber ANTES de desativar: o serviço sai da agenda,

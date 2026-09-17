@@ -7,6 +7,7 @@ import {
   CatalogError,
   createProduct,
   createService,
+  deleteService,
   futurosDoServico,
   setProductActive,
   setServiceActive,
@@ -177,6 +178,38 @@ export async function setProductActiveAction(
     return { ok: true };
   } catch (error) {
     return falha(error, "Não foi possível mudar a situação do produto.");
+  }
+}
+
+export type DeleteServiceResult =
+  | { ok: true; deactivated: false }
+  | { ok: true; deactivated: true; reason: string }
+  | { ok: false; error: string };
+
+/**
+ * Exclui o serviço, ou desativa quando ele já tem histórico — ver o
+ * comentário em `deleteService`.
+ */
+export async function deleteServiceAction(serviceId: unknown): Promise<DeleteServiceResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const id = idSchema.parse(serviceId);
+    const { deactivated } = await deleteService(ctx, id);
+    revalidatePath("/catalogo");
+    revalidatePath("/gestao");
+    if (deactivated) {
+      return {
+        ok: true,
+        deactivated: true,
+        reason: "O serviço tem atendimentos no histórico — foi desativado em vez de excluído, para preservar esse histórico.",
+      };
+    }
+    return { ok: true, deactivated: false };
+  } catch (error) {
+    if (error instanceof CatalogError) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "Não foi possível excluir. Tente novamente." };
   }
 }
 
