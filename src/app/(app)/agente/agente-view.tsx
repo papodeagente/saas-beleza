@@ -1,8 +1,21 @@
 "use client";
 
-import { Bot, KeyRound, Pencil, Play, Plus, Send, Trash2, TriangleAlert, Wrench } from "lucide-react";
+import {
+  BatteryFull,
+  Bot,
+  KeyRound,
+  Pencil,
+  Play,
+  Plus,
+  Send,
+  Signal,
+  Trash2,
+  TriangleAlert,
+  Wifi,
+  Wrench,
+} from "lucide-react";
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -546,6 +559,62 @@ function KnowledgeTab({
 
 type SimMessage = { role: "user" | "assistant"; content: string; tools?: string[] };
 
+/**
+ * As cores daqui são do WHATSAPP, de propósito, e por isso não entram no tema.
+ *
+ * A regra da casa é que cor fora do tema é cor que ninguém acha quando a marca
+ * muda — mas estas não são a nossa marca: são a do aplicativo que estamos
+ * imitando. Se a nossa paleta mudar, este celular tem que continuar parecendo o
+ * WhatsApp, senão ele deixa de responder a pergunta que o simulador existe para
+ * responder: "como isso vai chegar para a minha cliente?".
+ */
+const ZAP = {
+  fundo: "#0b141a",
+  barra: "#202c33",
+  balaoDela: "#005c4b",
+  balaoDele: "#202c33",
+  texto: "#e9edef",
+  apagado: "#8696a0",
+};
+
+/**
+ * O celular: moldura, ilha e barra de status.
+ *
+ * Nada aqui é interativo. A ilha e os ícones de sinal são `aria-hidden` — quem
+ * usa leitor de tela não precisa ouvir que existe uma bateria desenhada.
+ */
+function Telefone({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-auto w-full max-w-[344px] rounded-[46px] bg-[#101014] p-2.5 shadow-[0_24px_60px_-18px_rgba(45,32,59,.45)] ring-1 ring-white/10">
+      <div
+        className="relative flex h-[600px] flex-col overflow-hidden rounded-[38px]"
+        style={{ backgroundColor: ZAP.fundo }}
+      >
+        <span
+          aria-hidden
+          className="absolute left-1/2 top-2 z-20 h-[26px] w-[92px] -translate-x-1/2 rounded-pill bg-black"
+        />
+        {/* Hora fixa, e não o relógio de verdade: é uma maquete, e relógio vivo
+            aqui renderiza diferente no servidor e no navegador — o mesmo defeito
+            de hidratação que já custou caro no inbox. */}
+        <div
+          aria-hidden
+          className="flex shrink-0 items-center justify-between px-6 pb-1 pt-3 text-caption font-semibold"
+          style={{ color: ZAP.texto }}
+        >
+          <span>09:41</span>
+          <span className="flex items-center gap-1">
+            <Signal className="size-3.5" />
+            <Wifi className="size-3.5" />
+            <BatteryFull className="size-4" />
+          </span>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function SimulatorTab({ agentName }: { agentName: string }) {
   const [messages, setMessages] = useState<SimMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -570,66 +639,157 @@ function SimulatorTab({ agentName }: { agentName: string }) {
     });
   }
 
+  const fimDaConversa = useRef<HTMLDivElement>(null);
+
+  // A conversa rola dentro do celular; sem isto a resposta nova nasce fora de
+  // vista e o simulador parece não ter respondido.
+  useEffect(() => {
+    fimDaConversa.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, running]);
+
+  const inicial = agentName.trim().charAt(0).toUpperCase() || "A";
+
   return (
     <Card>
       <CardHeader title="Simulador" />
-      <div className="flex flex-col gap-3 p-4 pt-0">
+      <div className="flex flex-col gap-4 p-4 pt-0">
         <p className="text-caption text-ink-secondary">
           Conversa de teste com o mesmo prompt, as mesmas ferramentas e o mesmo tratamento de texto do atendimento
           real. Nada é enviado para clientes.
         </p>
-        <div className="flex min-h-[240px] flex-col gap-2 rounded-control bg-surface-sunken p-3">
-          {messages.length === 0 ? (
-            <p className="m-auto text-caption text-ink-secondary">
-              Escreva como se fosse um cliente: {'"oi, quanto custa a limpeza de pele?"'}
-            </p>
-          ) : (
-            messages.map((message, index) => (
-              <div
-                key={index}
-                className={cn("flex flex-col", message.role === "user" ? "items-end" : "items-start")}
-              >
-                <div
-                  className={cn(
-                    "max-w-[85%] rounded-bubble px-3 py-2 text-body whitespace-pre-wrap",
-                    message.role === "user" ? "bg-accent-soft text-ink" : "bg-surface text-ink",
-                  )}
-                >
-                  {message.content}
-                </div>
-                {message.tools && message.tools.length > 0 ? (
-                  <span className="mt-1 flex flex-wrap items-center gap-1 text-meta text-ink-secondary">
-                    <Wrench className="size-3" aria-hidden />
-                    {message.tools.join(", ")}
-                  </span>
-                ) : null}
-              </div>
-            ))
-          )}
-          {running ? <p className="text-caption text-ink-secondary">{agentName} está escrevendo…</p> : null}
-        </div>
 
-        <div className="flex items-end gap-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                send();
-              }
+        <Telefone>
+          {/* Cabeçalho da conversa. O "digitando…" vive aqui, e não no corpo,
+              porque é onde o WhatsApp põe — e porque no corpo ele empurrava as
+              mensagens a cada resposta. */}
+          <div
+            className="flex shrink-0 items-center gap-3 px-4 py-2.5"
+            style={{ backgroundColor: ZAP.barra }}
+          >
+            <span
+              aria-hidden
+              className="flex size-9 shrink-0 items-center justify-center rounded-pill bg-accent text-label font-semibold text-white"
+            >
+              {inicial}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-body font-medium" style={{ color: ZAP.texto }}>
+                {agentName}
+              </span>
+              <span className="block text-caption" style={{ color: ZAP.apagado }}>
+                {running ? "digitando…" : "disponível"}
+              </span>
+            </span>
+          </div>
+
+          {/*
+            O corpo. A trama de pontos é sugestão do papel de parede do
+            aplicativo, não a arte dele: dois gradientes radiais de 4% a 28px,
+            o suficiente para o fundo não ser uma chapa e sem copiar desenho de
+            ninguém.
+          */}
+          <div
+            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-4"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 25% 25%, rgba(233,237,239,.04) 1.5px, transparent 1.6px), radial-gradient(circle at 75% 75%, rgba(233,237,239,.04) 1.5px, transparent 1.6px)",
+              backgroundSize: "28px 28px",
             }}
-            rows={1}
-            placeholder="Mensagem do cliente"
-            className="max-h-32 min-h-11 flex-1 resize-none"
-          />
-          <Button variant="primary" size="md" onClick={send} loading={running} disabled={!draft.trim()} className="h-11 shrink-0">
-            <Send aria-hidden />
-          </Button>
-        </div>
+          >
+            {messages.length === 0 ? (
+              <p
+                className="m-auto max-w-[240px] text-center text-caption"
+                style={{ color: ZAP.apagado }}
+              >
+                Escreva como se fosse um cliente: {'"oi, quanto custa a limpeza de pele?"'}
+              </p>
+            ) : (
+              messages.map((message, index) => {
+                const dela = message.role === "user";
+                return (
+                  <div
+                    className={cn("flex flex-col", dela ? "items-end" : "items-start")}
+                    key={index}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[82%] px-2.5 py-1.5 text-body whitespace-pre-wrap",
+                        // O canto "mordido" do lado de quem falou é o que faz o
+                        // balão apontar para o dono. O código antigo pedia
+                        // `rounded-bubble`, que NÃO existe como token — os
+                        // balões saíam com quina viva.
+                        dela ? "rounded-[10px] rounded-tr-[3px]" : "rounded-[10px] rounded-tl-[3px]",
+                      )}
+                      style={{
+                        backgroundColor: dela ? ZAP.balaoDela : ZAP.balaoDele,
+                        color: ZAP.texto,
+                      }}
+                    >
+                      {message.content}
+                    </div>
+                    {message.tools && message.tools.length > 0 ? (
+                      /* As ferramentas que o agente usou no turno. Não existem
+                         no WhatsApp de verdade — e é justamente por isso que
+                         ficam FORA do balão, em etiqueta discreta: é informação
+                         de quem está testando, não parte da conversa. */
+                      <span
+                        className="mt-1 flex flex-wrap items-center gap-1 text-meta"
+                        style={{ color: ZAP.apagado }}
+                      >
+                        <Wrench className="size-3" aria-hidden />
+                        {message.tools.join(", ")}
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+            <div ref={fimDaConversa} />
+          </div>
+
+          {/*
+            A barra de escrever tem só o que FUNCIONA: campo e enviar. O modelo
+            de referência mostra emoji e clipe, e eles ficaram de fora de
+            propósito — botão desenhado que não faz nada é promessa falsa, e
+            aqui a pessoa está justamente aprendendo o que o agente sabe fazer.
+          */}
+          <div
+            className="flex shrink-0 items-end gap-2 px-3 py-2.5"
+            style={{ backgroundColor: ZAP.barra }}
+          >
+            <Textarea
+              className="max-h-24 min-h-10 flex-1 resize-none border-0 bg-[#2a3942] text-body text-white placeholder:text-[#8696a0] focus-visible:ring-1 focus-visible:ring-white/25"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  send();
+                }
+              }}
+              placeholder="Mensagem do cliente"
+              rows={1}
+              value={draft}
+            />
+            <Button
+              aria-label="Enviar mensagem de teste"
+              className="size-10 shrink-0 rounded-pill p-0"
+              disabled={!draft.trim()}
+              loading={running}
+              onClick={send}
+              size="md"
+              variant="primary"
+            >
+              <Send aria-hidden />
+            </Button>
+          </div>
+        </Telefone>
 
         {messages.length > 0 ? (
-          <button type="button" onClick={() => setMessages([])} className="self-start text-caption text-ink-secondary hover:text-ink">
+          <button
+            className="self-center text-caption text-ink-secondary hover:text-ink"
+            onClick={() => setMessages([])}
+            type="button"
+          >
             <Play className="mr-1 inline size-3" aria-hidden />
             Recomeçar conversa
           </button>
@@ -637,4 +797,5 @@ function SimulatorTab({ agentName }: { agentName: string }) {
       </div>
     </Card>
   );
+
 }
