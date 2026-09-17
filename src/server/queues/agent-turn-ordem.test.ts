@@ -280,3 +280,162 @@ describe("empate no mesmo segundo", () => {
     await db.delete(s.organizations).where(eq(s.organizations.id, org.id));
   });
 });
+
+/**
+ * `controlledBy` é a fonte única de quem está no controle da conversa, e não
+ * o histórico de mensagens.
+ *
+ * A versão anterior perguntava "a última SAÍDA já registrada foi de um
+ * humano?" direto no histórico. Isso nunca volta a "não": uma vez que UMA
+ * mensagem manual existe na conversa, ela segue lá para sempre, e "devolver
+ * para IA" (que atualiza `controlledBy`, não o passado) não destravava nada —
+ * achado ao investigar por que a CYPK (org 1609) não respondeu a um contato
+ * com histórico manual antigo.
+ */
+describe("humano assumiu a conversa", () => {
+  const SUFIXO2 = `${SUFIXO}-humano`;
+  let org2: number;
+  let conexao2: number;
+
+  beforeAll(async () => {
+    const [org] = await db
+      .insert(s.organizations)
+      .values({ publicId: generateAccountCode(), name: `Humano ${SUFIXO2}`, slug: `humano-${SUFIXO2}` })
+      .returning({ id: s.organizations.id });
+    org2 = org.id;
+    await db.insert(s.aiAgents).values({
+      organizationId: org2,
+      name: `Agente humano ${SUFIXO2}`,
+      status: "active",
+      enabled: true,
+      pauseOnHumanReply: true,
+      respondGroups: false,
+    });
+    const [conexao] = await db
+      .insert(s.whatsappConnections)
+      .values({
+        organizationId: org2,
+        baseUrl: "https://exemplo.test",
+        instanceToken: `tok-hum-${SUFIXO2}`,
+        webhookToken: randomBytes(12).toString("hex"),
+      })
+      .returning({ id: s.whatsappConnections.id });
+    conexao2 = conexao.id;
+  });
+
+  afterAll(async () => {
+    await db.delete(s.messages).where(eq(s.messages.organizationId, org2));
+    await db.delete(s.conversations).where(eq(s.conversations.organizationId, org2));
+    await db.delete(s.whatsappConnections).where(eq(s.whatsappConnections.organizationId, org2));
+    await db.delete(s.aiAgents).where(eq(s.aiAgents.organizationId, org2));
+    await db.delete(s.organizations).where(eq(s.organizations.id, org2));
+  });
+
+  it("não responde quando um humano está no controle agora", async () => {
+    const [conversa] = await db
+      .insert(s.conversations)
+      .values({
+        organizationId: org2,
+        connectionId: conexao2,
+        remoteJid: "5584955556666@s.whatsapp.net",
+        status: "open",
+        controlledBy: "human",
+      })
+      .returning({ id: s.conversations.id });
+    await db.insert(s.messages).values({
+      organizationId: org2,
+      conversationId: conversa.id,
+      direction: "inbound",
+      sender: "customer",
+      body: "Oi",
+      externalId: `HUM-${SUFIXO2}`,
+      sentAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const resultado = await processAgentTurn({ organizationId: org2, conversationId: conversa.id, customerId: null });
+    expect(resultado).toEqual({ status: "skipped", reason: "humano_assumiu" });
+  });
+
+  it("responde a uma conversa nova (waiting), mesmo sem ninguém ter assumido ainda", async () => {
+    orquestrador.executeAgentTurn.mockClear();
+    orquestrador.executeAgentTurn.mockResolvedValue({
+      reply: "Oi! Como posso ajudar?",
+      toolsUsed: [],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      debug: { rounds: 1, model: "teste" },
+    });
+
+    const [conversa] = await db
+      .insert(s.conversations)
+      .values({
+        organizationId: org2,
+        connectionId: conexao2,
+        remoteJid: "5584977778888@s.whatsapp.net",
+        status: "open",
+        controlledBy: "waiting",
+      })
+      .returning({ id: s.conversations.id });
+    await db.insert(s.messages).values({
+      organizationId: org2,
+      conversationId: conversa.id,
+      direction: "inbound",
+      sender: "customer",
+      body: "Oi, vocês atendem hoje?",
+      externalId: `WAIT-${SUFIXO2}`,
+      sentAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const resultado = await processAgentTurn({ organizationId: org2, conversationId: conversa.id, customerId: null });
+    expect(resultado.status).toBe("sent");
+  });
+
+  it("volta a responder depois de devolvida para a IA, mesmo com um humano no histórico antigo", async () => {
+    orquestrador.executeAgentTurn.mockClear();
+    orquestrador.executeAgentTurn.mockResolvedValue({
+      reply: "Claro, temos horário às 15h.",
+      toolsUsed: [],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      debug: { rounds: 1, model: "teste" },
+    });
+
+    const [conversa] = await db
+      .insert(s.conversations)
+      .values({
+        organizationId: org2,
+        connectionId: conexao2,
+        remoteJid: "5584999990000@s.whatsapp.net",
+        status: "open",
+        // "Devolver para IA" já passou por aqui: é o estado ATUAL.
+        controlledBy: "ai",
+      })
+      .returning({ id: s.conversations.id });
+
+    // Um humano respondeu manualmente há dias — é a última saída no histórico.
+    await db.insert(s.messages).values({
+      organizationId: org2,
+      conversationId: conversa.id,
+      direction: "outbound",
+      sender: "user",
+      body: "Oi, aqui é a recepção, te atendo já já",
+      externalId: `OLDHUM-${SUFIXO2}`,
+      sentAt: new Date(Date.now() - 3 * 86_400_000),
+      createdAt: new Date(Date.now() - 3 * 86_400_000),
+    });
+    // E hoje o cliente escreve de novo.
+    await db.insert(s.messages).values({
+      organizationId: org2,
+      conversationId: conversa.id,
+      direction: "inbound",
+      sender: "customer",
+      body: "Oi, ainda tem horário hoje?",
+      externalId: `NOVOHUM-${SUFIXO2}`,
+      sentAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const resultado = await processAgentTurn({ organizationId: org2, conversationId: conversa.id, customerId: null });
+    expect(resultado.status).toBe("sent");
+  });
+});

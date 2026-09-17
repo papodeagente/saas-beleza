@@ -93,6 +93,7 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
       watermark: conversations.aiLastProcessedInboundAt,
       watermarkId: conversations.aiLastProcessedInboundId,
       remoteJid: conversations.remoteJid,
+      controlledBy: conversations.controlledBy,
     })
     .from(conversations)
     .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)))
@@ -101,24 +102,22 @@ export async function processAgentTurn(job: AgentTurnJob): Promise<TurnOutcome> 
   if (conversation.aiPausedAt) return { status: "skipped", reason: "pausado_pelo_usuario" };
   if (conversation.isGroup && !agent.respondGroups) return { status: "skipped", reason: "grupo" };
 
-  // Humano assumiu: a última saída da conversa foi de uma pessoa, e ela é mais
-  // recente do que a última fala do agente.
-  if (agent.pauseOnHumanReply) {
-    const [lastOutbound] = await db
-      .select({ sender: messages.sender, createdAt: aconteceuEm })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.organizationId, organizationId),
-          eq(messages.conversationId, conversationId),
-          eq(messages.direction, "outbound"),
-        ),
-      )
-      .orderBy(desc(aconteceuEm), desc(messages.id))
-      .limit(1);
-    if (lastOutbound && lastOutbound.sender === "user") {
-      return { status: "skipped", reason: "humano_assumiu" };
-    }
+  /**
+   * Humano assumiu: a conversa está marcada como controlada por uma pessoa
+   * agora — `controlledBy` já é a fonte única disso, atualizada por todo
+   * caminho que muda quem manda na conversa (assumir, transferir, enviar do
+   * inbox, pausar, e o próprio agente ao responder).
+   *
+   * ANTES isto reconsultava o histórico de mensagens perguntando "a última
+   * saída foi de um humano?" — uma pergunta que, uma vez respondida "sim" por
+   * QUALQUER mensagem manual no passado, nunca mais voltava a "não", mesmo
+   * depois de "devolver para IA": a ação atualiza `controlledBy`, mas o
+   * histórico de mensagens é imutável, e por isso a IA ficava travada na
+   * conversa para sempre. "waiting" (conversa nova, ninguém assumiu ainda)
+   * segue liberado — é justamente o estado em que a IA deve entrar primeiro.
+   */
+  if (agent.pauseOnHumanReply && conversation.controlledBy === "human") {
+    return { status: "skipped", reason: "humano_assumiu" };
   }
 
   const orgCount = await incrementWindow(`agent:rate:org:${organizationId}`);
