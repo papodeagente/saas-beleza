@@ -1,6 +1,6 @@
 "use client";
 
-import { PackagePlus, Pencil, Scissors } from "lucide-react";
+import { PackagePlus, Pencil, Scissors, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { formatBRL, parseBRL } from "@/lib/money";
 import {
   contarFuturosAction,
+  deleteServiceAction,
   saveProductAction,
   saveServiceAction,
   setProductActiveAction,
@@ -118,6 +119,7 @@ export function CatalogForms({
   canManage: boolean;
 }) {
   const [aberto, setAberto] = useState<Aberto>(null);
+  const [excluindo, setExcluindo] = useState<ServiceRow | null>(null);
 
   const porCategoria = services.reduce((mapa, servico) => {
     const chave = servico.categoryName ?? "Sem categoria";
@@ -170,6 +172,7 @@ export function CatalogForms({
                         onEditar={
                           canManage ? () => setAberto({ tipo: "servico", item: servico }) : undefined
                         }
+                        onExcluir={canManage ? () => setExcluindo(servico) : undefined}
                       />
                     </li>
                   ))}
@@ -213,6 +216,9 @@ export function CatalogForms({
       {aberto?.tipo === "produto" ? (
         <ProductSheet produto={aberto.item} close={() => setAberto(null)} />
       ) : null}
+      {excluindo ? (
+        <ExcluirServicoSheet servico={excluindo} close={() => setExcluindo(null)} />
+      ) : null}
     </>
   );
 }
@@ -227,10 +233,12 @@ function LinhaDeServico({
   servico,
   canSeeMargin,
   onEditar,
+  onExcluir,
 }: {
   servico: ServiceRow;
   canSeeMargin: boolean;
   onEditar?: () => void;
+  onExcluir?: () => void;
 }) {
   const margem =
     servico.priceCents > 0 && servico.costCents > 0
@@ -291,14 +299,90 @@ function LinhaDeServico({
     );
   }
   return (
-    <button
-      type="button"
-      onClick={onEditar}
-      className="group flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 text-left transition-colors hover:bg-surface-sunken"
-    >
-      {conteudo}
-      <span className="sr-only">Editar {servico.name}</span>
-    </button>
+    // O botão de editar não pode mais cobrir a linha inteira: um botão de
+    // excluir dentro de outro botão é HTML inválido (e o clique fica
+    // ambíguo). A linha vira o container, editar continua sendo "clicar em
+    // qualquer parte do conteúdo", e excluir ganha o próprio alvo de toque —
+    // o `stopPropagation` é o que impede o clique nele de também abrir a edição.
+    <div className="group flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 py-1 pl-4 pr-2 transition-colors hover:bg-surface-sunken">
+      <button
+        type="button"
+        onClick={onEditar}
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 py-2 text-left"
+      >
+        {conteudo}
+        <span className="sr-only">Editar {servico.name}</span>
+      </button>
+      {onExcluir ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 px-2 text-ink-tertiary hover:text-danger"
+          aria-label={`Excluir ${servico.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onExcluir();
+          }}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Confirmação de exclusão, separada da edição.
+ *
+ * Mesmo texto e mesmo desenho de duas etapas usados para excluir profissional
+ * (ver `professional-actions.tsx`): a frase já avisa, antes de perguntar, que
+ * desativar é o que acontece quando há histórico — quem confirma não é pego de
+ * surpresa pelo "desativado" em vez do "excluído" que pediu.
+ */
+function ExcluirServicoSheet({ servico, close }: { servico: ServiceRow; close: () => void }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [confirmando, setConfirmando] = useState(false);
+
+  const excluir = () =>
+    startTransition(async () => {
+      const resultado = await deleteServiceAction(servico.id);
+      if (resultado.ok) {
+        toast.success(resultado.deactivated ? resultado.reason : `${servico.name} foi excluído`);
+        router.refresh();
+        close();
+      } else {
+        toast.error(resultado.error);
+        close();
+      }
+    });
+
+  return (
+    <Sheet open onOpenChange={(v) => !v && close()}>
+      <SheetContent title="Excluir serviço" description={servico.name}>
+        <div className="space-y-3 px-5 py-4">
+          <p className="text-body text-ink-secondary">
+            Se {servico.name} já tiver atendimento registrado, mesmo no passado, o cadastro será{" "}
+            <strong className="text-ink">desativado</strong> em vez de excluído, para preservar o
+            histórico da agenda. Sem histórico, a exclusão é definitiva.
+          </p>
+          {confirmando ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="danger" size="md" loading={pending} onClick={excluir}>
+                Confirmar
+              </Button>
+              <Button variant="ghost" size="md" onClick={() => setConfirmando(false)}>
+                Voltar
+              </Button>
+            </div>
+          ) : (
+            <Button variant="danger" size="md" onClick={() => setConfirmando(true)}>
+              Excluir serviço
+            </Button>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

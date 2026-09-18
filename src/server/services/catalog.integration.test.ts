@@ -9,6 +9,7 @@ import {
   CatalogError,
   createProduct,
   createService,
+  deleteService,
   futurosDoServico,
   setServiceActive,
   updateProduct,
@@ -303,6 +304,75 @@ describe("desativar serviço", () => {
   it("não conta atendimento de outra clínica como futuro", async () => {
     const id = await createService(ctx(orgA), servicoBase);
     expect(await futurosDoServico(ctx(orgB), id)).toBe(0);
+  });
+});
+
+describe("excluir serviço", () => {
+  it("exclui de verdade quando o serviço nunca atendeu ninguém", async () => {
+    const id = await createService(ctx(orgA), { ...servicoBase, professionalIds: [proA1] });
+    const resultado = await deleteService(ctx(orgA), id);
+    expect(resultado).toEqual({ deactivated: false });
+
+    const [restou] = await db.select().from(s.services).where(eq(s.services.id, id));
+    expect(restou).toBeUndefined();
+    // O vínculo com o profissional é chave estrangeira do serviço: sobrar
+    // órfão aqui não quebra nada hoje, mas é lixo que reaparece se o serviço
+    // (ou o id) for reaproveitado.
+    const vinculos = await db
+      .select()
+      .from(s.professionalServices)
+      .where(eq(s.professionalServices.serviceId, id));
+    expect(vinculos).toHaveLength(0);
+  });
+
+  it("desativa em vez de excluir quando o serviço já atendeu alguém, mesmo no passado", async () => {
+    // A mesma trava de `setServiceActive` vale aqui, só que para TODO O
+    // HISTÓRICO, não só o futuro: `futurosDoServico` responde "isso ainda vai
+    // acontecer" (pergunta certa antes de desativar); excluir precisa da
+    // pergunta oposta, "isso já aconteceu alguma vez" — um corte de cabelo do
+    // ano passado não pode virar motivo para o banco recusar o DELETE.
+    const id = await createService(ctx(orgA), servicoBase);
+    const ontem = new Date(Date.now() - 24 * 3600 * 1000);
+    await db.insert(s.appointments).values({
+      organizationId: orgA,
+      branchId: filialA,
+      customerId: clienteA,
+      professionalId: proA1,
+      serviceId: id,
+      startsAt: ontem,
+      endsAt: new Date(ontem.getTime() + 3600 * 1000),
+      status: "completed",
+      priceCents: 8000,
+    });
+    expect(await futurosDoServico(ctx(orgA), id)).toBe(0);
+
+    const resultado = await deleteService(ctx(orgA), id);
+    expect(resultado).toEqual({ deactivated: true });
+
+    const [depois] = await db.select().from(s.services).where(eq(s.services.id, id));
+    expect(depois.active).toBe(false);
+    const marcados = await db.select().from(s.appointments).where(eq(s.appointments.serviceId, id));
+    expect(marcados).toHaveLength(1);
+  });
+
+  it("não exclui nem desativa serviço de outra clínica", async () => {
+    const id = await createService(ctx(orgA), servicoBase);
+    await expect(deleteService(ctx(orgB), id)).rejects.toBeInstanceOf(CatalogError);
+    const [intacto] = await db.select().from(s.services).where(eq(s.services.id, id));
+    expect(intacto.active).toBe(true);
+  });
+
+  it("registra a exclusão de verdade no rastro, com o nome de antes", async () => {
+    const id = await createService(ctx(orgA), { ...servicoBase, name: "Pé e mão completo" });
+    await deleteService(ctx(orgA), id);
+    const [linha] = await db
+      .select()
+      .from(s.auditLogs)
+      .where(and(eq(s.auditLogs.entityId, id), eq(s.auditLogs.action, "deleted")));
+    expect(linha).toBeTruthy();
+    expect(linha.entity).toBe("service");
+    expect((linha.before as { name: string }).name).toBe("Pé e mão completo");
+    expect(linha.after).toBeNull();
   });
 });
 
