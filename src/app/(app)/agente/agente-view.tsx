@@ -1123,6 +1123,13 @@ function Telefone({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Mesmo teto do atendimento real (HISTORY_LIMIT em orchestrator.ts): o
+// simulador chama a função exata que atende no WhatsApp, e ela nunca vê mais
+// que as últimas 20 mensagens. Sem cortar aqui também, a conversa de teste
+// cresce sem limite e a validação do servidor rejeita o envio — o simulador
+// mostrava o erro cru em vez de simplesmente truncar como a conversa real faz.
+const SIMULATOR_HISTORY_LIMIT = 20;
+
 function SimulatorTab({ agentName }: { agentName: string }) {
   const [messages, setMessages] = useState<SimMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -1131,7 +1138,7 @@ function SimulatorTab({ agentName }: { agentName: string }) {
   function send() {
     const message = draft.trim();
     if (!message) return;
-    const history = messages.map(({ role, content }) => ({ role, content }));
+    const history = messages.slice(-SIMULATOR_HISTORY_LIMIT).map(({ role, content }) => ({ role, content }));
     setMessages((prev) => [...prev, { role: "user", content: message }]);
     setDraft("");
 
