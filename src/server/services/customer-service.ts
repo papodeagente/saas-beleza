@@ -2,11 +2,16 @@ import "server-only";
 import { and, asc, count, desc, eq, gt, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  aiAgentCustomerMemos,
   appointments,
+  auditLogs,
+  automationDispatches,
   branches,
+  conversations,
   customerTagLinks,
   customerTags,
   customers,
+  financialTransactions,
   payments,
   professionals,
   services,
@@ -428,6 +433,135 @@ export async function updateCustomer(ctx: TenantContext, customerId: number, inp
   } catch (error) {
     if (isDuplicatePhone(error))
       throw new CustomerError("Já existe um cliente com esse telefone.", "DUPLICATE_PHONE", "phone");
+    throw error;
+  }
+}
+
+/** Violação de chave estrangeira — o banco recusou apagar algo ainda referenciado. */
+function isForeignKeyViolation(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 5; depth++) {
+    if ((current as { code?: string }).code === "23503") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function plural(n: number, singular: string, pluralForm: string): string {
+  return `${n} ${n === 1 ? singular : pluralForm}`;
+}
+
+/**
+ * Exclui o cliente — só quando não há histórico a perder.
+ *
+ * Mesma regra de `deleteService` e `deleteProfessional`: apagar de verdade só
+ * onde nada que já aconteceu deixa de existir. A diferença é o que fazer quando
+ * há histórico. Serviço e profissional têm `active` e viram "desativado"; o
+ * cliente não tem, e inventar um estado escondido tocaria as ~40 consultas que
+ * leem `customers` (agenda, inbox, automações, agente, financeiro). Então aqui
+ * a exclusão é RECUSADA, com o motivo, em vez de apagar atendimento e
+ * pagamento junto — `appointments.customer_id` é obrigatório, e a comissão e o
+ * caixa da casa dependem dessas linhas.
+ *
+ * O caso que esta função existe para resolver é o do contato que chegou pelo
+ * WhatsApp e nunca agendou nada: a ficha só tem o telefone, e não há o que
+ * proteger. Para ele:
+ *  - etiquetas, memória do agente e envios automáticos SÃO do cliente e somem
+ *    com ele;
+ *  - as conversas NÃO: são histórico do atendimento, ficam no inbox e só
+ *    perdem o vínculo. Se a pessoa escrever de novo, o resolvedor de conversa
+ *    cria uma ficha nova (conversa sem cliente é o estado dele para isso).
+ */
+export async function deleteCustomer(ctx: TenantContext, customerId: number): Promise<void> {
+  const [existing] = await db
+    .select({ id: customers.id, name: customers.name, source: customers.source, createdAt: customers.createdAt })
+    .from(customers)
+    .where(and(eq(customers.id, customerId), eq(customers.organizationId, ctx.organizationId)))
+    .limit(1);
+  if (!existing) throw new CustomerError("Cliente não encontrado.", "NOT_FOUND");
+
+  const [[appointmentRow], [paymentRow], [transactionRow]] = await Promise.all([
+    db
+      .select({ total: count() })
+      .from(appointments)
+      .where(and(eq(appointments.organizationId, ctx.organizationId), eq(appointments.customerId, customerId))),
+    db
+      .select({ total: count() })
+      .from(payments)
+      .where(and(eq(payments.organizationId, ctx.organizationId), eq(payments.customerId, customerId))),
+    db
+      .select({ total: count() })
+      .from(financialTransactions)
+      .where(
+        and(
+          eq(financialTransactions.organizationId, ctx.organizationId),
+          eq(financialTransactions.customerId, customerId),
+        ),
+      ),
+  ]);
+  const appointmentCount = appointmentRow?.total ?? 0;
+  const paymentCount = paymentRow?.total ?? 0;
+  const transactionCount = transactionRow?.total ?? 0;
+
+  const recusa = () => {
+    const partes = [
+      appointmentCount > 0 ? plural(appointmentCount, "atendimento", "atendimentos") : null,
+      paymentCount > 0 ? plural(paymentCount, "pagamento", "pagamentos") : null,
+      transactionCount > 0 ? plural(transactionCount, "lançamento financeiro", "lançamentos financeiros") : null,
+    ].filter(Boolean);
+    return new CustomerError(
+      `Este cliente tem ${partes.join(", ") || "histórico"} registrado. Excluir apagaria o histórico da agenda e do financeiro, então o cadastro foi mantido.`,
+      "HAS_HISTORY",
+    );
+  };
+  if (appointmentCount > 0 || paymentCount > 0 || transactionCount > 0) throw recusa();
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(customerTagLinks)
+        .where(
+          and(eq(customerTagLinks.organizationId, ctx.organizationId), eq(customerTagLinks.customerId, customerId)),
+        );
+      await tx
+        .delete(aiAgentCustomerMemos)
+        .where(
+          and(
+            eq(aiAgentCustomerMemos.organizationId, ctx.organizationId),
+            eq(aiAgentCustomerMemos.customerId, customerId),
+          ),
+        );
+      await tx
+        .delete(automationDispatches)
+        .where(
+          and(
+            eq(automationDispatches.organizationId, ctx.organizationId),
+            eq(automationDispatches.customerId, customerId),
+          ),
+        );
+      await tx
+        .update(conversations)
+        .set({ customerId: null })
+        .where(and(eq(conversations.organizationId, ctx.organizationId), eq(conversations.customerId, customerId)));
+      await tx
+        .delete(customers)
+        .where(and(eq(customers.id, customerId), eq(customers.organizationId, ctx.organizationId)));
+      // Só o nome e a origem: telefone, e-mail e aniversário são justamente o
+      // que a pessoa (ou a dona) quis apagar, e o rastro não pode guardá-los.
+      await tx.insert(auditLogs).values({
+        organizationId: ctx.organizationId,
+        actorType: "user",
+        actorId: ctx.userId,
+        entity: "customer",
+        entityId: customerId,
+        action: "deleted",
+        before: { name: existing.name, source: existing.source, createdAt: existing.createdAt },
+        after: null,
+      });
+    });
+  } catch (error) {
+    // Um atendimento pode ter sido criado (agendamento online, agente) entre a
+    // contagem e o DELETE: a chave estrangeira segura, e a resposta é a mesma.
+    if (isForeignKeyViolation(error)) throw recusa();
     throw error;
   }
 }

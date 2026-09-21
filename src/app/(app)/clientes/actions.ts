@@ -3,11 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { normalizePhone } from "@/lib/phone";
-import { requireSession } from "@/server/auth";
+import { requireRole, requireSession } from "@/server/auth";
 import {
   CustomerError,
   type CustomerInput,
   createCustomer,
+  deleteCustomer,
   updateCustomer,
 } from "@/server/services/customer-service";
 
@@ -71,5 +72,34 @@ export async function saveCustomerAction(
     return { ok: true, customerId: saved.id };
   } catch (error) {
     return fail(error);
+  }
+}
+
+export type DeleteCustomerResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Exclui o cliente, ou recusa quando ele já tem atendimento ou pagamento — ver o
+ * comentário em `deleteCustomer`.
+ *
+ * Só admin e dono: apagar é irreversível, e a recepção não precisa disso para
+ * atender (mesmo corte do catálogo).
+ */
+export async function deleteCustomerAction(customerId: unknown): Promise<DeleteCustomerResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const id = z.number().int().positive().parse(customerId);
+    await deleteCustomer(ctx, id);
+    revalidatePath("/clientes");
+    // As conversas do cliente continuam lá, mas perdem o vínculo com a ficha.
+    revalidatePath("/inbox");
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof CustomerError) return { ok: false, error: error.message };
+    if (error instanceof Error && error.message === "FORBIDDEN") {
+      return { ok: false, error: "Só quem administra a conta pode excluir clientes." };
+    }
+    console.error(error);
+    return { ok: false, error: "Não foi possível excluir o cliente. Tente novamente." };
   }
 }

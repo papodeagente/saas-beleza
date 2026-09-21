@@ -16,6 +16,7 @@ import {
   listCustomers,
 } from "@/server/services/customer-service";
 import { CustomerSearch } from "./customer-search";
+import { DeleteCustomerButton } from "./delete-customer-button";
 import { NewCustomerButton } from "./new-customer-button";
 
 export const metadata = { title: "Clientes" };
@@ -46,6 +47,8 @@ export default async function CustomersPage({
   const params = await searchParams;
   const filter = (FILTERS.find((f) => f.value === params.filtro)?.value ?? "todos") as CustomerFilter;
   const query = params.busca ?? "";
+  // Apagar é irreversível: só admin e dono, o mesmo corte do catálogo.
+  const canDelete = ctx.role === "admin" || ctx.role === "owner";
 
   const [rows, total, formOptions] = await Promise.all([
     listCustomers(ctx, { query, filter }),
@@ -91,12 +94,19 @@ export default async function CustomersPage({
         ) : (
           <div className="mt-4 overflow-hidden rounded-card bg-surface-raised shadow-card">
             {/* Um cabeçalho, não um rótulo repetido em cada linha */}
-            <div className="hidden items-center gap-3 border-b border-line px-4 py-2 sm:flex">
+            <div
+              className={cn(
+                "hidden items-center gap-3 border-b border-line py-2 pl-4 sm:flex",
+                canDelete ? "pr-2" : "pr-4",
+              )}
+            >
               <span className="w-8 shrink-0" />
               <span className="flex-[2] text-section">Cliente</span>
               <span className="flex-1 text-section">Última visita</span>
               <span className="flex-1 text-section">Próximo</span>
               <span className="w-20 shrink-0 text-right text-section">Total</span>
+              {/* Reserva a coluna da lixeira, para o cabeçalho continuar alinhado às linhas */}
+              {canDelete ? <span className="w-10 shrink-0" /> : null}
             </div>
 
             <ul className="divide-y divide-line">
@@ -119,10 +129,16 @@ export default async function CustomersPage({
                 const titulo = temNome || !telefone ? customer.name : telefone;
                 const apoio = temNome ? (telefone ?? "Sem telefone") : "Ainda sem nome";
                 return (
-                <li key={customer.id}>
+                // A linha é o contêiner (e leva o hover): a lixeira não pode ficar
+                // DENTRO do link — botão dentro de link é HTML inválido e o clique
+                // ficaria ambíguo. É irmã dele, com o próprio alvo de toque.
+                <li key={customer.id} className="flex items-center transition-colors hover:bg-surface-sunken">
                   <Link
                     href={`/clientes/${customer.id}`}
-                    className="flex min-h-[52px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-sunken"
+                    className={cn(
+                      "flex min-h-[52px] min-w-0 flex-1 items-center gap-3 py-2.5 pl-4",
+                      canDelete ? "pr-2" : "pr-4",
+                    )}
                   >
                     <Avatar name={customer.name} size="md" />
                     <span className="min-w-0 flex-[2]">
@@ -168,6 +184,11 @@ export default async function CustomersPage({
                       {customer.totalSpentCents > 0 ? formatBRLCompact(customer.totalSpentCents) : "—"}
                     </span>
                   </Link>
+                  {canDelete ? (
+                    <div className="flex w-10 shrink-0 justify-center pr-2">
+                      <DeleteCustomerButton customer={{ id: customer.id, name: titulo }} />
+                    </div>
+                  ) : null}
                 </li>
                 );
               })}

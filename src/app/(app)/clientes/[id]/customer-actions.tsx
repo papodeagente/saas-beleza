@@ -5,13 +5,16 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CustomerForm, type CustomerFormOptions, type CustomerFormValues } from "../customer-form";
+import { DeleteCustomerButton } from "../delete-customer-button";
 
 export function CustomerActions({
   customer,
   options,
+  canDelete,
 }: {
   customer: CustomerFormValues & { id: number };
   options: CustomerFormOptions;
+  canDelete: boolean;
 }) {
   const [editing, setEditing] = useState(false);
 
@@ -27,6 +30,13 @@ export function CustomerActions({
           <Printer />
           <span className="hidden sm:inline">Imprimir</span>
         </Button>
+        {canDelete ? (
+          <DeleteCustomerButton
+            customer={{ id: customer.id, name: customer.name }}
+            variant="button"
+            redirectTo="/clientes"
+          />
+        ) : null}
         <Button variant="secondary" size="md" onClick={() => setEditing(true)}>
           <Pencil />
           Editar

@@ -138,6 +138,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
               consentMarketing: customer.consentMarketing,
             }}
             options={formOptions}
+            canDelete={ctx.role === "admin" || ctx.role === "owner"}
           />
         }
       />
