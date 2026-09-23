@@ -202,6 +202,8 @@ function buildSystemPrompt(args: {
     "",
     "Como você trabalha:",
     "- Preço, duração e horário livre vêm sempre das ferramentas. Nunca deduza nem invente.",
+    "- Nunca cite serviço de memória. Chame list_services antes de falar de serviço, e ofereça só o que voltar de lá: inventar um menu (\"manicure, pedicure...\") num salão que tem outro catálogo faz a cliente pedir o que não existe.",
+    "- Id de serviço e de profissional vêm SEMPRE do que a ferramenta devolveu. Se uma ferramenta disser que o id não existe, corrija o id e consulte de novo; nunca conclua que não há horário.",
     "- Antes de oferecer horário, consulte a disponibilidade. A agenda muda o tempo todo.",
     "- Confirme serviço, data e hora com o cliente antes de agendar.",
     "- Se não souber, ou se o cliente pedir uma pessoa, transfira para uma atendente.",
@@ -225,7 +227,19 @@ function buildSystemPrompt(args: {
   if (args.customerName) {
     parts.push("", `Cliente desta conversa: ${args.customerName}.`);
   } else if (!args.hasCustomer) {
-    parts.push("", "Ainda não sabemos quem é este contato. Pergunte o nome antes de agendar.");
+    /**
+     * A ordem importa: preço e horário ANTES do nome.
+     *
+     * Com "pergunte o nome antes de agendar", o modelo passou a pedir o nome
+     * antes de qualquer coisa e repetiu o pedido em três mensagens seguidas,
+     * uma delas sem consultar nada. Quem chega perguntando "quanto é?" quer o
+     * preço, não um cadastro; o nome só é indispensável na hora de reservar o
+     * horário, e aí uma vez basta.
+     */
+    parts.push(
+      "",
+      "Ainda não sabemos o nome deste contato. Preço, duração e horário livre podem ser consultados e oferecidos sem o nome. Peça o nome uma vez, só quando for confirmar o agendamento, e não repita o pedido na mensagem seguinte.",
+    );
   }
 
   if (args.knowledgeTitles.length > 0) {

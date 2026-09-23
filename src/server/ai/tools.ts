@@ -9,6 +9,7 @@ import {
   conversations,
   customers,
   professionals,
+  professionalServices,
   services,
 } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
@@ -124,6 +125,102 @@ function num(input: Record<string, unknown>, key: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * A profissional existe nesta conta E atende este serviço?
+ *
+ * Mesma armadilha do id de serviço: profissional chutada, ou que não faz aquele
+ * serviço, deixa a grade vazia e a ferramenta dizia "sem horário". A cliente
+ * ouvia "não tem vaga" quando a verdade era "essa pessoa não faz isso".
+ */
+async function profissionalDoServico(
+  runtime: ToolRuntime,
+  professionalId: number,
+  serviceId: number,
+): Promise<{ ok: true } | { ok: false; data: { erro: string } }> {
+  const [faz] = await db
+    .select({ id: professionals.id })
+    .from(professionalServices)
+    .innerJoin(professionals, eq(professionals.id, professionalServices.professionalId))
+    .where(
+      and(
+        eq(professionalServices.organizationId, runtime.ctx.organizationId),
+        eq(professionalServices.professionalId, professionalId),
+        eq(professionalServices.serviceId, serviceId),
+        eq(professionals.active, true),
+      ),
+    )
+    .limit(1);
+  if (faz) return { ok: true };
+
+  const equipe = await db
+    .select({ id: professionals.id, name: professionals.name })
+    .from(professionalServices)
+    .innerJoin(professionals, eq(professionals.id, professionalServices.professionalId))
+    .where(
+      and(
+        eq(professionalServices.organizationId, runtime.ctx.organizationId),
+        eq(professionalServices.serviceId, serviceId),
+        eq(professionals.active, true),
+      ),
+    )
+    .orderBy(asc(professionals.name))
+    .limit(20);
+
+  return {
+    ok: false,
+    data: {
+      erro:
+        equipe.length > 0
+          ? `Quem atende este serviço é: ${equipe.map((p) => `${p.id} (${p.name})`).join(", ")}. NÃO diga que não há horário: repita a consulta sem escolher profissional, ou use um destes ids.`
+          : "Nenhuma profissional está habilitada para este serviço. Transfira para uma atendente.",
+    },
+  };
+}
+
+/**
+ * O id do serviço existe NESTA conta?
+ *
+ * Esta guarda é a correção de um atendimento que mentiu para a cliente. O
+ * modelo chutou `serviceId: 1` em vez do 357 que `list_services` acabara de
+ * devolver, e a disponibilidade respondeu `total: 0` — porque serviço
+ * inexistente e agenda cheia produziam exatamente a mesma resposta. O agente
+ * então disse "não tem horário livre nos próximos 7 dias" com a agenda vazia,
+ * oferecendo fila de espera para um salão que tinha 37 horários naquele dia.
+ *
+ * Id inválido agora é ERRO, com a lista do que existe. Modelo chuta id: isso é
+ * fato da vida, e quem tem que recusar é a ferramenta, não a sorte.
+ */
+async function servicoDaConta(
+  runtime: ToolRuntime,
+  serviceId: number,
+): Promise<{ ok: true } | { ok: false; data: { erro: string } }> {
+  const [existe] = await db
+    .select({ id: services.id })
+    .from(services)
+    .where(and(eq(services.organizationId, runtime.ctx.organizationId), eq(services.id, serviceId)))
+    .limit(1);
+  if (existe) return { ok: true };
+
+  const catalogo = await db
+    .select({ id: services.id, name: services.name })
+    .from(services)
+    .where(and(eq(services.organizationId, runtime.ctx.organizationId), eq(services.active, true)))
+    .orderBy(asc(services.name))
+    .limit(30);
+
+  return {
+    ok: false,
+    data: {
+      erro:
+        catalogo.length > 0
+          ? `O serviço ${serviceId} não existe nesta agenda. Use um destes ids: ${catalogo
+              .map((c) => `${c.id} (${c.name})`)
+              .join(", ")}. NÃO diga que não há horário: você usou um id errado.`
+          : `O serviço ${serviceId} não existe nesta agenda e não há serviço publicado. Transfira para uma atendente.`,
+    },
+  };
+}
+
 // ── Leitura ───────────────────────────────────────────────────────────────
 
 const listServices: AgentTool = {
@@ -215,7 +312,14 @@ const checkAvailability: AgentTool = {
     if (!serviceId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return { ok: false, data: { erro: "Informe serviceId e date no formato AAAA-MM-DD." } };
     }
+    const valido = await servicoDaConta(runtime, serviceId);
+    if (!valido.ok) return valido;
+
     const professionalId = num(input, "professionalId") ?? undefined;
+    if (professionalId) {
+      const atende = await profissionalDoServico(runtime, professionalId, serviceId);
+      if (!atende.ok) return atende;
+    }
     const slots = await getAvailableSlots(runtime.ctx, { serviceId, dateISO: date, professionalId });
 
     // O slot carrega só o id do profissional; o nome é o que serve para o
@@ -286,6 +390,9 @@ const proximosHorarios: AgentTool = {
     const serviceId = num(input, "serviceId");
     if (!serviceId) return { ok: false, data: { erro: "Informe serviceId." } };
 
+    const valido = await servicoDaConta(runtime, serviceId);
+    if (!valido.ok) return valido;
+
     const pedido = num(input, "diasAFrente") ?? 14;
     const dias = Math.max(1, Math.min(30, pedido));
     const hoje = dateISOInTz(new Date(), runtime.ctx.timezone);
@@ -295,10 +402,16 @@ const proximosHorarios: AgentTool = {
       return d.toISOString().slice(0, 10);
     });
 
+    const pedida = num(input, "professionalId") ?? undefined;
+    if (pedida) {
+      const atende = await profissionalDoServico(runtime, pedida, serviceId);
+      if (!atende.ok) return atende;
+    }
+
     const porDia = await getAvailableSlotsByDay(runtime.ctx, {
       serviceId,
       dateISOs: datas,
-      professionalId: num(input, "professionalId") ?? undefined,
+      professionalId: pedida,
     });
 
     const periodo = str(input, "periodo") || "qualquer";

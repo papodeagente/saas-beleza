@@ -3,6 +3,7 @@ import { Queue } from "bullmq";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { aiAgents } from "@/db/schema";
+import { idDoTurno } from "@/server/queues/agent-turn-id";
 import { getRedis } from "@/server/queues/redis";
 
 export const AGENT_TURN_QUEUE = "agent-turn";
@@ -92,7 +93,7 @@ export async function enqueueAgentTurn(job: AgentTurnJob): Promise<boolean> {
   const gate = await agentGate(job.organizationId);
   if (!gate.active) return false;
 
-  const jobId = `conv:${job.conversationId}`;
+  const jobId = idDoTurno(job.conversationId);
   const delay = Math.max(0, gate.debounceSeconds) * 1000;
 
   try {
@@ -103,13 +104,13 @@ export async function enqueueAgentTurn(job: AgentTurnJob): Promise<boolean> {
         await existing.remove();
       } else {
         // Já está rodando: entra como job independente, com id único.
-        await queue.add("turn", job, { jobId: `${jobId}:${Date.now()}`, delay });
+        await queue.add("turn", job, { jobId: idDoTurno(job.conversationId, Date.now()), delay });
         return true;
       }
     }
   } catch (error) {
     console.warn("[agent] não consegui remover job pendente:", error instanceof Error ? error.message : error);
-    await queue.add("turn", job, { jobId: `${jobId}:${Date.now()}`, delay });
+    await queue.add("turn", job, { jobId: idDoTurno(job.conversationId, Date.now()), delay });
     return true;
   }
 

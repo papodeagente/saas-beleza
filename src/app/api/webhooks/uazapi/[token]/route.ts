@@ -155,11 +155,27 @@ export async function POST(request: Request, context: { params: Promise<{ token:
           }
           // Histórico é só reconciliação e nunca pode acordar a IA para
           // responder mensagens antigas. Mensagens novas seguem para a fila.
+          /**
+           * A fila do agente NÃO pode derrubar a ingestão.
+           *
+           * A mensagem já está gravada neste ponto. Quando o enfileiramento
+           * falhava, este handler subia o erro, o webhook respondia 503 e a
+           * uazapi reentregava o mesmo evento — foi assim que um id de job
+           * inválido virou uma semana de reentrega em duas contas. O pior que
+           * uma falha aqui pode causar é o agente não responder AQUELA
+           * mensagem; travar a entrada de mensagens é muito pior.
+           */
           const { enqueueAgentTurn } = await import("@/server/queues/agent-turn-queue");
           await enqueueAgentTurn({
             organizationId: connection.organizationId,
             conversationId: result.conversationId,
             customerId: result.customerId,
+          }).catch((error) => {
+            console.error(
+              "[uazapi webhook] turno do agente não enfileirado:",
+              error instanceof Error ? error.message : error,
+            );
+            return false;
           });
         }
       } else if (current.kind === "status") {

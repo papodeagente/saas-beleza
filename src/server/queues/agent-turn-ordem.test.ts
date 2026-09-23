@@ -65,6 +65,28 @@ const marcaEmAgosto = new Date("2026-08-20T10:00:00Z");
 const turno = () => ({ organizationId, conversationId, customerId: null });
 
 beforeAll(async () => {
+  /**
+   * Varre o que corridas interrompidas deixaram para trás.
+   *
+   * Este arquivo cria uma conta com agente `active` + `enabled`. Quando a
+   * corrida morre antes do `afterAll` (Ctrl+C, processo derrubado), a conta
+   * fica — e em 23/09 havia uma delas VIVA no banco de produção, com agente
+   * ligado e sem nenhuma permissão. Limpar na entrada é o que impede o
+   * resíduo de virar permanente.
+   */
+  const orfas = await db
+    .select({ id: s.organizations.id })
+    .from(s.organizations)
+    .where(like(s.organizations.slug, "turno-vitest-turno-%"));
+  for (const orfa of orfas) {
+    await db.delete(s.messages).where(eq(s.messages.organizationId, orfa.id));
+    await db.delete(s.conversations).where(eq(s.conversations.organizationId, orfa.id));
+    await db.delete(s.whatsappConnections).where(eq(s.whatsappConnections.organizationId, orfa.id));
+    await db.delete(s.aiAgentPermissions).where(eq(s.aiAgentPermissions.organizationId, orfa.id));
+    await db.delete(s.aiAgents).where(eq(s.aiAgents.organizationId, orfa.id));
+    await db.delete(s.organizations).where(eq(s.organizations.id, orfa.id));
+  }
+
   const [org] = await db
     .insert(s.organizations)
     .values({ publicId: generateAccountCode(), name: `Turno ${SUFIXO}`, slug: `turno-${SUFIXO}` })
