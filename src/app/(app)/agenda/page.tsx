@@ -111,6 +111,7 @@ export default async function AgendaPage({
         ...a,
         startsAt: a.startsAt.toISOString(),
         endsAt: a.endsAt.toISOString(),
+        paymentDueAt: a.paymentDueAt?.toISOString() ?? null,
       }))}
       dayStartUtcISO={dayStartUtc.toISOString()}
       timezone={ctx.timezone}
@@ -121,6 +122,7 @@ export default async function AgendaPage({
           ...a,
           startsAt: a.startsAt.toISOString(),
           endsAt: a.endsAt.toISOString(),
+          paymentDueAt: a.paymentDueAt?.toISOString() ?? null,
         })),
       }}
       formData={formData}

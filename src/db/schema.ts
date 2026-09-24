@@ -35,6 +35,24 @@ export const appointmentStatus = pgEnum("appointment_status", [
 ]);
 export const appointmentSource = pgEnum("appointment_source", ["admin", "public", "whatsapp", "ai"]);
 
+/**
+ * Onde a reserva está na história do pagamento.
+ *
+ * Em português porque é vocabulário de negócio, não de protocolo: a tela, o
+ * relatório e a conversa com a dona usam estas mesmas palavras.
+ */
+export const bookingPaymentStatus = pgEnum("booking_payment_status", [
+  "nao_exigido",
+  "aguardando",
+  "pago",
+  "vencido",
+  "estornado",
+]);
+
+/** Produção ou sandbox, decidido pelo prefixo da chave e nunca pela mão. */
+export const asaasEnvironment = pgEnum("asaas_environment", ["producao", "sandbox"]);
+export const asaasConnectionStatus = pgEnum("asaas_connection_status", ["conectada", "com_erro"]);
+
 /** De onde veio a coordenada de uma unidade. */
 export const geoSource = pgEnum("geo_source", [
   /** Digitada à mão pela clínica. */
@@ -248,6 +266,30 @@ export const organizations = pgTable("organizations", {
    * direta) — ver `(app)/layout.tsx`.
    */
   welcomeVideoSeenAt: timestamp("welcome_video_seen_at", { withTimezone: true }),
+
+  /**
+   * Exigir pagamento para fechar agendamento pelo site.
+   *
+   * Desligado por padrão, e é a dona quem liga: cobrar antes derruba falta,
+   * mas também espanta cliente nova que só queria marcar. A regra vale para o
+   * agendamento ONLINE (página pública e agente de IA). Quem marca pelo
+   * balcão, com a atendente, continua marcando sem cobrança: ali o dinheiro
+   * é combinado olho no olho.
+   */
+  requirePaymentToBook: boolean("require_payment_to_book").notNull().default(false),
+  /**
+   * Quanto do preço entra na reserva: 100 é o valor inteiro, 30 é sinal de
+   * 30%. Salão de unha costuma cobrar sinal, não a conta toda.
+   */
+  paymentDepositPercent: integer("payment_deposit_percent").notNull().default(50),
+  /**
+   * Por quantos minutos o horário fica preso esperando o pagamento.
+   *
+   * O horário É reservado nesse intervalo: sem isso, duas clientes pagam pelo
+   * mesmo horário e uma descobre depois. Passado o prazo sem pagar, a reserva
+   * cai sozinha e o horário volta para a grade.
+   */
+  paymentHoldMinutes: integer("payment_hold_minutes").notNull().default(30),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -690,6 +732,27 @@ export const appointments = pgTable(
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
     createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id),
+
+    // ── Pagamento da reserva (Asaas da própria clínica) ───────────────────
+    /**
+     * `nao_exigido` é o caso da casa: agendamento de balcão, e todo
+     * agendamento de qualquer conta que não ligou a cobrança.
+     *
+     * `aguardando` é uma reserva de verdade: o horário está ocupado na grade
+     * enquanto o prazo corre. Foi a escolha entre dois males — não reservar
+     * deixaria duas clientes pagarem pelo mesmo horário.
+     */
+    paymentStatus: bookingPaymentStatus("payment_status").notNull().default("nao_exigido"),
+    /** Quanto foi cobrado nesta reserva: pode ser sinal, não o preço cheio. */
+    paymentAmountCents: integer("payment_amount_cents"),
+    /** Link do checkout hospedado do Asaas, o que a cliente abre para pagar. */
+    paymentUrl: text("payment_url"),
+    asaasPaymentLinkId: text("asaas_payment_link_id"),
+    asaasPaymentId: text("asaas_payment_id"),
+    /** Fim do prazo da reserva. Passou daqui sem pagar, o horário volta. */
+    paymentDueAt: timestamp("payment_due_at", { withTimezone: true }),
+    paymentPaidAt: timestamp("payment_paid_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -697,6 +760,10 @@ export const appointments = pgTable(
     index("appointments_org_start_idx").on(t.organizationId, t.startsAt),
     index("appointments_professional_start_idx").on(t.professionalId, t.startsAt),
     index("appointments_customer_idx").on(t.customerId),
+    /** A varredura que derruba reserva vencida pergunta exatamente por isto. */
+    index("appointments_pagamento_vencendo_idx").on(t.paymentStatus, t.paymentDueAt),
+    /** O webhook do Asaas chega com o id do link, e é por ele que acha a reserva. */
+    index("appointments_asaas_link_idx").on(t.asaasPaymentLinkId),
   ],
 );
 
@@ -762,6 +829,47 @@ export const payments = pgTable(
     index("payments_appointment_idx").on(t.appointmentId),
   ],
 );
+
+/**
+ * A conta do Asaas de CADA clínica.
+ *
+ * O dinheiro é dela, então a credencial é dela: a plataforma não intermedia
+ * pagamento, não retém valor e não aparece no extrato de ninguém. Uma conta
+ * por clínica (daí o índice único), e a chave nunca volta para o navegador —
+ * a tela mostra no máximo os últimos caracteres.
+ *
+ * A chave está em texto simples nesta versão, como as credenciais de
+ * `payment_providers` já estão. É dívida conhecida e está registrada em
+ * docs/product-architecture.md: cifrar exige uma chave mestra no ambiente, e
+ * perder essa chave mestra significa toda clínica recadastrar a dela.
+ */
+export const asaasAccounts = pgTable(
+  "asaas_accounts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    organizationId: bigint("organization_id", { mode: "number" })
+      .notNull()
+      .references(() => organizations.id)
+      .unique(),
+    apiKey: text("api_key").notNull(),
+    /** Derivado do prefixo da chave: `$aact_prod_` é produção, o resto é teste. */
+    environment: asaasEnvironment("environment").notNull(),
+    /** Nome da conta como o Asaas a conhece, para a tela provar que conectou na certa. */
+    accountName: text("account_name"),
+    accountEmail: text("account_email"),
+    /** Segredo na URL do nosso webhook, um por clínica. */
+    webhookToken: text("webhook_token").notNull().unique(),
+    /** Id do webhook criado por nós na conta dela, para poder reapontar depois. */
+    asaasWebhookId: text("asaas_webhook_id"),
+    status: asaasConnectionStatus("status").notNull().default("conectada"),
+    statusDetail: text("status_detail"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("asaas_accounts_org_idx").on(t.organizationId)],
+);
+
 
 export const financialCategories = pgTable(
   "financial_categories",

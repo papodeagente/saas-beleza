@@ -1,6 +1,7 @@
 import "server-only";
 import { dispatchDueMessages } from "@/server/services/scheduled-group-messages";
 import { dispatchDueAutomations } from "@/server/services/automation-service";
+import { expirarReservasVencidas } from "@/server/services/booking-payment-service";
 
 /**
  * Varredura das mensagens programadas.
@@ -34,6 +35,17 @@ export function startScheduledMessagesWorker(): void {
           `[automações] enviadas: ${automacoes.sent}, falhas: ${automacoes.failed}, ignoradas: ${automacoes.skipped}`,
         );
       }
+
+      /**
+       * Reserva que venceu sem pagamento devolve o horário para a grade.
+       *
+       * Fica nesta varredura, e não numa fila com atraso, pelo mesmo motivo das
+       * mensagens: o prazo está gravado na linha. Se o processo cair com dez
+       * reservas pendentes, na volta a varredura acha todas — uma fila em
+       * memória teria perdido os dez horários para sempre.
+       */
+      const expiradas = await expirarReservasVencidas();
+      if (expiradas > 0) console.log(`[cobrança] reservas expiradas: ${expiradas}`);
     } catch (error) {
       // Uma varredura que estoura não pode derrubar as próximas.
       console.error("[agendadas] varredura falhou:", error instanceof Error ? error.message : error);

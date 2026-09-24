@@ -68,6 +68,9 @@ export async function getAgendaRange(
       professionalColor: professionals.color,
       branchName: branches.name,
       paidCents: sql<number>`coalesce(${paidByAppointment.paid}, 0)`.mapWith(Number),
+      paymentStatus: appointments.paymentStatus,
+      paymentAmountCents: appointments.paymentAmountCents,
+      paymentDueAt: appointments.paymentDueAt,
     })
     .from(appointments)
     .innerJoin(customers, eq(customers.id, appointments.customerId))
@@ -127,6 +130,9 @@ export async function getAgendaDay(
         professionalColor: professionals.color,
         branchName: branches.name,
         paidCents: sql<number>`coalesce(${paidByAppointment.paid}, 0)`.mapWith(Number),
+        paymentStatus: appointments.paymentStatus,
+        paymentAmountCents: appointments.paymentAmountCents,
+        paymentDueAt: appointments.paymentDueAt,
       })
       .from(appointments)
       .innerJoin(customers, eq(customers.id, appointments.customerId))

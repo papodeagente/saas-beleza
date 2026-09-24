@@ -8,6 +8,7 @@ import {
   Bot,
   CalendarDays,
   Check,
+  CreditCard,
   LayoutGrid,
   LogOut,
   MessageSquare,
@@ -62,6 +63,7 @@ const NAV: Array<{
   { href: "/automacoes", label: "Automações", icon: Workflow, group: "gestao", minRole: "admin" },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3, group: "gestao", minRole: "admin" },
   { href: "/financeiro", label: "Financeiro", icon: Wallet, group: "gestao", minRole: "admin" },
+  { href: "/pagamentos", label: "Pagamentos", icon: CreditCard, group: "gestao", minRole: "admin" },
   { href: "/catalogo", label: "Catálogo", icon: LayoutGrid, group: "gestao", minRole: "staff" },
   { href: "/gestao", label: "Gestão", icon: Settings, group: "gestao", minRole: "admin" },
 ];

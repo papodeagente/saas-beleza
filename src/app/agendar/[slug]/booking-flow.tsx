@@ -8,6 +8,7 @@ import {
   Check,
   ChevronRight,
   Clock,
+  CreditCard,
   MapPin,
   ShieldCheck,
   Store,
@@ -230,6 +231,16 @@ export function BookingFlow({
   const afternoon = times.filter((s) => Number(s.label.slice(0, 2)) >= 12);
   const dayISO = days.includes(day) ? day : days[0];
   const dayLabel = formatTz(comoData(dayISO), "UTC", "d 'de' MMMM");
+
+  if (step === "done" && confirmation?.cobranca) {
+    return (
+      <BilheteAPagar
+        confirmation={confirmation}
+        cobranca={confirmation.cobranca}
+        organizationName={organizationName}
+      />
+    );
+  }
 
   if (step === "done" && confirmation) {
     return (
@@ -813,6 +824,133 @@ function TimeGroup({
         })}
       </div>
     </section>
+  );
+}
+
+/**
+ * Quanto falta até o horário voltar para a grade.
+ *
+ * Conta a partir do INSTANTE de vencimento, não de um contador que começa em
+ * "30:00" quando a tela abre: a cliente sai para o app do banco, volta, e a
+ * contagem precisa refletir o prazo real que o servidor gravou — senão a tela
+ * promete tempo que não existe mais.
+ */
+function useContagem(venceEm: string): { minutos: number; segundos: number; acabou: boolean } {
+  const limite = useMemo(() => new Date(venceEm).getTime(), [venceEm]);
+  const [agora, setAgora] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setAgora(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const restante = Math.max(0, limite - agora);
+  return {
+    minutos: Math.floor(restante / 60_000),
+    segundos: Math.floor((restante % 60_000) / 1000),
+    acabou: restante <= 0,
+  };
+}
+
+/**
+ * O bilhete de quem ainda precisa pagar.
+ *
+ * Separado do bilhete comum de propósito: dizer "tudo certo, seu horário está
+ * reservado" para quem não pagou é a forma mais cara de errar aqui — a cliente
+ * fecha a aba, não paga, perde o horário e aparece no dia achando que tem
+ * agendamento. Esta tela diz exatamente o que falta, quanto e até quando.
+ */
+function BilheteAPagar({
+  confirmation,
+  cobranca,
+  organizationName,
+}: {
+  confirmation: BookingConfirmation;
+  cobranca: NonNullable<BookingConfirmation["cobranca"]>;
+  organizationName: string;
+}) {
+  const { minutos, segundos, acabou } = useContagem(cobranca.venceEm);
+
+  return (
+    <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,#f1e5fb_0,transparent_36%),var(--color-surface)] px-5 py-10 sm:py-16">
+      <div className="mx-auto max-w-[560px] overflow-hidden rounded-overlay bg-surface-raised shadow-[0_28px_80px_rgb(67_35_88/0.16)]">
+        <div className="bg-brand px-7 py-8 text-white sm:px-10">
+          <div className="flex size-12 items-center justify-center rounded-pill bg-white/16 ring-1 ring-white/25">
+            <Clock className="size-6" aria-hidden />
+          </div>
+          <p className="mt-6 text-eyebrow text-white">
+            {acabou ? "Tempo esgotado" : "Falta o pagamento"}
+          </p>
+          <h1 className="mt-2 text-display text-white">
+            {acabou ? "Seu horário voltou para a agenda" : "Seu horário está guardado"}
+          </h1>
+          <p className="mt-2 text-body text-white">
+            {acabou
+              ? `Ninguém mais tinha reservado até agora, mas o prazo passou. É só escolher um horário de novo em ${organizationName}.`
+              : `${organizationName} guarda este horário para você até o pagamento entrar.`}
+          </p>
+        </div>
+
+        <div className="px-7 py-7 sm:px-10">
+          {acabou ? (
+            <Button variant="primary" size="lg" className="w-full" onClick={() => window.location.reload()}>
+              Escolher outro horário
+            </Button>
+          ) : (
+            <div className="rounded-card border border-line p-5">
+              <div className="flex items-baseline justify-between gap-4">
+                <span className="text-caption text-ink-secondary">
+                  {cobranca.minutos >= 60 ? "Pague até" : "Tempo restante"}
+                </span>
+                {/* Tabular: sem isso o número pula de largura a cada segundo. */}
+                <span
+                  className="font-mono text-label tabular-nums text-ink"
+                  aria-live="off"
+                  aria-label={`Faltam ${minutos} minutos`}
+                >
+                  {String(minutos).padStart(2, "0")}:{String(segundos).padStart(2, "0")}
+                </span>
+              </div>
+              <p className="mt-4 text-caption text-ink-secondary">Valor para garantir</p>
+              <p className="text-display text-ink">{cobranca.valorLabel}</p>
+              <Button variant="primary" size="lg" className="mt-5 w-full" asChild>
+                <a href={cobranca.url} target="_blank" rel="noopener noreferrer">
+                  <CreditCard className="size-4" aria-hidden />
+                  Pagar e confirmar
+                </a>
+              </Button>
+              <p className="mt-3 flex items-start gap-2 text-caption text-ink-secondary">
+                <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
+                PIX, cartão ou boleto. O pagamento é feito direto para{" "}
+                {organizationName}, em ambiente seguro do Asaas.
+              </p>
+            </div>
+          )}
+
+          <dl className="mt-5 divide-y divide-line rounded-card border border-line">
+            <Detail label="Serviço" value={confirmation.serviceName} />
+            <Detail
+              label="Quando"
+              value={confirmation.whenLabel.charAt(0).toUpperCase() + confirmation.whenLabel.slice(1)}
+            />
+            <Detail label="Com" value={confirmation.professionalName} />
+            <Detail
+              label="Onde"
+              value={confirmation.branchName}
+              hint={confirmation.branchAddress ?? undefined}
+            />
+          </dl>
+
+          {acabou ? null : (
+            <p className="mt-5 text-caption text-ink-secondary">
+              Assim que o pagamento cair, a confirmação é automática — não precisa mandar
+              comprovante. Se o prazo passar sem pagamento, o horário volta para a agenda.
+            </p>
+          )}
+          <Footer />
+        </div>
+      </div>
+    </main>
   );
 }
 

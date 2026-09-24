@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Check, LogIn, Play, User, X } from "lucide-react";
+import { CalendarClock, Check, Clock, LogIn, Play, User, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
@@ -335,6 +335,37 @@ export function AppointmentSheet({
                   ) : null}
                 </dl>
               </Card>
+
+              {/* Reserva online com pagamento pendente.
+                  Vem ANTES do bloco de valores porque é a informação que muda
+                  o que a recepção faz agora: este horário pode desaparecer da
+                  agenda sozinho, e quem não sabe disso liga para a cliente
+                  perguntando por um atendimento que o sistema já cancelou. */}
+              {appointment.paymentStatus === "aguardando" ? (
+                <Card inset className="border-attention/30 bg-attention-soft px-3.5 py-3">
+                  <p className="flex items-center gap-1.5 text-label text-attention">
+                    <Clock className="size-4 shrink-0" aria-hidden />
+                    Aguardando pagamento online
+                  </p>
+                  <p className="mt-1 text-caption text-attention">
+                    {appointment.paymentAmountCents
+                      ? `${formatBRL(appointment.paymentAmountCents)} para garantir o horário. `
+                      : ""}
+                    {appointment.paymentDueAt
+                      ? `Se não entrar até ${formatTz(new Date(appointment.paymentDueAt), timezone, "HH:mm")}, o horário volta para a agenda.`
+                      : "O horário volta para a agenda se o pagamento não entrar no prazo."}
+                  </p>
+                </Card>
+              ) : null}
+              {appointment.paymentStatus === "estornado" ? (
+                <Card inset className="border-danger/30 bg-danger-soft px-3.5 py-3">
+                  <p className="text-label text-danger">Pagamento online estornado</p>
+                  <p className="mt-1 text-caption text-danger">
+                    A cliente recebeu o valor de volta. Confirme com ela se o atendimento
+                    continua.
+                  </p>
+                </Card>
+              ) : null}
 
               {/* Pagamento — contexto financeiro sem sair da agenda */}
               <Card inset className="px-3.5 py-3">

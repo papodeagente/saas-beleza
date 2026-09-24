@@ -20,6 +20,9 @@ import {
   rescheduleAppointment,
 } from "@/server/services/appointment-service";
 import { dateISOInTz, formatTz, localDateTimeToUtc } from "@/lib/tz";
+import { formatBRL } from "@/lib/money";
+import { cobrancaExigida, regraDeCobranca } from "@/server/services/asaas-account-service";
+import { abrirCobranca } from "@/server/services/booking-payment-service";
 import type { AgentToolDefinition } from "@/server/ai/llm";
 
 /**
@@ -630,7 +633,7 @@ const createAppointmentTool: AgentTool = {
   definition: {
     name: "create_appointment",
     description:
-      "Agenda um horário para o cliente desta conversa. Só chame depois de confirmar serviço, data e hora com ele, e depois de ver o horário livre em check_availability.",
+      "Agenda um horário para o cliente desta conversa. Só chame depois de confirmar serviço, data e hora com ele, e depois de ver o horário livre em check_availability. Quando a clínica exige pagamento, a resposta traz `pagamento` em vez de `confirmado`: aí o horário está apenas guardado até o pagamento entrar.",
     parameters: {
       type: "object",
       properties: {
@@ -674,11 +677,58 @@ const createAppointmentTool: AgentTool = {
         source: "ai",
         conversationId: runtime.conversationId,
       });
+      const quando = formatTz(startsAt, runtime.ctx.timezone, "dd/MM/yyyy 'às' HH:mm");
+
+      /**
+       * Clínica que exige pagamento: o horário está GUARDADO, não confirmado.
+       *
+       * Sem este trecho o agente seria o furo do recurso — a página pública
+       * cobraria e o WhatsApp, que é por onde a maioria agenda, confirmaria de
+       * graça. Por isso a resposta da ferramenta muda de forma: não existe
+       * campo `confirmado` aqui, só `pagamento`, para o modelo não ter como
+       * anunciar confirmação que não houve.
+       */
+      if (await cobrancaExigida(runtime.ctx.organizationId)) {
+        try {
+          const regra = await regraDeCobranca(runtime.ctx.organizationId);
+          const cobranca = await abrirCobranca(runtime.ctx.organizationId, created.id);
+          // Serviço abaixo do mínimo do Asaas não tem como ser cobrado: o
+          // agendamento vale como qualquer outro.
+          if (!cobranca) return { ok: true, data: { appointmentId: created.id, confirmado: quando } };
+
+          return {
+            ok: true,
+            data: {
+              appointmentId: created.id,
+              horarioGuardado: quando,
+              pagamento: {
+                valor: formatBRL(cobranca.valorCents),
+                link: cobranca.url,
+                prazoMinutos: regra.minutosDeReserva,
+              },
+              instrucao:
+                "O horário está guardado, mas NÃO confirmado. Mande o link de pagamento e o valor para o cliente, diga em quantos minutos o pagamento precisa ser feito e avise que a confirmação chega sozinha quando o pagamento entrar. Não diga que o agendamento está confirmado.",
+            },
+          };
+        } catch (erro) {
+          // Cobrança que não abriu não pode virar agendamento confirmado de
+          // graça: quem decide o que fazer é a clínica, então transfere.
+          console.error("[agente] cobrança não aberta:", erro instanceof Error ? erro.message : erro);
+          return {
+            ok: false,
+            data: {
+              erro: "Agendei o horário, mas não consegui gerar o link de pagamento. Avise o cliente que a recepção vai mandar o link e transfira o atendimento.",
+              appointmentId: created.id,
+            },
+          };
+        }
+      }
+
       return {
         ok: true,
         data: {
           appointmentId: created.id,
-          confirmado: formatTz(startsAt, runtime.ctx.timezone, "dd/MM/yyyy 'às' HH:mm"),
+          confirmado: quando,
         },
       };
     } catch (error) {

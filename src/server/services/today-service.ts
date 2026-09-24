@@ -29,6 +29,10 @@ export type TodayAppointment = {
   professionalColor: string;
   branchName: string;
   paidCents: number;
+  paymentStatus: string;
+  /** Quanto foi cobrado para garantir o horário. Null quando não houve cobrança. */
+  paymentAmountCents: number | null;
+  paymentDueAt: Date | null;
 };
 
 export async function getTodayAppointments(ctx: TenantContext, day = new Date()): Promise<TodayAppointment[]> {
@@ -61,6 +65,9 @@ export async function getTodayAppointments(ctx: TenantContext, day = new Date())
       professionalColor: professionals.color,
       branchName: branches.name,
       paidCents: sql<number>`coalesce(${paidByAppointment.paid}, 0)`.mapWith(Number),
+      paymentStatus: appointments.paymentStatus,
+      paymentAmountCents: appointments.paymentAmountCents,
+      paymentDueAt: appointments.paymentDueAt,
     })
     .from(appointments)
     .innerJoin(customers, eq(customers.id, appointments.customerId))

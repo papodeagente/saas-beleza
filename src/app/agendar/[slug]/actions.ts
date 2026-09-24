@@ -5,6 +5,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { bookingPageVisits, organizations } from "@/db/schema";
+import { formatBRL } from "@/lib/money";
 import { normalizePhone } from "@/lib/phone";
 import { dateISOInTz, formatTz } from "@/lib/tz";
 import { DomainError } from "@/server/services/appointment-service";
@@ -119,6 +120,11 @@ export type BookingConfirmation = {
   branchName: string;
   branchAddress: string | null;
   whenLabel: string;
+  /**
+   * Só quando a clínica cobra para fechar. O horário JÁ está guardado; o que
+   * o bilhete mostra, nesse caso, é o que falta fazer e até quando.
+   */
+  cobranca: { url: string; valorLabel: string; minutos: number; venceEm: string } | null;
 };
 
 export type BookingActionResult =
@@ -157,6 +163,16 @@ export async function publicBookingAction(input: unknown): Promise<BookingAction
           org.organization.timezone,
           "EEEE, d 'de' MMMM 'às' HH:mm",
         ),
+        cobranca: result.cobranca
+          ? {
+              url: result.cobranca.url,
+              valorLabel: formatBRL(result.cobranca.valorCents),
+              minutos: result.cobranca.minutos,
+              // Instante real, e não só "faltam 30 min": a contagem na tela
+              // precisa continuar certa se a cliente voltar para a aba depois.
+              venceEm: result.cobranca.venceEm.toISOString(),
+            }
+          : null,
       },
     };
   } catch (error) {

@@ -13,6 +13,7 @@ import {
   organizations,
 } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
+import { cobrancaExigida } from "@/server/services/asaas-account-service";
 import { aconteceuEm } from "@/server/services/inbox-service";
 import { complete, DEFAULT_MODEL, normalizeModel, type LlmItem } from "@/server/ai/llm";
 import {
@@ -165,6 +166,8 @@ function buildSystemPrompt(args: {
   customerName: string | null;
   knowledgeTitles: string[];
   hasCustomer: boolean;
+  /** A clínica exige pagamento para fechar o horário. */
+  exigePagamento: boolean;
 }): string {
   const now = new Date();
   const parts: string[] = [];
@@ -209,6 +212,20 @@ function buildSystemPrompt(args: {
     "- Se não souber, ou se o cliente pedir uma pessoa, transfira para uma atendente.",
     "- Nunca prometa o que não puder confirmar por ferramenta.",
   );
+
+  /**
+   * A regra do pagamento só entra quando a clínica cobra.
+   *
+   * Prompt de quem não cobra não pode falar em link de pagamento: é o tipo de
+   * instrução que o modelo acaba mencionando sem motivo ("depois te mando o
+   * link") e confunde a cliente numa clínica que nunca cobrou nada.
+   */
+  if (args.exigePagamento) {
+    parts.push(
+      "- Esta clínica pede pagamento para fechar o horário. Quando create_appointment devolver `pagamento`, o horário está apenas GUARDADO: mande o link e o valor, diga em quantos minutos o pagamento precisa ser feito e explique que o horário volta pra agenda se não for pago. Nunca diga que está confirmado antes de o pagamento entrar.",
+      "- Não peça comprovante nem print. A confirmação é automática quando o pagamento cai.",
+    );
+  }
 
   if (noPadrao) {
     parts.push(
@@ -302,6 +319,7 @@ export async function executeAgentTurn(input: TurnInput): Promise<TurnResult> {
     customerName: customer?.name ?? null,
     knowledgeTitles: knowledge.map((k) => k.title),
     hasCustomer: Boolean(input.customerId),
+    exigePagamento: await cobrancaExigida(ctx.organizationId),
   });
 
   const history = input.history ?? (await buildHistory(input.organizationId, input.conversationId));

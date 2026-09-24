@@ -14,6 +14,8 @@ import { normalizePhone } from "@/lib/phone";
 import type { TenantContext } from "@/server/auth";
 import { getAccountAccess } from "./account-access";
 import { createAppointment } from "./appointment-service";
+import { cobrancaExigida, regraDeCobranca } from "./asaas-account-service";
+import { abrirCobranca } from "./booking-payment-service";
 import {
   getAvailableSlots,
   getAvailableSlotsByDay,
@@ -295,6 +297,11 @@ export type PublicBookingResult = {
   branchName: string;
   branchAddress: string | null;
   startsAt: Date;
+  /**
+   * Preenchido só quando a clínica exige pagamento para fechar. O horário já
+   * está reservado neste ponto; o que falta é o pagamento dentro do prazo.
+   */
+  cobranca: { url: string; valorCents: number; venceEm: Date; minutos: number } | null;
 };
 
 /**
@@ -363,6 +370,30 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
     .where(eq(branches.id, input.branchId))
     .limit(1);
 
+  /**
+   * A cobrança vem DEPOIS do agendamento, e é isso que segura o horário.
+   *
+   * Se o Asaas falhar aqui, a reserva continua de pé sem cobrança em vez de
+   * sumir: perder o agendamento de quem já preencheu tudo é o pior desfecho
+   * possível, e a dona ainda tem a conversa com a cliente para acertar o
+   * pagamento. O erro fica no log, não na cara de quem estava marcando.
+   */
+  let cobranca: PublicBookingResult["cobranca"] = null;
+  if (await cobrancaExigida(org.ctx.organizationId)) {
+    try {
+      const regra = await regraDeCobranca(org.ctx.organizationId);
+      const aberta = await abrirCobranca(org.ctx.organizationId, appointment.id);
+      // Null quando o serviço é mais barato que o mínimo do Asaas: aí a
+      // reserva vale como qualquer outra, sem cobrança.
+      cobranca = aberta ? { ...aberta, minutos: regra.minutosDeReserva } : null;
+    } catch (erro) {
+      console.error(
+        "[agendamento] cobrança não aberta:",
+        erro instanceof Error ? erro.message : erro,
+      );
+    }
+  }
+
   return {
     appointmentId: appointment.id,
     serviceName: service.name,
@@ -370,5 +401,6 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
     branchName: branch?.name ?? "",
     branchAddress: branch?.address ?? null,
     startsAt: appointment.startsAt,
+    cobranca,
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { addDays, addMonths, addWeeks, parseISO } from "date-fns";
-import { CalendarCog, CalendarPlus, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { CalendarCog, CalendarPlus, ChevronLeft, ChevronRight, Clock, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { PageHeader } from "@/components/app-shell";
@@ -35,6 +35,9 @@ export type AgendaAppointment = {
   professionalColor: string;
   branchName: string;
   paidCents: number;
+  paymentStatus: string;
+  paymentAmountCents: number | null;
+  paymentDueAt: string | null;
 };
 
 type Column = {
@@ -692,6 +695,12 @@ function AppointmentBlock({
         <span className={cn("truncate text-label text-ink", off && "line-through")}>
           {appointment.customerName}
         </span>
+        {/* Reserva que ainda pode cair por falta de pagamento. Um relógio no
+            card evita a pergunta "por que este horário sumiu?" — e evita a
+            recepção contar com uma receita que talvez não entre. */}
+        {appointment.paymentStatus === "aguardando" ? (
+          <Clock className="ml-auto size-3 shrink-0 text-attention" aria-label="aguardando pagamento" />
+        ) : null}
       </span>
       {height >= 44 ? (
         <span className="mt-0.5 block truncate text-meta text-ink-secondary">
