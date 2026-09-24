@@ -24,6 +24,7 @@ import {
 } from "@/domain/appointment-status";
 import type { TenantContext } from "@/server/auth";
 import { dispatchAppointmentCreatedAutomations } from "./automation-service";
+import { cobrancaExigida } from "./asaas-account-service";
 
 export class DomainError extends Error {
   constructor(
@@ -228,12 +229,30 @@ export async function createAppointment(ctx: TenantContext, input: CreateAppoint
 
       return created;
     });
+    /**
+     * Confirmação imediata, MENOS quando o horário ainda depende de pagamento.
+     *
+     * Numa clínica que cobra para fechar, o agendamento online nasce guardado,
+     * não confirmado. Mandar "seu horário está confirmado" aqui seria mentir
+     * para a cliente e, meia hora depois, cancelar o horário que a mensagem
+     * acabou de prometer. Quem dispara a confirmação nesse caso é
+     * `confirmarPagamento`, quando o dinheiro entra de verdade.
+     *
+     * Vale só para o que entra sozinho (página pública e agente): marcação de
+     * balcão não passa pelo pagamento, então continua confirmando na hora.
+     */
+    const dependeDePagamento =
+      (input.source === "public" || input.source === "ai") &&
+      (await cobrancaExigida(ctx.organizationId));
+
     // A confirmação não pode desfazer um horário já reservado se o WhatsApp
     // estiver momentaneamente indisponível; a falha fica registrada no disparo.
-    try {
-      await dispatchAppointmentCreatedAutomations(ctx, created.id);
-    } catch (error) {
-      console.error("[automação] falha na confirmação imediata:", error);
+    if (!dependeDePagamento) {
+      try {
+        await dispatchAppointmentCreatedAutomations(ctx, created.id);
+      } catch (error) {
+        console.error("[automação] falha na confirmação imediata:", error);
+      }
     }
     return created;
   } catch (error) {

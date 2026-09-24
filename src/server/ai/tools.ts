@@ -22,6 +22,7 @@ import {
 import { dateISOInTz, formatTz, localDateTimeToUtc } from "@/lib/tz";
 import { formatBRL } from "@/lib/money";
 import { cobrancaExigida, regraDeCobranca } from "@/server/services/asaas-account-service";
+import { dispatchAppointmentCreatedAutomations } from "@/server/services/automation-service";
 import { abrirCobranca } from "@/server/services/booking-payment-service";
 import type { AgentToolDefinition } from "@/server/ai/llm";
 
@@ -693,8 +694,12 @@ const createAppointmentTool: AgentTool = {
           const regra = await regraDeCobranca(runtime.ctx.organizationId);
           const cobranca = await abrirCobranca(runtime.ctx.organizationId, created.id);
           // Serviço abaixo do mínimo do Asaas não tem como ser cobrado: o
-          // agendamento vale como qualquer outro.
-          if (!cobranca) return { ok: true, data: { appointmentId: created.id, confirmado: quando } };
+          // agendamento vale como qualquer outro, inclusive na confirmação que
+          // a criação segurou por causa do portão de pagamento.
+          if (!cobranca) {
+            await dispatchAppointmentCreatedAutomations(runtime.ctx, created.id).catch(() => undefined);
+            return { ok: true, data: { appointmentId: created.id, confirmado: quando } };
+          }
 
           return {
             ok: true,

@@ -15,6 +15,7 @@ import type { TenantContext } from "@/server/auth";
 import { getAccountAccess } from "./account-access";
 import { createAppointment } from "./appointment-service";
 import { cobrancaExigida, regraDeCobranca } from "./asaas-account-service";
+import { dispatchAppointmentCreatedAutomations } from "./automation-service";
 import { abrirCobranca } from "./booking-payment-service";
 import {
   getAvailableSlots,
@@ -384,8 +385,10 @@ export async function createPublicBooking(input: PublicBookingInput): Promise<Pu
       const regra = await regraDeCobranca(org.ctx.organizationId);
       const aberta = await abrirCobranca(org.ctx.organizationId, appointment.id);
       // Null quando o serviço é mais barato que o mínimo do Asaas: aí a
-      // reserva vale como qualquer outra, sem cobrança.
+      // reserva vale como qualquer outra, sem cobrança — e precisa da
+      // confirmação que a criação segurou por causa do portão de pagamento.
       cobranca = aberta ? { ...aberta, minutos: regra.minutosDeReserva } : null;
+      if (!aberta) await dispatchAppointmentCreatedAutomations(org.ctx, appointment.id);
     } catch (erro) {
       console.error(
         "[agendamento] cobrança não aberta:",

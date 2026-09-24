@@ -6,6 +6,7 @@ import { MINIMO_ASAAS_CENTS, valorDaReserva } from "@/domain/booking-payment";
 import { formatBRL } from "@/lib/money";
 import { formatTz } from "@/lib/tz";
 import { changeStatus } from "@/server/services/appointment-service";
+import { dispatchAppointmentCreatedAutomations } from "@/server/services/automation-service";
 import {
   credencialDaClinica,
   regraDeCobranca,
@@ -204,6 +205,8 @@ export async function confirmarPagamento(
     paidAt: agora,
   });
 
+  const ctx = await systemContext(organizationId);
+
   /**
    * Reserva paga vira agendamento confirmado.
    *
@@ -211,11 +214,22 @@ export async function confirmarPagamento(
    * já pago, sem diferença nenhuma de quem ainda não pagou.
    */
   if (reserva.status === "scheduled") {
-    const ctx = await systemContext(organizationId);
     await changeStatus(ctx, reserva.id, "confirmed", { actor: { type: "system" } }).catch((erro) => {
       console.warn("[asaas] pagamento confirmado sem mudar o status:", erro instanceof Error ? erro.message : erro);
     });
   }
+
+  /**
+   * A confirmação que a criação do agendamento deixou de mandar sai AGORA.
+   *
+   * É o momento em que ela é verdade. O livro-razão da automação dedupa por
+   * regra e agendamento, então o `PAYMENT_RECEIVED` que chega depois do
+   * `PAYMENT_CONFIRMED`, e qualquer reentrega do Asaas, não viram duas
+   * mensagens para a mesma cliente.
+   */
+  await dispatchAppointmentCreatedAutomations(ctx, reserva.id).catch((erro) => {
+    console.warn("[cobrança] confirmação não enviada:", erro instanceof Error ? erro.message : erro);
+  });
 
   return { appointmentId: reserva.id };
 }
