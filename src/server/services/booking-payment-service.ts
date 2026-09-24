@@ -112,6 +112,13 @@ export type CheckoutDaReserva = {
   clinica: string;
   /** Para o caminho de volta quando o prazo estoura. */
   slug: string;
+  /**
+   * Logo da clínica, se houver.
+   *
+   * Numa tela de pagamento a primeira pergunta é "isto é mesmo do salão que eu
+   * marquei?". A marca dela responde antes de qualquer texto.
+   */
+  logoUrl: string | null;
   servico: string;
   profissional: string;
   unidade: string;
@@ -120,6 +127,14 @@ export type CheckoutDaReserva = {
   precoCents: number;
   /** Fim do prazo, em ISO. A contagem na tela sai daqui. */
   venceEm: string | null;
+  /**
+   * A janela inteira da clínica, em minutos.
+   *
+   * A barra do relógio precisa de um denominador. Com a janela real, quem abre
+   * o link dez minutos depois já encontra a barra pela metade — que é a
+   * verdade, e é mais urgente que uma barra que recomeça cheia a cada visita.
+   */
+  janelaMinutos: number;
   estado: "aguardando" | "pago" | "vencido" | "estornado" | "sem_cobranca";
   /** A conta da clínica tem chave PIX ativa. Sem isso, só cartão. */
   pixDisponivel: boolean;
@@ -141,6 +156,8 @@ type LinhaDaReserva = {
   fuso: string;
   clinica: string;
   slug: string;
+  temLogo: boolean;
+  versaoDoLogo: number;
   servico: string;
   profissional: string;
   unidade: string;
@@ -169,6 +186,8 @@ async function reservaPorToken(token: string): Promise<LinhaDaReserva | null> {
       fuso: organizations.timezone,
       clinica: organizations.name,
       slug: organizations.slug,
+      temLogo: sql<boolean>`${organizations.logoDataBase64} is not null`,
+      versaoDoLogo: organizations.logoVersion,
       servico: services.name,
       profissional: nomeDaProfissional,
       unidade: nomeDaUnidade,
@@ -206,7 +225,10 @@ export async function checkoutPorToken(token: string): Promise<CheckoutDaReserva
   const linha = await reservaPorToken(token);
   if (!linha) return null;
 
-  const conta = await credencialDaClinica(linha.organizationId);
+  const [conta, regra] = await Promise.all([
+    credencialDaClinica(linha.organizationId),
+    regraDeCobranca(linha.organizationId),
+  ]);
   // Prazo estourado mostra a tela do prazo estourado na hora, sem esperar a
   // varredura: quem voltou tarde não pode ver um QR que já não vale.
   const vencida =
@@ -215,6 +237,7 @@ export async function checkoutPorToken(token: string): Promise<CheckoutDaReserva
   return {
     clinica: linha.clinica,
     slug: linha.slug,
+    logoUrl: linha.temLogo ? `/agendar/${linha.slug}/logo?v=${linha.versaoDoLogo}` : null,
     servico: linha.servico,
     profissional: linha.profissional,
     unidade: linha.unidade,
@@ -222,6 +245,7 @@ export async function checkoutPorToken(token: string): Promise<CheckoutDaReserva
     valorCents: linha.valorCents ?? 0,
     precoCents: linha.precoCents,
     venceEm: linha.venceEm?.toISOString() ?? null,
+    janelaMinutos: regra.minutosDeReserva,
     estado: vencida ? "vencido" : estadoDaTela(linha.paymentStatus),
     pixDisponivel: Boolean(conta?.pixReady),
     cliente: {
