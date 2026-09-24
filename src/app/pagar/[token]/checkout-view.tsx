@@ -70,7 +70,28 @@ function useContagem(venceEm: string | null): { minutos: number; segundos: numbe
 
 export function CheckoutView({ token, reserva }: { token: string; reserva: CheckoutDaReserva }) {
   const [estado, setEstado] = useState(reserva.estado);
+  /** Existe cobrança criada esperando o dinheiro: PIX na tela, ou cartão em análise. */
+  const [esperando, setEsperando] = useState(false);
   const { minutos, segundos, acabou } = useContagem(estado === "aguardando" ? reserva.venceEm : null);
+
+  /**
+   * A consulta do pagamento mora AQUI, e não no formulário do PIX.
+   *
+   * A contagem regressiva re-renderiza esta árvore a cada segundo. Um
+   * `setInterval` montado lá embaixo, com o callback recebido por prop na
+   * lista de dependências, era desmontado e remontado a cada segundo — e um
+   * intervalo de cinco segundos que reinicia a cada um nunca dispara. O PIX
+   * jamais confirmaria sozinho. Neste componente as dependências são
+   * `esperando` e o token, que não mudam com o relógio.
+   */
+  useEffect(() => {
+    if (!esperando || estado !== "aguardando") return;
+    const id = setInterval(async () => {
+      const { pago } = await conferirPagamentoAction(token);
+      if (pago) setEstado("pago");
+    }, PULSO);
+    return () => clearInterval(id);
+  }, [esperando, estado, token]);
 
   const restanteCents = Math.max(0, reserva.precoCents - reserva.valorCents);
   const vencido = estado === "vencido" || (estado === "aguardando" && acabou);
@@ -164,6 +185,7 @@ export function CheckoutView({ token, reserva }: { token: string; reserva: Check
         token={token}
         reserva={reserva}
         onPago={() => setEstado("pago")}
+        onEsperar={() => setEsperando(true)}
       />
 
       <div className="mt-5">
@@ -255,10 +277,12 @@ function Pagamento({
   token,
   reserva,
   onPago,
+  onEsperar,
 }: {
   token: string;
   reserva: CheckoutDaReserva;
   onPago: () => void;
+  onEsperar: () => void;
 }) {
   const [meio, setMeio] = useState<"pix" | "cartao">(reserva.pixDisponivel ? "pix" : "cartao");
 
@@ -285,9 +309,9 @@ function Pagamento({
 
       <div className="mt-4">
         {meio === "pix" ? (
-          <FormaPix token={token} reserva={reserva} onPago={onPago} />
+          <FormaPix token={token} reserva={reserva} onEsperar={onEsperar} />
         ) : (
-          <FormaCartao token={token} reserva={reserva} onPago={onPago} />
+          <FormaCartao token={token} reserva={reserva} onPago={onPago} onEsperar={onEsperar} />
         )}
       </div>
     </div>
@@ -337,27 +361,17 @@ function Meio({
 function FormaPix({
   token,
   reserva,
-  onPago,
+  onEsperar,
 }: {
   token: string;
   reserva: CheckoutDaReserva;
-  onPago: () => void;
+  onEsperar: () => void;
 }) {
   const [cpf, setCpf] = useState(reserva.cliente.cpf ? formatarCpf(reserva.cliente.cpf) : "");
   const [pix, setPix] = useState<PixParaPagar | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [gerando, startGerando] = useTransition();
-
-  // Enquanto o QR está na tela, pergunta ao servidor se o dinheiro entrou.
-  useEffect(() => {
-    if (!pix) return;
-    const id = setInterval(async () => {
-      const { pago } = await conferirPagamentoAction(token);
-      if (pago) onPago();
-    }, PULSO);
-    return () => clearInterval(id);
-  }, [pix, token, onPago]);
 
   function gerar() {
     setErro(null);
@@ -372,6 +386,8 @@ function FormaPix({
         return;
       }
       setPix(resultado.pix);
+      // Daqui em diante existe dinheiro a esperar: quem pergunta é o pai.
+      onEsperar();
     });
   }
 
@@ -451,10 +467,12 @@ function FormaCartao({
   token,
   reserva,
   onPago,
+  onEsperar,
 }: {
   token: string;
   reserva: CheckoutDaReserva;
   onPago: () => void;
+  onEsperar: () => void;
 }) {
   const [numero, setNumero] = useState("");
   const [nomeImpresso, setNomeImpresso] = useState(reserva.cliente.nome);
@@ -467,16 +485,6 @@ function FormaCartao({
   const [erro, setErro] = useState<string | null>(null);
   const [emAnalise, setEmAnalise] = useState(false);
   const [pagando, startPagando] = useTransition();
-
-  // Cartão em análise é raro e existe: a tela espera como no PIX.
-  useEffect(() => {
-    if (!emAnalise) return;
-    const id = setInterval(async () => {
-      const { pago } = await conferirPagamentoAction(token);
-      if (pago) onPago();
-    }, PULSO);
-    return () => clearInterval(id);
-  }, [emAnalise, token, onPago]);
 
   function pagar() {
     setErro(null);
@@ -508,7 +516,9 @@ function FormaCartao({
         onPago();
         return;
       }
+      // Cartão em análise é raro e existe: a tela espera, como no PIX.
       setEmAnalise(true);
+      onEsperar();
     });
   }
 
