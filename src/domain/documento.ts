@@ -107,3 +107,73 @@ export function lerValidade(valor: string, agora = new Date()): ValidadeDoCartao
 
   return { mes: d.slice(0, 2), ano: String(ano) };
 }
+
+export type BandeiraDoCartao =
+  | "Visa"
+  | "Mastercard"
+  | "Elo"
+  | "American Express"
+  | "Hipercard"
+  | "Diners Club";
+
+/**
+ * Faixas da Elo.
+ *
+ * Ficam numa lista porque a Elo NÃO tem um prefixo próprio: ela ocupa faixas
+ * emitidas dentro do espaço da Visa (começa com 4) e do Mastercard (começa com
+ * 5). Testar "começa com 4 logo é Visa" antes daqui erra a bandeira de cartão
+ * Elo brasileiro, que é justamente o mais comum num salão.
+ */
+const FAIXAS_ELO = [
+  "401178", "401179", "431274", "438935", "451416", "457393", "457631", "457632",
+  "504175", "627780", "636297", "636368",
+];
+
+const INTERVALOS_ELO: [number, number][] = [
+  [506699, 506778],
+  [509000, 509999],
+  [650031, 650033],
+  [650035, 650051],
+  [650405, 650439],
+  [650485, 650538],
+  [650541, 650598],
+  [650700, 650718],
+  [650720, 650727],
+  [650901, 650978],
+  [651652, 651679],
+  [655000, 655019],
+  [655021, 655058],
+];
+
+/**
+ * A bandeira, só para a tela mostrar que reconheceu o cartão.
+ *
+ * É devolução visual, não validação: quem autoriza é o adquirente. Serve para
+ * quem está digitando ver que o número está indo para o lugar certo, que é o
+ * que as plataformas grandes fazem — e o que tira a sensação de estar jogando
+ * o cartão num formulário qualquer.
+ */
+export function bandeiraDoCartao(entrada: string): BandeiraDoCartao | null {
+  const n = somenteDigitos(entrada);
+  if (n.length < 4) return null;
+
+  // Elo e Hipercard primeiro: moram dentro das faixas da Visa e do Mastercard.
+  const seis = n.slice(0, 6);
+  if (FAIXAS_ELO.includes(seis)) return "Elo";
+  if (n.length >= 6) {
+    const numero = Number(seis);
+    if (INTERVALOS_ELO.some(([de, ate]) => numero >= de && numero <= ate)) return "Elo";
+  }
+  if (seis === "606282" || n.startsWith("3841")) return "Hipercard";
+
+  if (/^3[47]/.test(n)) return "American Express";
+  if (/^(30[0-5]|36|38)/.test(n)) return "Diners Club";
+  if (n.startsWith("4")) return "Visa";
+  if (/^5[1-5]/.test(n)) return "Mastercard";
+  // Mastercard novo, faixa 2221-2720.
+  if (n.length >= 4) {
+    const quatro = Number(n.slice(0, 4));
+    if (quatro >= 2221 && quatro <= 2720) return "Mastercard";
+  }
+  return null;
+}

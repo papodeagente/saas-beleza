@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandeiraDoCartao,
   cpfValido,
   formatarCep,
   formatarCpf,
@@ -85,5 +86,41 @@ describe("cartão", () => {
     expect(lerValidade("13/27", agora)).toBeNull();
     expect(lerValidade("00/27", agora)).toBeNull();
     expect(lerValidade("7/27", agora)).toBeNull();
+  });
+});
+
+describe("bandeira do cartão", () => {
+  it("reconhece as bandeiras comuns", () => {
+    expect(bandeiraDoCartao("4111 1111 1111 1111")).toBe("Visa");
+    expect(bandeiraDoCartao("5555 6666 7777 8884")).toBe("Mastercard");
+    expect(bandeiraDoCartao("3782 822463 10005")).toBe("American Express");
+    expect(bandeiraDoCartao("3056 9309 0259 04")).toBe("Diners Club");
+  });
+
+  it("reconhece Mastercard da faixa nova", () => {
+    expect(bandeiraDoCartao("2221 0000 0000 0009")).toBe("Mastercard");
+    expect(bandeiraDoCartao("2720 9999 9999 9999")).toBe("Mastercard");
+    // 2721 já saiu da faixa.
+    expect(bandeiraDoCartao("2721 0000 0000 0000")).toBeNull();
+  });
+
+  it("não confunde Elo com Visa nem com Mastercard", () => {
+    // A Elo mora DENTRO das faixas da Visa (4...) e do Mastercard (5...).
+    // Testar o "4" primeiro erraria a bandeira do cartão mais comum num salão.
+    expect(bandeiraDoCartao("4011 7800 0000 0000")).toBe("Elo");
+    expect(bandeiraDoCartao("5041 7500 0000 0000")).toBe("Elo");
+    expect(bandeiraDoCartao("5066 9900 0000 0000")).toBe("Elo");
+    expect(bandeiraDoCartao("6505 0000 0000 0000")).toBe("Elo");
+  });
+
+  it("não confunde Hipercard com Diners", () => {
+    expect(bandeiraDoCartao("6062 8200 0000 0000")).toBe("Hipercard");
+    expect(bandeiraDoCartao("3841 0000 0000 0000")).toBe("Hipercard");
+  });
+
+  it("espera dígitos suficientes antes de chutar", () => {
+    expect(bandeiraDoCartao("41")).toBeNull();
+    expect(bandeiraDoCartao("")).toBeNull();
+    expect(bandeiraDoCartao("9999 9999 9999 9999")).toBeNull();
   });
 });

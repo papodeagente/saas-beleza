@@ -8,12 +8,14 @@ import {
   Landmark,
   Loader2,
   Lock,
+  ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import {
+  bandeiraDoCartao,
   cpfValido,
   formatarCep,
   formatarCpf,
@@ -109,6 +111,10 @@ export function CheckoutView({ token, reserva }: { token: string; reserva: Check
         <p className="mt-5 text-caption text-ink-secondary">
           Não precisa mandar comprovante. Para remarcar ou cancelar, fale com a recepção.
         </p>
+        <p className="mt-3 flex items-center gap-1.5 text-caption text-ink-tertiary">
+          <ShieldCheck className="size-3.5 shrink-0 text-positive" aria-hidden />
+          Pagamento processado e confirmado pelo <MarcaAsaas />
+        </p>
       </Moldura>
     );
   }
@@ -192,12 +198,86 @@ export function CheckoutView({ token, reserva }: { token: string; reserva: Check
         <Resumo reserva={reserva} />
       </div>
 
-      <p className="mt-5 flex items-start gap-2 text-caption text-ink-secondary">
-        <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-        Pagamento processado pelo Asaas, direto para {reserva.clinica}. Os dados do seu cartão não
-        ficam guardados aqui.
-      </p>
+      <SeloDeSeguranca clinica={reserva.clinica} />
     </Moldura>
+  );
+}
+
+/**
+ * Quem processa o pagamento, dito no lugar onde a pergunta nasce.
+ *
+ * Escrito como texto, não como logotipo: usar a marca de terceiro exige o
+ * arquivo oficial e as regras de uso dele, e um logotipo aproximado passa a
+ * impressão contrária da que se quer aqui. O nome, com o peso certo, faz o
+ * trabalho.
+ */
+function MarcaAsaas() {
+  return <strong className="font-semibold">Asaas</strong>;
+}
+
+/**
+ * A barra de ambiente seguro.
+ *
+ * Fica ENCOSTADA na escolha do meio de pagamento, não no rodapé: a dúvida
+ * ("onde eu estou colocando meu cartão?") aparece no instante em que a pessoa
+ * decide pagar, e é ali que a resposta precisa estar. É o mesmo lugar em que
+ * as plataformas grandes põem a sua.
+ */
+function BarraSegura() {
+  return (
+    <div className="flex items-center gap-2 rounded-card bg-surface-sunken px-3 py-2">
+      <Lock className="size-3.5 shrink-0 text-positive" aria-hidden />
+      <span className="text-caption text-ink-secondary">
+        Ambiente seguro · pagamento processado por <MarcaAsaas />
+      </span>
+    </div>
+  );
+}
+
+/**
+ * O selo de garantias.
+ *
+ * Cada linha é uma afirmação verificável, e não adjetivo solto: quem processa,
+ * o que trafega criptografado, o que NÃO fica guardado aqui e para onde o
+ * dinheiro vai. Promessa vaga de segurança não tranquiliza ninguém que já
+ * desconfia; fato curto, tranquiliza.
+ */
+function SeloDeSeguranca({ clinica }: { clinica: string }) {
+  return (
+    <section
+      aria-label="Segurança do pagamento"
+      className="mt-5 rounded-card border border-line bg-surface-sunken px-4 py-4"
+    >
+      <p className="flex items-center gap-2 text-label text-ink">
+        <ShieldCheck className="size-4 shrink-0 text-positive" aria-hidden />
+        Pagamento 100% seguro
+      </p>
+      <ul className="mt-3 space-y-2.5">
+        <Garantia titulo="Processado pelo Asaas">
+          Instituição de pagamento autorizada pelo Banco Central do Brasil.
+        </Garantia>
+        <Garantia titulo="Conexão criptografada">
+          Seus dados seguem protegidos do seu aparelho até o Asaas.
+        </Garantia>
+        <Garantia titulo="Seu cartão não fica guardado aqui">
+          O Agenda de Unha não armazena número nem código de segurança.
+        </Garantia>
+        <Garantia titulo={`O valor vai direto para ${clinica}`}>
+          A plataforma não retém o seu dinheiro em nenhum momento.
+        </Garantia>
+      </ul>
+    </section>
+  );
+}
+
+function Garantia({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2">
+      <Check className="mt-0.5 size-3.5 shrink-0 text-positive" aria-hidden />
+      <span className="text-caption text-ink-secondary">
+        <span className="text-ink">{titulo}.</span> {children}
+      </span>
+    </li>
   );
 }
 
@@ -288,6 +368,9 @@ function Pagamento({
 
   return (
     <div className="mt-5">
+      <div className="mb-3">
+        <BarraSegura />
+      </div>
       {reserva.pixDisponivel ? (
         <div className="grid grid-cols-2 gap-2" role="group" aria-label="Como você quer pagar">
           <Meio
@@ -427,6 +510,10 @@ function FormaPix({
           <Loader2 className="size-3.5 animate-spin" aria-hidden />
           Esperando o pagamento. Esta tela confirma sozinha, não precisa recarregar.
         </p>
+        <p className="mt-2 flex items-center gap-1.5 text-caption text-ink-tertiary">
+          <Lock className="size-3.5 shrink-0" aria-hidden />
+          Cobrança PIX emitida pelo <MarcaAsaas />
+        </p>
         {erro ? <p className="mt-2 text-caption text-danger">{erro}</p> : null}
       </div>
     );
@@ -486,6 +573,10 @@ function FormaCartao({
   const [emAnalise, setEmAnalise] = useState(false);
   const [pagando, startPagando] = useTransition();
 
+  // Mostrar a bandeira reconhecida é devolução, não validação: quem digita vê
+  // que o número está indo para o lugar certo.
+  const bandeira = bandeiraDoCartao(numero);
+
   function pagar() {
     setErro(null);
     if (!numeroDeCartaoPlausivel(numero)) return setErro("Confira o número do cartão.");
@@ -530,7 +621,8 @@ function FormaCartao({
           Conferindo com o banco
         </p>
         <p className="mt-1 text-caption text-ink-secondary">
-          Isso costuma levar poucos segundos. Não feche esta tela.
+          O <MarcaAsaas /> está conferindo com o banco emissor. Costuma levar poucos segundos, e
+          esta tela confirma sozinha. Não feche.
         </p>
       </div>
     );
@@ -538,15 +630,32 @@ function FormaCartao({
 
   return (
     <div className="space-y-3 rounded-card border border-line px-4 py-4">
+      {/* O aviso fica ACIMA do primeiro campo do cartão: é onde a mão para. */}
+      <p className="flex items-start gap-2 rounded-card bg-surface-sunken px-3 py-2.5 text-caption text-ink-secondary">
+        <Lock className="mt-0.5 size-3.5 shrink-0 text-positive" aria-hidden />
+        <span>
+          Seus dados vão criptografados direto para o <MarcaAsaas />. O Agenda de Unha não guarda o
+          número do seu cartão nem o código de segurança.
+        </span>
+      </p>
+
       <Field label="Número do cartão" htmlFor="cartao-numero">
-        <Input
-          id="cartao-numero"
-          inputMode="numeric"
-          autoComplete="cc-number"
-          placeholder="0000 0000 0000 0000"
-          value={numero}
-          onChange={(evento) => setNumero(formatarNumeroDoCartao(evento.target.value))}
-        />
+        <div className="relative">
+          <Input
+            id="cartao-numero"
+            inputMode="numeric"
+            autoComplete="cc-number"
+            placeholder="0000 0000 0000 0000"
+            className={bandeira ? "pr-[124px]" : undefined}
+            value={numero}
+            onChange={(evento) => setNumero(formatarNumeroDoCartao(evento.target.value))}
+          />
+          {bandeira ? (
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-pill bg-accent-soft px-2 py-0.5 text-caption font-semibold text-accent">
+              {bandeira}
+            </span>
+          ) : null}
+        </div>
       </Field>
       <Field label="Nome impresso no cartão" htmlFor="cartao-nome">
         <Input
@@ -625,6 +734,7 @@ function FormaCartao({
       ) : null}
 
       <Button variant="primary" size="lg" className="w-full" loading={pagando} onClick={pagar}>
+        <Lock className="size-4" aria-hidden />
         Pagar {formatBRL(reserva.valorCents)}
       </Button>
     </div>

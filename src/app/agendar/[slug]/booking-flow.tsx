@@ -878,7 +878,8 @@ function BilheteAPagar({
           </Button>
           <p className="mt-3 flex items-start gap-2 text-caption text-ink-secondary">
             <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
-            PIX ou cartão, aqui mesmo. A confirmação é automática quando o pagamento entra.
+            PIX ou cartão, aqui mesmo, em ambiente seguro processado pelo Asaas. A confirmação é
+            automática quando o pagamento entra.
           </p>
 
           <dl className="mt-5 divide-y divide-line rounded-card border border-line">
