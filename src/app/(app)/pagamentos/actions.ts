@@ -9,6 +9,7 @@ import {
   conectarAsaas,
   contaDaClinica,
   desconectarAsaas,
+  reconferirPix,
   salvarRegraDeCobranca,
 } from "@/server/services/asaas-account-service";
 
@@ -84,6 +85,26 @@ export async function salvarRegraAction(input: unknown): Promise<{ ok: true } | 
     revalidatePath("/pagamentos");
     revalidatePath("/agenda");
     return { ok: true };
+  } catch (erro) {
+    console.error(erro);
+    return { ok: false, error: explicar(erro) };
+  }
+}
+
+/**
+ * Reconfere se a conta já tem chave PIX.
+ *
+ * A tela não guarda a chave de API, então sem isto a dona que cadastrasse a
+ * chave PIX depois de conectar teria de buscar a chave de API no Asaas de novo
+ * só para liberar o PIX.
+ */
+export async function reconferirPixAction(): Promise<ContaResult> {
+  try {
+    const ctx = await requireSession();
+    requireRole(ctx, "admin");
+    const conta = await reconferirPix(ctx);
+    revalidatePath("/pagamentos");
+    return { ok: true, conta: serializar(conta) };
   } catch (erro) {
     console.error(erro);
     return { ok: false, error: explicar(erro) };

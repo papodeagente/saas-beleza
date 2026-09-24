@@ -187,6 +187,27 @@ export async function desconectarAsaas(ctx: TenantContext): Promise<void> {
   });
 }
 
+/**
+ * Reconfere a chave PIX de uma conta já conectada.
+ *
+ * Existe porque a tela NÃO guarda a chave de API: sem este caminho, a dona que
+ * cadastrasse a chave PIX no Asaas depois de conectar teria de ir buscar a
+ * chave de API no painel do Asaas outra vez só para reconectar. Também serve
+ * às contas que já estavam conectadas antes desta conferência existir.
+ */
+export async function reconferirPix(ctx: TenantContext): Promise<ContaAsaasNaTela> {
+  const existente = await credencialDaClinica(ctx.organizationId);
+  if (!existente) throw new Error("Conecte a conta do Asaas primeiro.");
+
+  const pixPronto = await temChavePix(existente.apiKey);
+  const [linha] = await db
+    .update(asaasAccounts)
+    .set({ pixReady: pixPronto, lastCheckedAt: new Date(), updatedAt: new Date() })
+    .where(eq(asaasAccounts.id, existente.id))
+    .returning();
+  return paraTela(linha);
+}
+
 export async function regraDeCobranca(organizationId: number): Promise<RegraDeCobranca> {
   const [linha] = await db
     .select({

@@ -26,6 +26,7 @@ import {
   type ContaSerializada,
   conectarAsaasAction,
   desconectarAsaasAction,
+  reconferirPixAction,
   salvarRegraAction,
 } from "./actions";
 
@@ -73,6 +74,7 @@ export function PagamentosView({
   const [conectando, startConectando] = useTransition();
   const [salvando, startSalvando] = useTransition();
   const [desconectando, startDesconectando] = useTransition();
+  const [conferindo, startConferindo] = useTransition();
 
   const mudou =
     regra.exigirPagamento !== salva.exigirPagamento ||
@@ -111,6 +113,22 @@ export function PagamentosView({
       setRegra(semCobranca);
       setSalva(semCobranca);
       toast.success("Conta desconectada. O agendamento online voltou a ser sem pagamento.");
+    });
+  }
+
+  function conferirPix() {
+    startConferindo(async () => {
+      const result = await reconferirPixAction();
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      setConta(result.conta);
+      toast[result.conta?.pixPronto ? "success" : "error"](
+        result.conta?.pixPronto
+          ? "PIX liberado. O checkout já oferece PIX para suas clientes."
+          : "Ainda não encontrei chave PIX ativa nesta conta do Asaas.",
+      );
     });
   }
 
@@ -185,8 +203,15 @@ export function PagamentosView({
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                 <span>
                   Sua conta do Asaas ainda não tem <strong>chave PIX</strong>. Enquanto isso, o
-                  pagamento só acontece por cartão. Cadastre a chave no Asaas e conecte de novo
-                  aqui para liberar o PIX.
+                  pagamento só acontece por cartão. Cadastre a chave no Asaas e confira aqui.
+                  <Button
+                    variant="link"
+                    className="ml-1 align-baseline"
+                    loading={conferindo}
+                    onClick={conferirPix}
+                  >
+                    Conferir de novo
+                  </Button>
                 </span>
               </p>
             )}
