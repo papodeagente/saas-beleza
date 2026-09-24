@@ -38,6 +38,7 @@ export type AgendaAppointment = {
   paymentStatus: string;
   paymentAmountCents: number | null;
   paymentDueAt: string | null;
+  paymentUrl: string | null;
 };
 
 type Column = {

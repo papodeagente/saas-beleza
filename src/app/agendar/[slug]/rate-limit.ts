@@ -55,8 +55,20 @@ export const CONSULTAS_POR_MINUTO_NA_PLATAFORMA = 400;
 export const AGENDAMENTOS_POR_MINUTO_POR_IP = 5;
 export const AGENDAMENTOS_POR_MINUTO_NA_PLATAFORMA = 120;
 
+/**
+ * Checkout: a cliente pagando.
+ *
+ * Duas coisas batem aqui, com pesos bem diferentes. Criar cobrança é escrita e
+ * chamada ao Asaas, e cabe no balde de agendamento. Já a CONSULTA de status é
+ * o que a tela do PIX faz a cada cinco segundos enquanto a cliente paga: com o
+ * teto de consulta comum, duas abas abertas barrariam a própria cliente no
+ * meio do pagamento. Por isso o balde é separado e mais largo.
+ */
+export const CONSULTAS_DE_PAGAMENTO_POR_MINUTO_POR_IP = 40;
+export const CONSULTAS_DE_PAGAMENTO_POR_MINUTO_NA_PLATAFORMA = 800;
+
 type Janela = { inicio: number; total: number; porChave: Map<string, number> };
-type Balde = "visita" | "consulta" | "agendamento";
+type Balde = "visita" | "consulta" | "agendamento" | "pagamento";
 
 const LIMITES: Record<Balde, { porChave: number; naPlataforma: number }> = {
   visita: { porChave: VISITAS_POR_MINUTO_POR_IP, naPlataforma: VISITAS_POR_MINUTO_NA_PLATAFORMA },
@@ -67,6 +79,10 @@ const LIMITES: Record<Balde, { porChave: number; naPlataforma: number }> = {
   agendamento: {
     porChave: AGENDAMENTOS_POR_MINUTO_POR_IP,
     naPlataforma: AGENDAMENTOS_POR_MINUTO_NA_PLATAFORMA,
+  },
+  pagamento: {
+    porChave: CONSULTAS_DE_PAGAMENTO_POR_MINUTO_POR_IP,
+    naPlataforma: CONSULTAS_DE_PAGAMENTO_POR_MINUTO_NA_PLATAFORMA,
   },
 };
 
@@ -114,6 +130,16 @@ export function permitirConsulta(chave: string, agora = Date.now()): boolean {
 /** Tentativa de fechar um agendamento. É escrita, e o teto é o mais baixo. */
 export function permitirAgendamento(chave: string, agora = Date.now()): boolean {
   return permitir("agendamento", chave, agora);
+}
+
+/**
+ * Consulta de status do pagamento, feita em laço pela tela do PIX.
+ *
+ * Barrar aqui não pode virar "seu pagamento não caiu": a tela trata a recusa
+ * como "pergunto de novo no próximo tique", nunca como resposta negativa.
+ */
+export function permitirConsultaDePagamento(chave: string, agora = Date.now()): boolean {
+  return permitir("pagamento", chave, agora);
 }
 
 /** Só para o teste: zera as janelas entre casos. */

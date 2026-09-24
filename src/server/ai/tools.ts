@@ -712,7 +712,7 @@ const createAppointmentTool: AgentTool = {
                 prazoMinutos: regra.minutosDeReserva,
               },
               instrucao:
-                "O horário está guardado, mas NÃO confirmado. Mande o link de pagamento e o valor para o cliente, diga em quantos minutos o pagamento precisa ser feito e avise que a confirmação chega sozinha quando o pagamento entrar. Não diga que o agendamento está confirmado.",
+                "O horário está guardado, mas NÃO confirmado. Mande o link e o valor para o cliente, diga que ele escolhe PIX ou cartão na própria página, diga em quantos minutos o pagamento precisa ser feito e avise que a confirmação chega sozinha quando o pagamento entrar. Não diga que o agendamento está confirmado e não peça comprovante.",
             },
           };
         } catch (erro) {

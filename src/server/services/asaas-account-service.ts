@@ -2,7 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { asaasAccounts, organizations } from "@/db/schema";
+import { asaasAccounts, customers, organizations } from "@/db/schema";
 import type { TenantContext } from "@/server/auth";
 import {
   ambienteDaChave,
@@ -10,6 +10,7 @@ import {
   mascararChave,
   registrarWebhook,
   removerWebhook,
+  temChavePix,
 } from "@/server/payments/asaas";
 import { publicBaseUrl } from "@/server/services/whatsapp-connection-service";
 
@@ -29,6 +30,8 @@ export type ContaAsaasNaTela = {
   /** URL do nosso webhook, mostrada só quando a clínica precisa colar à mão. */
   webhookUrl: string;
   webhookAutomatico: boolean;
+  /** A conta tem chave PIX ativa. Sem ela o checkout só consegue cobrar no cartão. */
+  pixPronto: boolean;
   status: "conectada" | "com_erro";
   statusDetail: string | null;
   conferidaEm: Date | null;
@@ -53,6 +56,7 @@ function paraTela(linha: typeof asaasAccounts.$inferSelect): ContaAsaasNaTela {
     chaveMascarada: mascararChave(linha.apiKey),
     webhookUrl: urlDoWebhook(linha.webhookToken),
     webhookAutomatico: Boolean(linha.asaasWebhookId),
+    pixPronto: linha.pixReady,
     status: linha.status,
     statusDetail: linha.statusDetail,
     conferidaEm: linha.lastCheckedAt,
@@ -106,6 +110,16 @@ export async function conectarAsaas(ctx: TenantContext, chaveCrua: string): Prom
     email: conta.email,
   });
 
+  /**
+   * PIX é perguntado aqui, na conexão.
+   *
+   * Sem chave PIX ativa o Asaas aceita criar a cobrança e recusa o QR: o erro
+   * apareceria só na cara da cliente, no meio do pagamento. Perguntando agora,
+   * o aviso fica onde a dona pode resolver, e o checkout já abre oferecendo só
+   * o que funciona.
+   */
+  const pixPronto = await temChavePix(chave);
+
   const valores = {
     organizationId: ctx.organizationId,
     apiKey: chave,
@@ -114,6 +128,7 @@ export async function conectarAsaas(ctx: TenantContext, chaveCrua: string): Prom
     accountEmail: conta.email,
     webhookToken,
     asaasWebhookId: registro.id ?? existente?.asaasWebhookId ?? null,
+    pixReady: pixPronto,
     status: "conectada" as const,
     statusDetail: registro.automatico
       ? null
@@ -125,6 +140,20 @@ export async function conectarAsaas(ctx: TenantContext, chaveCrua: string): Prom
   const [linha] = existente
     ? await db.update(asaasAccounts).set(valores).where(eq(asaasAccounts.id, existente.id)).returning()
     : await db.insert(asaasAccounts).values(valores).returning();
+
+  /**
+   * Chave nova, conta nova: os ids de cliente guardados não valem mais.
+   *
+   * O id de uma cliente vive DENTRO de uma conta do Asaas. Trocar a chave e
+   * continuar mandando os ids antigos faria a cobrança nascer apontando para
+   * cliente que não existe naquela conta, com erro que não diz isso.
+   */
+  if (existente && existente.apiKey !== chave) {
+    await db
+      .update(customers)
+      .set({ asaasCustomerId: null })
+      .where(eq(customers.organizationId, ctx.organizationId));
+  }
 
   return paraTela(linha);
 }
@@ -147,6 +176,10 @@ export async function desconectarAsaas(ctx: TenantContext): Promise<void> {
 
   await db.transaction(async (tx) => {
     await tx.delete(asaasAccounts).where(eq(asaasAccounts.id, existente.id));
+    await tx
+      .update(customers)
+      .set({ asaasCustomerId: null })
+      .where(eq(customers.organizationId, ctx.organizationId));
     await tx
       .update(organizations)
       .set({ requirePaymentToBook: false })

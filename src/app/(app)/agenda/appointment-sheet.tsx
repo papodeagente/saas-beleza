@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Check, Clock, LogIn, Play, User, X } from "lucide-react";
+import { CalendarClock, Check, Clock, Copy, LogIn, Play, User, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
@@ -14,6 +14,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProfessionalDot } from "@/components/ui/status-stripe";
 import { STATUS_LABEL, STATUS_TONE, isClosed, type AppointmentStatus } from "@/domain/appointment-status";
+import { copyToClipboard } from "@/lib/clipboard";
 import { formatBRL, parseBRL } from "@/lib/money";
 import { formatPhone } from "@/lib/phone";
 import { formatTz } from "@/lib/tz";
@@ -355,6 +356,25 @@ export function AppointmentSheet({
                       ? `Se não entrar até ${formatTz(new Date(appointment.paymentDueAt), timezone, "HH:mm")}, o horário volta para a agenda.`
                       : "O horário volta para a agenda se o pagamento não entrar no prazo."}
                   </p>
+                  {/* "Perdi o link" é o chamado certo de acontecer: a recepção
+                      reenvia pelo WhatsApp em um toque, sem pedir para a
+                      cliente agendar de novo. */}
+                  {appointment.paymentUrl ? (
+                    <Button
+                      variant="secondary"
+                      className="mt-3"
+                      onClick={async () => {
+                        if (await copyToClipboard(appointment.paymentUrl ?? "")) {
+                          toast.success("Link de pagamento copiado");
+                        } else {
+                          toast.error("Não foi possível copiar o link.");
+                        }
+                      }}
+                    >
+                      <Copy className="size-4" aria-hidden />
+                      Copiar link de pagamento
+                    </Button>
+                  ) : null}
                 </Card>
               ) : null}
               {appointment.paymentStatus === "estornado" ? (

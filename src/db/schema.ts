@@ -646,6 +646,14 @@ export const customers = pgTable(
     name: text("name").notNull(),
     phone: text("phone"),
     email: text("email"),
+    /**
+     * CPF, só dígitos. Guardado porque o Asaas exige documento para cobrar, e
+     * porque pedir o mesmo CPF a cada agendamento é atrito que ninguém aceita
+     * duas vezes. Só é preenchido por quem paga online.
+     */
+    document: text("document"),
+    /** A mesma cliente, do lado do Asaas da clínica. Evita cliente duplicada lá. */
+    asaasCustomerId: text("asaas_customer_id"),
     birthdate: date("birthdate"),
     source: customerSource("source").notNull().default("manual"),
     notes: text("notes"),
@@ -745,9 +753,25 @@ export const appointments = pgTable(
     paymentStatus: bookingPaymentStatus("payment_status").notNull().default("nao_exigido"),
     /** Quanto foi cobrado nesta reserva: pode ser sinal, não o preço cheio. */
     paymentAmountCents: integer("payment_amount_cents"),
-    /** Link do checkout hospedado do Asaas, o que a cliente abre para pagar. */
+    /** Endereço do nosso checkout: `/pagar/<token>`. É o que se manda à cliente. */
     paymentUrl: text("payment_url"),
+    /**
+     * Segredo que dá acesso ao checkout desta reserva.
+     *
+     * A página de pagamento é pública (quem agenda não tem login), então o
+     * token é a autorização: sem ele não há como chegar na reserva, e com ele
+     * não se chega em nenhuma outra. Nasce com a reserva, junto do prazo.
+     */
+    paymentToken: text("payment_token").unique(),
+    /**
+     * LEGADO: id do link hospedado do Asaas, do primeiro dia do recurso.
+     *
+     * Não é mais escrito — o checkout passou a ser nosso, com cobrança criada
+     * por API. Fica para as reservas que nasceram antes da troca, que o
+     * webhook ainda precisa reconhecer.
+     */
     asaasPaymentLinkId: text("asaas_payment_link_id"),
+    /** Id da cobrança no Asaas. É por ele que o webhook e a consulta acham. */
     asaasPaymentId: text("asaas_payment_id"),
     /** Fim do prazo da reserva. Passou daqui sem pagar, o horário volta. */
     paymentDueAt: timestamp("payment_due_at", { withTimezone: true }),
@@ -762,8 +786,9 @@ export const appointments = pgTable(
     index("appointments_customer_idx").on(t.customerId),
     /** A varredura que derruba reserva vencida pergunta exatamente por isto. */
     index("appointments_pagamento_vencendo_idx").on(t.paymentStatus, t.paymentDueAt),
-    /** O webhook do Asaas chega com o id do link, e é por ele que acha a reserva. */
+    /** O webhook do Asaas chega com o id da cobrança, e é por ele que acha a reserva. */
     index("appointments_asaas_link_idx").on(t.asaasPaymentLinkId),
+    index("appointments_asaas_pagamento_idx").on(t.asaasPaymentId),
   ],
 );
 
@@ -861,6 +886,14 @@ export const asaasAccounts = pgTable(
     webhookToken: text("webhook_token").notNull().unique(),
     /** Id do webhook criado por nós na conta dela, para poder reapontar depois. */
     asaasWebhookId: text("asaas_webhook_id"),
+    /**
+     * A conta tem chave PIX ativa.
+     *
+     * Sem chave PIX o Asaas aceita criar a cobrança e recusa o QR: o erro
+     * apareceria só na cara da cliente, no meio do pagamento. Guardado na
+     * conexão para o checkout já abrir sem oferecer o que não funciona.
+     */
+    pixReady: boolean("pix_ready").notNull().default(false),
     status: asaasConnectionStatus("status").notNull().default("conectada"),
     statusDetail: text("status_detail"),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),

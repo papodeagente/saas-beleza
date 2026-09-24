@@ -274,6 +274,13 @@
       "when": 1790248574209,
       "tag": "0038_useful_imperial_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790252766375,
+      "tag": "0039_jazzy_hitman",
+      "breakpoints": true
     }
   ]
 }

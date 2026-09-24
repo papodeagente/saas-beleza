@@ -1,0 +1,109 @@
+/**
+ * CPF, CEP e cartão: o que a tela precisa para não deixar a cliente errar.
+ *
+ * Mora no domínio porque o mesmo par de regras vale nos dois lados: a tela
+ * formata e barra na hora, e o servidor confere de novo antes de falar com o
+ * Asaas. Duplicar essa conta em dois lugares acabaria em campo que passa no
+ * navegador e é recusado pelo gateway, com a cliente no meio.
+ */
+
+export function somenteDigitos(valor: string): string {
+  return valor.replace(/\D/g, "");
+}
+
+/**
+ * CPF válido de verdade, com os dois dígitos verificadores.
+ *
+ * Vale a conta local porque o Asaas recusa CPF inválido com uma frase genérica
+ * DEPOIS de a cliente digitar o cartão inteiro. Barrar no campo custa nada e
+ * evita a pior versão do erro: a que aparece no fim.
+ */
+export function cpfValido(entrada: string): boolean {
+  const cpf = somenteDigitos(entrada);
+  if (cpf.length !== 11) return false;
+  // Sequência repetida passa na conta dos dígitos e não é CPF de ninguém.
+  if (/^(\d)\1{10}$/.test(cpf)) return false;
+
+  for (const [tamanho, posicao] of [
+    [9, 10],
+    [10, 11],
+  ] as const) {
+    let soma = 0;
+    for (let i = 0; i < tamanho; i += 1) soma += Number(cpf[i]) * (posicao - i);
+    const resto = (soma * 10) % 11;
+    const digito = resto === 10 ? 0 : resto;
+    if (digito !== Number(cpf[tamanho])) return false;
+  }
+  return true;
+}
+
+export function formatarCpf(valor: string): string {
+  const d = somenteDigitos(valor).slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+export function formatarCep(valor: string): string {
+  const d = somenteDigitos(valor).slice(0, 8);
+  return d.length <= 5 ? d : `${d.slice(0, 5)}-${d.slice(5)}`;
+}
+
+/** Grupos de quatro. Cartão de 19 dígitos (Elo, Hipercard) também cabe. */
+export function formatarNumeroDoCartao(valor: string): string {
+  const d = somenteDigitos(valor).slice(0, 19);
+  return d.replace(/(\d{4})(?=\d)/g, "$1 ").trim();
+}
+
+export function formatarValidade(valor: string): string {
+  const d = somenteDigitos(valor).slice(0, 4);
+  return d.length <= 2 ? d : `${d.slice(0, 2)}/${d.slice(2)}`;
+}
+
+/**
+ * Luhn.
+ *
+ * Pega dígito trocado e dois dígitos invertidos, que é o erro de digitação de
+ * cartão mais comum. Não diz que o cartão existe nem que tem limite: diz que
+ * não vale gastar uma tentativa no gateway com um número impossível.
+ */
+export function numeroDeCartaoPlausivel(entrada: string): boolean {
+  const numero = somenteDigitos(entrada);
+  if (numero.length < 13 || numero.length > 19) return false;
+  let soma = 0;
+  let dobra = false;
+  for (let i = numero.length - 1; i >= 0; i -= 1) {
+    let digito = Number(numero[i]);
+    if (dobra) {
+      digito *= 2;
+      if (digito > 9) digito -= 9;
+    }
+    soma += digito;
+    dobra = !dobra;
+  }
+  return soma % 10 === 0;
+}
+
+export type ValidadeDoCartao = { mes: string; ano: string };
+
+/**
+ * "07/27" vira { mes: "07", ano: "2027" }.
+ *
+ * O Asaas quer o ano com quatro dígitos, e cartão vencido ele recusa com a
+ * mensagem do adquirente, que chega depois. `agora` é parâmetro para o teste
+ * não depender do calendário de quem roda.
+ */
+export function lerValidade(valor: string, agora = new Date()): ValidadeDoCartao | null {
+  const d = somenteDigitos(valor);
+  if (d.length !== 4) return null;
+  const mes = Number(d.slice(0, 2));
+  if (mes < 1 || mes > 12) return null;
+
+  const ano = 2000 + Number(d.slice(2));
+  // Último instante do mês: cartão vale até o fim do mês impresso nele.
+  const fim = new Date(Date.UTC(ano, mes, 1));
+  if (fim <= agora) return null;
+
+  return { mes: d.slice(0, 2), ano: String(ano) };
+}

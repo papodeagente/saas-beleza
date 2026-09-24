@@ -122,9 +122,10 @@ export type BookingConfirmation = {
   whenLabel: string;
   /**
    * Só quando a clínica cobra para fechar. O horário JÁ está guardado; o que
-   * o bilhete mostra, nesse caso, é o que falta fazer e até quando.
+   * falta é o pagamento, que acontece no nosso checkout — `caminho` é relativo
+   * de propósito, para a tela navegar sem recarregar a aplicação inteira.
    */
-  cobranca: { url: string; valorLabel: string; minutos: number; venceEm: string } | null;
+  cobranca: { caminho: string; valorLabel: string; minutos: number } | null;
 };
 
 export type BookingActionResult =
@@ -165,12 +166,9 @@ export async function publicBookingAction(input: unknown): Promise<BookingAction
         ),
         cobranca: result.cobranca
           ? {
-              url: result.cobranca.url,
+              caminho: `/pagar/${result.cobranca.token}`,
               valorLabel: formatBRL(result.cobranca.valorCents),
               minutos: result.cobranca.minutos,
-              // Instante real, e não só "faltam 30 min": a contagem na tela
-              // precisa continuar certa se a cliente voltar para a aba depois.
-              venceEm: result.cobranca.venceEm.toISOString(),
             }
           : null,
       },

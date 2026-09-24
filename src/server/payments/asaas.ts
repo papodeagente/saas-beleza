@@ -16,10 +16,12 @@ import "server-only";
  * 2. **`User-Agent` é obrigatório.** Sem ele o Asaas recusa a chamada, e a
  *    mensagem de erro não diz que o problema é o cabeçalho.
  *
- * O modelo de cobrança é LINK DE PAGAMENTO, não cobrança com cliente
- * cadastrado: criar cliente na API do Asaas exige CPF/CNPJ, e pedir CPF para
- * marcar unha é atrito que derruba agendamento. O link hospedado aceita PIX,
- * cartão e boleto sem exigir documento antes.
+ * O checkout é NOSSO: a cliente paga dentro do Agenda de Unha, escolhendo PIX
+ * ou cartão, sem ser jogada num site que ela não reconhece no meio de um
+ * agendamento. O preço disso é o CPF — o Asaas exige cliente cadastrada para
+ * cobrar por API, e cliente sem CPF ele não cria. Era exatamente o atrito que
+ * o link hospedado evitava, e foi trocado de propósito por uma tela que não
+ * abandona a cliente.
  */
 
 export type AmbienteAsaas = "producao" | "sandbox";
@@ -61,6 +63,24 @@ export function mascararChave(chave: string): string {
   return limpa.length <= 10 ? "••••" : `••••${limpa.slice(-6)}`;
 }
 
+/**
+ * A frase que o Asaas manda quando recusa.
+ *
+ * Cartão recusado volta como 400 com `errors[0].description` ("Transação não
+ * autorizada", "Cartão expirado"). Essa frase é a ÚNICA informação útil para
+ * quem está tentando pagar; engolir ela e mostrar "erro 400" faria a cliente
+ * tentar o mesmo cartão de novo sem saber o que houve.
+ */
+function motivoDoAsaas(texto: string): string | null {
+  try {
+    const corpo = JSON.parse(texto) as { errors?: { description?: string }[] };
+    const descricao = corpo.errors?.[0]?.description?.trim();
+    return descricao ? descricao : null;
+  } catch {
+    return null;
+  }
+}
+
 async function pedir<T>(
   chave: string,
   metodo: "GET" | "POST" | "PUT" | "DELETE",
@@ -84,7 +104,7 @@ async function pedir<T>(
   if (resposta.status === 401 || resposta.status === 403) throw new AsaasAuthError(texto.slice(0, 300));
   if (!resposta.ok) {
     throw new AsaasError(
-      `Asaas ${metodo} ${caminho} devolveu ${resposta.status}.`,
+      motivoDoAsaas(texto) ?? `Asaas ${metodo} ${caminho} devolveu ${resposta.status}.`,
       resposta.status,
       texto.slice(0, 500),
     );
@@ -116,75 +136,207 @@ export async function contaDoAsaas(chave: string): Promise<ContaAsaas> {
   };
 }
 
-// ── A cobrança ─────────────────────────────────────────────────────────────
-
-export type LinkDePagamento = { id: string; url: string };
+// ── A cliente ─────────────────────────────────────────────────────────────
 
 /**
- * Um link de cobrança para UMA reserva.
+ * A pessoa que paga, do lado do Asaas.
  *
- * `chargeType: DETACHED` é cobrança avulsa (não assinatura). `billingType:
- * UNDEFINED` deixa a cliente escolher PIX, cartão ou boleto na própria tela do
- * Asaas. `notificationEnabled: false` porque quem avisa a cliente somos nós,
- * pelo WhatsApp que ela já está usando: e-mail de cobrança em nome de uma
- * clínica de unha cai em spam e assusta.
+ * O Asaas EXIGE CPF para criar cliente, e exige cliente para criar cobrança
+ * por API. É por isso que o checkout pede CPF: não é zelo nosso, é condição
+ * para a cobrança existir. Era justamente o que o link hospedado evitava — e
+ * foi o preço combinado para o pagamento acontecer dentro do sistema, sem
+ * jogar a cliente num site que ela não reconhece.
  */
-export async function criarLinkDePagamento(
+export async function criarCliente(
   chave: string,
-  entrada: { nome: string; descricao: string; valorCents: number; expiraEm: Date },
-): Promise<LinkDePagamento> {
-  if (entrada.valorCents < 500) {
-    // O Asaas recusa cobrança abaixo de R$ 5,00, e a mensagem dele é genérica.
-    throw new AsaasError("O Asaas não aceita cobrança abaixo de R$ 5,00.", 400, "");
-  }
-
-  const dados = await pedir<{ id?: string; url?: string }>(chave, "POST", "/paymentLinks", {
+  entrada: { nome: string; cpf: string; email?: string | null; telefone?: string | null },
+): Promise<string> {
+  const dados = await pedir<{ id?: string }>(chave, "POST", "/customers", {
     name: entrada.nome.slice(0, 100),
-    description: entrada.descricao.slice(0, 500),
-    billingType: "UNDEFINED",
-    chargeType: "DETACHED",
-    value: Number((entrada.valorCents / 100).toFixed(2)),
-    // O Asaas trabalha com DATA, não com instante: o link vale até o fim do
-    // dia. O prazo curto de verdade é o nosso, gravado na reserva.
-    endDate: entrada.expiraEm.toISOString().slice(0, 10),
-    notificationEnabled: false,
+    cpfCnpj: somenteDigitos(entrada.cpf),
+    email: entrada.email || undefined,
+    mobilePhone: entrada.telefone ? somenteDigitos(entrada.telefone) : undefined,
+    notificationDisabled: true,
   });
-
-  if (!dados.id || !dados.url) {
-    throw new AsaasError("O Asaas criou o link sem devolver id e url.", 500, JSON.stringify(dados).slice(0, 300));
-  }
-  return { id: dados.id, url: dados.url };
+  if (!dados.id) throw new AsaasError("O Asaas criou a cliente sem devolver id.", 500, "");
+  return dados.id;
 }
 
-/** Desativa o link de uma reserva que caiu. Link vivo é cobrança viva. */
-export async function desativarLink(chave: string, linkId: string): Promise<void> {
-  await pedir(chave, "DELETE", `/paymentLinks/${linkId}`);
+function somenteDigitos(valor: string): string {
+  return valor.replace(/\D/g, "");
+}
+
+// ── A cobrança ─────────────────────────────────────────────────────────────
+
+export type CobrancaAsaas = { id: string; status: string; confirmada: boolean };
+
+/** Status em que o dinheiro já é da clínica. O resto ainda não fechou. */
+export function pagamentoConfirmado(status: string): boolean {
+  return status === "CONFIRMED" || status === "RECEIVED" || status === "RECEIVED_IN_CASH";
+}
+
+type BaseDaCobranca = {
+  clienteId: string;
+  valorCents: number;
+  descricao: string;
+  vencimento: Date;
+  referencia: string;
+};
+
+function corpoBase(entrada: BaseDaCobranca) {
+  return {
+    customer: entrada.clienteId,
+    value: Number((entrada.valorCents / 100).toFixed(2)),
+    // O Asaas trabalha com DATA no vencimento. O prazo curto de verdade é o
+    // nosso, gravado na reserva; este aqui só não pode ser no passado.
+    dueDate: entrada.vencimento.toISOString().slice(0, 10),
+    description: entrada.descricao.slice(0, 500),
+    externalReference: entrada.referencia,
+  };
+}
+
+/** Cobrança PIX. O QR vem depois, em `pixDaCobranca`. */
+export async function criarCobrancaPix(
+  chave: string,
+  entrada: BaseDaCobranca,
+): Promise<CobrancaAsaas> {
+  const dados = await pedir<{ id?: string; status?: string }>(chave, "POST", "/payments", {
+    ...corpoBase(entrada),
+    billingType: "PIX",
+  });
+  if (!dados.id) throw new AsaasError("O Asaas criou a cobrança sem devolver id.", 500, "");
+  return { id: dados.id, status: dados.status ?? "PENDING", confirmada: pagamentoConfirmado(dados.status ?? "") };
+}
+
+export type CartaoDaCliente = {
+  numero: string;
+  nomeImpresso: string;
+  mes: string;
+  ano: string;
+  cvv: string;
+};
+
+export type DonoDoCartao = {
+  nome: string;
+  email: string;
+  cpf: string;
+  cep: string;
+  numeroDoEndereco: string;
+  telefone: string;
+};
+
+/**
+ * Cobrança no cartão, cobrada na hora.
+ *
+ * Os dados do cartão passam por este servidor e NÃO são guardados em lugar
+ * nenhum: nem em coluna, nem em log, nem no objeto de erro. O Asaas devolve o
+ * resultado na mesma chamada, então cartão recusado é resposta imediata para a
+ * cliente, e não um estado pendurado.
+ *
+ * `remoteIp` é exigido pelo antifraude do Asaas. Sem ele a cobrança é recusada
+ * com uma mensagem que não diz qual campo faltou.
+ */
+export async function criarCobrancaCartao(
+  chave: string,
+  entrada: BaseDaCobranca & { cartao: CartaoDaCliente; dono: DonoDoCartao; ip: string },
+): Promise<CobrancaAsaas> {
+  const dados = await pedir<{ id?: string; status?: string }>(chave, "POST", "/payments", {
+    ...corpoBase(entrada),
+    billingType: "CREDIT_CARD",
+    creditCard: {
+      holderName: entrada.cartao.nomeImpresso,
+      number: somenteDigitos(entrada.cartao.numero),
+      expiryMonth: entrada.cartao.mes,
+      expiryYear: entrada.cartao.ano,
+      ccv: entrada.cartao.cvv,
+    },
+    creditCardHolderInfo: {
+      name: entrada.dono.nome,
+      email: entrada.dono.email,
+      cpfCnpj: somenteDigitos(entrada.dono.cpf),
+      postalCode: somenteDigitos(entrada.dono.cep),
+      addressNumber: entrada.dono.numeroDoEndereco,
+      phone: somenteDigitos(entrada.dono.telefone),
+    },
+    remoteIp: entrada.ip,
+  });
+  if (!dados.id) throw new AsaasError("O Asaas criou a cobrança sem devolver id.", 500, "");
+  return { id: dados.id, status: dados.status ?? "PENDING", confirmada: pagamentoConfirmado(dados.status ?? "") };
+}
+
+export type PixDaCobranca = { imagemBase64: string; copiaECola: string };
+
+/** O QR e o copia e cola, para a cliente pagar sem sair da nossa tela. */
+export async function pixDaCobranca(chave: string, cobrancaId: string): Promise<PixDaCobranca> {
+  const dados = await pedir<{ encodedImage?: string; payload?: string }>(
+    chave,
+    "GET",
+    `/payments/${cobrancaId}/pixQrCode`,
+  );
+  if (!dados.encodedImage || !dados.payload) {
+    throw new AsaasError("O Asaas não devolveu o QR do PIX.", 500, "");
+  }
+  return { imagemBase64: dados.encodedImage, copiaECola: dados.payload };
+}
+
+/**
+ * Apaga a cobrança de uma reserva que caiu.
+ *
+ * Cobrança viva é cobrança que alguém ainda pode pagar. Depois que o horário
+ * voltou para a grade, um PIX pago vira dinheiro que a clínica precisa
+ * devolver.
+ */
+export async function apagarCobranca(chave: string, cobrancaId: string): Promise<void> {
+  await pedir(chave, "DELETE", `/payments/${cobrancaId}`);
 }
 
 export type PagamentoAsaas = {
   id: string;
   status: string;
-  linkId: string | null;
+  confirmada: boolean;
   valorCents: number;
   meio: string | null;
 };
 
-/** O pagamento como o Asaas o conhece. Usado para conferir o que o webhook diz. */
+/**
+ * O pagamento como o Asaas o conhece.
+ *
+ * É a fonte da verdade do PIX: a tela pergunta de novo a cada poucos segundos
+ * enquanto a cliente paga, porque esperar só pelo webhook deixaria a tela
+ * parada mesmo com o dinheiro já na conta.
+ */
 export async function buscarPagamento(chave: string, pagamentoId: string): Promise<PagamentoAsaas> {
   const dados = await pedir<{
     id: string;
-    status: string;
-    paymentLink?: string | null;
+    status?: string;
     value?: number;
     billingType?: string;
   }>(chave, "GET", `/payments/${pagamentoId}`);
+  const status = dados.status ?? "";
   return {
     id: dados.id,
-    status: dados.status,
-    linkId: dados.paymentLink ?? null,
+    status,
+    confirmada: pagamentoConfirmado(status),
     valorCents: Math.round((dados.value ?? 0) * 100),
     meio: dados.billingType ?? null,
   };
+}
+
+/**
+ * A conta tem chave PIX cadastrada?
+ *
+ * Sem chave PIX o Asaas aceita criar a cobrança e recusa o QR — o erro
+ * apareceria só na cara da cliente, no meio do pagamento. Perguntar na hora de
+ * conectar deixa o aviso onde a dona pode resolver.
+ */
+export async function temChavePix(chave: string): Promise<boolean> {
+  try {
+    const dados = await pedir<{ data?: unknown[] }>(chave, "GET", "/pix/addressKeys?status=ACTIVE");
+    return Array.isArray(dados.data) && dados.data.length > 0;
+  } catch (erro) {
+    if (erro instanceof AsaasAuthError) throw erro;
+    return false;
+  }
 }
 
 // ── O webhook ──────────────────────────────────────────────────────────────

@@ -71,6 +71,7 @@ export async function getAgendaRange(
       paymentStatus: appointments.paymentStatus,
       paymentAmountCents: appointments.paymentAmountCents,
       paymentDueAt: appointments.paymentDueAt,
+      paymentUrl: appointments.paymentUrl,
     })
     .from(appointments)
     .innerJoin(customers, eq(customers.id, appointments.customerId))
@@ -133,6 +134,7 @@ export async function getAgendaDay(
         paymentStatus: appointments.paymentStatus,
         paymentAmountCents: appointments.paymentAmountCents,
         paymentDueAt: appointments.paymentDueAt,
+        paymentUrl: appointments.paymentUrl,
       })
       .from(appointments)
       .innerJoin(customers, eq(customers.id, appointments.customerId))

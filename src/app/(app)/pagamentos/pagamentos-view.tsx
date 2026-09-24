@@ -135,8 +135,9 @@ export function PagamentosView({
       <header className="mb-6">
         <h1 className="text-title text-ink">Pagamentos</h1>
         <p className="mt-1 text-body text-ink-secondary">
-          Receba pela sua própria conta do Asaas. O dinheiro cai direto na sua conta, sem passar
-          pela plataforma e sem repasse.
+          Receba pela sua própria conta do Asaas, com a cliente pagando por PIX ou cartão sem sair
+          da sua página de agendamento. O dinheiro cai direto na sua conta, sem passar pela
+          plataforma e sem repasse.
         </p>
       </header>
 
@@ -174,6 +175,21 @@ export function PagamentosView({
                 </span>
               </p>
             ) : null}
+
+            {/* PIX indisponível não quebra o recurso, mas muda o que a cliente
+                vê: sem chave PIX na conta do Asaas, o checkout só oferece
+                cartão — e cartão sozinho derruba pagamento de quem não tem um
+                à mão. O aviso fica aqui porque é aqui que ela resolve. */}
+            {conta.pixPronto ? null : (
+              <p className="mt-4 flex items-start gap-2 rounded-card bg-attention-soft px-3 py-2.5 text-caption text-attention">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+                <span>
+                  Sua conta do Asaas ainda não tem <strong>chave PIX</strong>. Enquanto isso, o
+                  pagamento só acontece por cartão. Cadastre a chave no Asaas e conecte de novo
+                  aqui para liberar o PIX.
+                </span>
+              </p>
+            )}
 
             {conta.webhookAutomatico ? (
               <p className="mt-4 flex items-start gap-2 text-caption text-ink-secondary">
@@ -283,7 +299,9 @@ export function PagamentosView({
         <div className="border-t border-line px-4 py-4">
           <p className="text-body text-ink-secondary">
             Vale para o agendamento <strong>online</strong>: a página de agendamento e o
-            atendimento pelo WhatsApp. Quem marca no balcão continua sem cobrança.
+            atendimento pelo WhatsApp. A cliente paga com PIX ou cartão na própria tela, e o
+            horário confirma sozinho quando o pagamento entra. Quem marca no balcão continua sem
+            cobrança.
           </p>
 
           {!conta ? (

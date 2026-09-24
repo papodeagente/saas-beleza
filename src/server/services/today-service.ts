@@ -33,6 +33,8 @@ export type TodayAppointment = {
   /** Quanto foi cobrado para garantir o horário. Null quando não houve cobrança. */
   paymentAmountCents: number | null;
   paymentDueAt: Date | null;
+  /** Endereço do checkout desta reserva, para a recepção reenviar. */
+  paymentUrl: string | null;
 };
 
 export async function getTodayAppointments(ctx: TenantContext, day = new Date()): Promise<TodayAppointment[]> {
@@ -68,6 +70,7 @@ export async function getTodayAppointments(ctx: TenantContext, day = new Date())
       paymentStatus: appointments.paymentStatus,
       paymentAmountCents: appointments.paymentAmountCents,
       paymentDueAt: appointments.paymentDueAt,
+      paymentUrl: appointments.paymentUrl,
     })
     .from(appointments)
     .innerJoin(customers, eq(customers.id, appointments.customerId))

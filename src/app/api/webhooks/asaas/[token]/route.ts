@@ -47,6 +47,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
       id?: string;
       value?: number;
       billingType?: string;
+      /** O id do agendamento, que mandamos ao criar a cobrança. */
+      externalReference?: string | null;
+      /** Só nas reservas do primeiro dia do recurso, quando o link era do Asaas. */
       paymentLink?: string | null;
       status?: string;
     };
@@ -55,10 +58,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   const evento = corpo?.event ?? "";
   const pagamento = corpo?.payment;
 
-  // A conta do Asaas da clínica é dela: recebe cobrança de coisa que não passa
-  // por aqui. Sem link, ou com link que não é nosso, não há o que fazer.
-  if (!pagamento?.paymentLink || !pagamento.id) {
-    return NextResponse.json({ ok: true, ignorado: "sem_link" });
+  // A conta do Asaas da clínica é dela: recebe cobrança de mensalidade, de
+  // venda de produto, do contador. Aviso sem id não dá para casar com nada; o
+  // que tem id e não é nosso simplesmente não acha reserva, e sai em 200.
+  if (!pagamento?.id) {
+    return NextResponse.json({ ok: true, ignorado: "sem_id" });
   }
 
   try {
@@ -66,8 +70,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
 
     if (decisao === "confirmar") {
       const resultado = await confirmarPagamento(conta.organizationId, {
-        linkId: pagamento.paymentLink,
         pagamentoId: pagamento.id,
+        referencia: pagamento.externalReference ?? null,
+        linkId: pagamento.paymentLink ?? null,
         valorCents: Math.round((pagamento.value ?? 0) * 100),
         billingType: pagamento.billingType ?? null,
       });
@@ -75,7 +80,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     }
 
     if (decisao === "estornar") {
-      await registrarEstorno(conta.organizationId, pagamento.paymentLink);
+      await registrarEstorno(conta.organizationId, {
+        pagamentoId: pagamento.id,
+        referencia: pagamento.externalReference ?? null,
+        linkId: pagamento.paymentLink ?? null,
+      });
       return NextResponse.json({ ok: true, estornado: true });
     }
 

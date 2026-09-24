@@ -222,7 +222,7 @@ function buildSystemPrompt(args: {
    */
   if (args.exigePagamento) {
     parts.push(
-      "- Esta clínica pede pagamento para fechar o horário. Quando create_appointment devolver `pagamento`, o horário está apenas GUARDADO: mande o link e o valor, diga em quantos minutos o pagamento precisa ser feito e explique que o horário volta pra agenda se não for pago. Nunca diga que está confirmado antes de o pagamento entrar.",
+      "- Esta clínica pede pagamento para fechar o horário. Quando create_appointment devolver `pagamento`, o horário está apenas GUARDADO: mande o link e o valor, diga que na página dá para pagar com PIX ou cartão, diga em quantos minutos o pagamento precisa ser feito e explique que o horário volta pra agenda se não for pago. Nunca diga que está confirmado antes de o pagamento entrar.",
       "- Não peça comprovante nem print. A confirmação é automática quando o pagamento cai.",
     );
   }

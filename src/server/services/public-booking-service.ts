@@ -302,7 +302,14 @@ export type PublicBookingResult = {
    * Preenchido só quando a clínica exige pagamento para fechar. O horário já
    * está reservado neste ponto; o que falta é o pagamento dentro do prazo.
    */
-  cobranca: { url: string; valorCents: number; venceEm: Date; minutos: number } | null;
+  cobranca: {
+    /** Segredo do checkout. A tela monta `/pagar/<token>` com ele. */
+    token: string;
+    url: string;
+    valorCents: number;
+    venceEm: Date;
+    minutos: number;
+  } | null;
 };
 
 /**
